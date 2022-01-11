@@ -4,6 +4,9 @@ use super::mutator::ALLOCATOR_MAPPING;
 use crate::plan::global::BasePlan;
 use crate::plan::global::CommonPlan;
 use crate::plan::global::GcStatus;
+use crate::plan::immix::gc_work::Evacuation;
+use crate::plan::immix::gc_work::ImmixEvacuationProcessEdges;
+use crate::plan::immix::gc_work::ImmixProcessEdges;
 use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
@@ -95,7 +98,59 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         if in_defrag {
             scheduler.schedule_common_work::<ImmixGCWorkContext<VM, { TraceKind::Defrag }>>(self);
         } else {
-            scheduler.schedule_common_work::<ImmixGCWorkContext<VM, { TraceKind::Fast }>>(self);
+            // scheduler.schedule_common_work::<ImmixGCWorkContext<VM, { TraceKind::Fast }>>(self);
+            use crate::scheduler::gc_work::*;
+            // Stop & scan mutators (mutator scanning can happen before STW)
+            scheduler.work_buckets[WorkBucketStage::Unconstrained]
+                .add(StopMutators::<ImmixProcessEdges<VM, { TraceKind::Fast }>>::new());
+
+            // Prepare global/collectors/mutators
+            scheduler.work_buckets[WorkBucketStage::Prepare].add(Prepare::<
+                ImmixGCWorkContext<VM, { TraceKind::Fast }>,
+            >::new(self));
+
+            // VM-specific weak ref processing
+            scheduler.work_buckets[WorkBucketStage::RefClosure]
+                .add(ProcessWeakRefs::<ImmixProcessEdges<VM, { TraceKind::Fast }>>::new());
+
+            // do another full heap trace to evacuate live objects
+            scheduler.work_buckets[WorkBucketStage::RefClosure].add(Evacuation::<VM>::new());
+
+            // Release global/collectors/mutators
+            scheduler.work_buckets[WorkBucketStage::Release].add(Release::<
+                ImmixGCWorkContext<VM, { TraceKind::Fast }>,
+            >::new(self));
+
+            // Analysis GC work
+            #[cfg(feature = "analysis")]
+            {
+                use crate::util::analysis::GcHookWork;
+                scheduler.work_buckets[WorkBucketStage::Unconstrained].add(GcHookWork);
+            }
+
+            // Sanity
+            #[cfg(feature = "sanity")]
+            {
+                use crate::util::sanity::sanity_checker::ScheduleSanityGC;
+                scheduler.work_buckets[WorkBucketStage::Final]
+                    .add(ScheduleSanityGC::<Self>::new(plan));
+            }
+
+            // Finalization
+            if !self.base().options.no_finalizer {
+                use crate::util::finalizable_processor::{Finalization, ForwardFinalization};
+                // finalization
+                scheduler.work_buckets[WorkBucketStage::RefClosure]
+                    .add(Finalization::<ImmixProcessEdges<VM, { TraceKind::Fast }>>::new());
+                // forward refs
+                if self.constraints().needs_forward_after_liveness {
+                    scheduler.work_buckets[WorkBucketStage::RefForwarding]
+                        .add(ForwardFinalization::<ImmixEvacuationProcessEdges<VM>>::new());
+                }
+            }
+
+            // Set EndOfGC to run at the end
+            scheduler.set_finalizer(Some(EndOfGC));
         }
     }
 

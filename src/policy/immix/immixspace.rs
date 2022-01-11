@@ -405,6 +405,49 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
     }
 
+    #[inline(always)]
+    pub fn evacuation(
+        &self,
+        trace: &mut impl TransitiveClosure,
+        object: ObjectReference,
+        semantics: CopySemantics,
+        worker: &mut GCWorker<VM>,
+    ) -> ObjectReference {
+        let copy_context = worker.get_copy_context_mut();
+        let source_region = self
+            .chunk_map
+            .all_chunks()
+            .filter(|c| (self.chunk_map).get(*c) == ChunkState::Allocated)
+            .last()
+            .unwrap();
+        let need_evacuation = object.to_address() >= source_region.start()
+            && object.to_address() < source_region.start() + (Block::BYTES);
+
+        // no longer need the marking, so reuse it to determine the winnig collector thread
+        if self.attempt_unmark(object, self.mark_state) {
+            if need_evacuation {
+                let new_object =
+                    ForwardingWord::forward_object::<VM>(object, semantics, copy_context);
+                trace.process_node(new_object);
+                // let target_block = Block::containing::<VM>(new_object);
+                // target_block.set_state(BlockState::Marked);
+                let source_block = Block::containing::<VM>(object);
+                source_block.set_state(BlockState::Unmarked);
+                new_object
+            } else {
+                trace.process_node(object);
+                object
+            }
+        } else {
+            if need_evacuation {
+                let forwarding_status = ForwardingWord::get_forwarding_status::<VM>(object);
+                ForwardingWord::spin_and_get_forwarded_object::<VM>(object, forwarding_status)
+            } else {
+                object
+            }
+        }
+    }
+
     /// Mark all the lines that the given object spans.
     #[allow(clippy::assertions_on_constants)]
     #[inline]
@@ -432,6 +475,35 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 object,
                 old_value as usize,
                 mark_state as usize,
+                None,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                break;
+            }
+        }
+        true
+    }
+
+    /// Atomically unmark an object.
+    #[inline(always)]
+    fn attempt_unmark(&self, object: ObjectReference, mark_state: u8) -> bool {
+        loop {
+            let old_value = load_metadata::<VM>(
+                &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
+                object,
+                None,
+                Some(Ordering::SeqCst),
+            ) as u8;
+            if old_value == mark_state - 1 {
+                return false;
+            }
+
+            if compare_exchange_metadata::<VM>(
+                &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
+                object,
+                old_value as usize,
+                (mark_state - 1) as usize,
                 None,
                 Ordering::SeqCst,
                 Ordering::SeqCst,

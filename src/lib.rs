@@ -14,6 +14,7 @@
 #![feature(step_trait)]
 #![feature(adt_const_params)]
 #![feature(generic_const_exprs)]
+#![feature(stdsimd)]
 // TODO: We should fix missing docs for public items and turn this on (Issue #309).
 // #![deny(missing_docs)]
 

@@ -429,8 +429,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 let new_object =
                     ForwardingWord::forward_object::<VM>(object, semantics, copy_context);
                 trace.process_node(new_object);
-                // let target_block = Block::containing::<VM>(new_object);
-                // target_block.set_state(BlockState::Marked);
+                let target_block = Block::containing::<VM>(new_object);
+                target_block.set_state(BlockState::Marked);
+                // debug_assert_eq!(
+                //     Block::containing::<VM>(new_object).get_state(),
+                //     BlockState::Marked
+                // );
                 let source_block = Block::containing::<VM>(object);
                 source_block.set_state(BlockState::Unmarked);
                 new_object

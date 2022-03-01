@@ -62,6 +62,7 @@ pub struct Mutator<VM: VMBinding> {
     pub mutator_tls: VMMutatorThread,
     pub plan: &'static dyn Plan<VM = VM>,
     pub config: MutatorConfig<VM>,
+    pub copy_state: usize,
 }
 
 impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
@@ -138,6 +139,10 @@ pub trait MutatorContext<VM: VMBinding>: Send + 'static {
 
     fn record_modified_node(&mut self, obj: ObjectReference) {
         self.barrier().post_write_barrier(WriteTarget::Object(obj));
+    }
+
+    fn record_modified_roots(&mut self, slot: Address) {
+        self.barrier().post_write_barrier(WriteTarget::Slot(slot));
     }
 }
 

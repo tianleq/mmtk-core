@@ -51,7 +51,7 @@ pub fn create_mutator<VM: VMBinding>(
         PlanSelector::MarkSweep => {
             crate::plan::marksweep::mutator::create_ms_mutator(tls, &*mmtk.plan)
         }
-        PlanSelector::Immix => crate::plan::immix::mutator::create_immix_mutator(tls, &*mmtk.plan),
+        PlanSelector::Immix => crate::plan::immix::mutator::create_immix_mutator(tls, mmtk),
         PlanSelector::PageProtect => {
             crate::plan::pageprotect::mutator::create_pp_mutator(tls, &*mmtk.plan)
         }
@@ -219,12 +219,12 @@ pub trait Plan: 'static + Sync + Downcast {
                 return false;
             }*/
             self.log_poll(space, "Triggering collection");
-            self.base().control_collector_context.request();
+            self.base().control_collector_context.request(false);
             return true;
         }
 
         // FIXME
-        /*if self.concurrent_collection_required() {
+        if self.concurrent_collection_required() {
             // FIXME
             /*if space == self.common().meta_data_space {
                 self.log_poll(space, "Triggering async concurrent collection");
@@ -232,9 +232,9 @@ pub trait Plan: 'static + Sync + Downcast {
                 return false;
             } else {*/
             self.log_poll(space, "Triggering concurrent collection");
-            Self::trigger_internal_collection_request();
+            self.base().trigger_internal_collection_request();
             return true;
-        }*/
+        }
 
         false
     }
@@ -252,6 +252,10 @@ pub trait Plan: 'static + Sync + Downcast {
      * @return <code>true</code> if a collection is requested by the plan.
      */
     fn collection_required(&self, space_full: bool, _space: &dyn Space<Self::VM>) -> bool;
+
+    fn concurrent_collection_required(&self) -> bool {
+        false
+    }
 
     fn get_pages_reserved(&self) -> usize {
         self.get_pages_used() + self.get_collection_reserve()
@@ -305,6 +309,8 @@ pub trait Plan: 'static + Sync + Downcast {
             object
         );
     }
+
+    fn cache_roots(&self, _roots: Vec<crate::util::ObjectReference>) {}
 }
 
 impl_downcast!(Plan assoc VM);
@@ -519,7 +525,7 @@ impl<VM: VMBinding> BasePlan<VM> {
             info!("User triggering collection");
             self.user_triggered_collection
                 .store(true, Ordering::Relaxed);
-            self.control_collector_context.request();
+            self.control_collector_context.request(false);
             VM::VMCollection::block_for_gc(tls);
         }
     }
@@ -532,7 +538,7 @@ impl<VM: VMBinding> BasePlan<VM> {
             .store(true, Ordering::Relaxed);
         self.internal_triggered_collection
             .store(true, Ordering::Relaxed);
-        self.control_collector_context.request();
+        self.control_collector_context.request(true);
     }
 
     /// Reset collection state information.

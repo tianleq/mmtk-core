@@ -52,8 +52,9 @@ lazy_static! {
 
 pub fn create_immix_mutator<VM: VMBinding>(
     mutator_tls: VMMutatorThread,
-    plan: &'static dyn Plan<VM = VM>,
+    mmtk: &'static crate::MMTK<VM>,
 ) -> Mutator<VM> {
+    let plan = &*mmtk.plan;
     let immix = plan.downcast_ref::<Immix<VM>>().unwrap();
     let config = MutatorConfig {
         allocator_mapping: &*ALLOCATOR_MAPPING,
@@ -72,5 +73,6 @@ pub fn create_immix_mutator<VM: VMBinding>(
         mutator_tls,
         config,
         plan,
+        copy_state: 0,
     }
 }

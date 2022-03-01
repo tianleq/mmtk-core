@@ -71,7 +71,7 @@ impl Defrag {
 
     /// Get the number of defrag headroom pages.
     pub fn defrag_headroom_pages<VM: VMBinding>(&self, space: &ImmixSpace<VM>) -> usize {
-        space.get_page_resource().reserved_pages() * Self::DEFRAG_HEADROOM_PERCENT / 100
+        1024 + space.get_page_resource().reserved_pages() * Self::DEFRAG_HEADROOM_PERCENT / 100
     }
 
     /// Check if the defrag space is exhausted.

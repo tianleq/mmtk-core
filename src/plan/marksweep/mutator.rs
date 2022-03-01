@@ -56,5 +56,6 @@ pub fn create_ms_mutator<VM: VMBinding>(
         mutator_tls,
         config,
         plan,
+        copy_state: 0,
     }
 }

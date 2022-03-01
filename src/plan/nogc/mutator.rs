@@ -72,5 +72,6 @@ pub fn create_nogc_mutator<VM: VMBinding>(
         mutator_tls,
         config,
         plan,
+        copy_state: 0,
     }
 }

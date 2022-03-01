@@ -66,6 +66,9 @@ extern crate num_cpus;
 extern crate downcast_rs;
 
 mod mmtk;
+use std::sync::atomic::AtomicBool;
+
+use atomic::Ordering;
 pub(crate) use mmtk::MMAPPER;
 pub use mmtk::MMTK;
 pub(crate) use mmtk::VM_MAP;
@@ -83,3 +86,9 @@ pub use crate::plan::{
     TransitiveClosure,
 };
 pub use crate::policy::copy_context::PolicyCopyContext;
+
+static IN_CONCURRENT_GC: AtomicBool = AtomicBool::new(false);
+
+fn concurrent_gc_in_progress() -> bool {
+    crate::IN_CONCURRENT_GC.load(Ordering::SeqCst)
+}

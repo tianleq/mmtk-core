@@ -14,6 +14,7 @@ use crate::MMTK;
 pub enum BarrierSelector {
     NoBarrier,
     ObjectBarrier,
+    RootsBarrier,
 }
 
 impl BarrierSelector {

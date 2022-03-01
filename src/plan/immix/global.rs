@@ -5,7 +5,7 @@ use crate::plan::global::BasePlan;
 use crate::plan::global::CommonPlan;
 use crate::plan::global::GcStatus;
 use crate::plan::immix::gc_work::Evacuation;
-use crate::plan::immix::gc_work::ImmixEvacuationProcessEdges;
+use crate::plan::immix::gc_work::ImmixEvacuationClosure;
 use crate::plan::immix::gc_work::ImmixProcessEdges;
 use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
@@ -24,6 +24,7 @@ use crate::util::options::UnsafeOptionsWrapper;
 use crate::vm::VMBinding;
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 use atomic::Ordering;
@@ -33,6 +34,9 @@ pub struct Immix<VM: VMBinding> {
     pub immix_space: ImmixSpace<VM>,
     pub common: CommonPlan<VM>,
     last_gc_was_defrag: AtomicBool,
+    pub remember_set: std::sync::Mutex<std::collections::HashSet<crate::util::ObjectReference>>,
+    pub remember_set_idx: AtomicUsize,
+    pub copy_state: AtomicUsize,
 }
 
 pub const IMMIX_CONSTRAINTS: PlanConstraints = PlanConstraints {
@@ -50,6 +54,11 @@ impl<VM: VMBinding> Plan for Immix<VM> {
 
     fn collection_required(&self, space_full: bool, space: &dyn Space<Self::VM>) -> bool {
         self.base().collection_required(self, space_full, space)
+    }
+
+    fn concurrent_collection_required(&self) -> bool {
+        !crate::concurrent_gc_in_progress()
+            && self.get_pages_reserved() >= self.get_total_pages() * 70 / 100
     }
 
     fn last_collection_was_exhaustive(&self) -> bool {
@@ -85,6 +94,18 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
         self.base().set_collection_kind::<Self>(self);
         self.base().set_gc_status(GcStatus::GcPrepare);
+
+        let concurrent_gc = self
+            .base()
+            .control_collector_context
+            .is_concurrent_collection();
+        if concurrent_gc {
+            self.schedule_concurrent_copying_collection(scheduler);
+        } else {
+            // self.schedule_immix_collection(scheduler);
+            self.schedule_concurrent_copying_collection(scheduler);
+        }
+        /*
         let in_defrag = self.immix_space.decide_whether_to_defrag(
             self.is_emergency_collection(),
             true,
@@ -116,6 +137,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             // do another full heap trace to evacuate live objects
             scheduler.work_buckets[WorkBucketStage::RefClosure].add(Evacuation::<VM>::new());
 
+            // resume the mutator
+            scheduler.work_buckets[WorkBucketStage::CalculateForwarding]
+                .add(Evacuation::<VM>::new());
+
             // Release global/collectors/mutators
             scheduler.work_buckets[WorkBucketStage::Release].add(Release::<
                 ImmixGCWorkContext<VM, { TraceKind::Fast }>,
@@ -144,14 +169,15 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                     .add(Finalization::<ImmixProcessEdges<VM, { TraceKind::Fast }>>::new());
                 // forward refs
                 if self.constraints().needs_forward_after_liveness {
-                    scheduler.work_buckets[WorkBucketStage::RefForwarding]
-                        .add(ForwardFinalization::<ImmixEvacuationProcessEdges<VM>>::new());
+                    // scheduler.work_buckets[WorkBucketStage::RefForwarding]
+                    //     .add(ForwardFinalization::<ImmixEvacuationClosure<VM>>::new());
                 }
             }
 
             // Set EndOfGC to run at the end
             scheduler.set_finalizer(Some(EndOfGC));
         }
+        */
     }
 
     fn get_allocator_mapping(&self) -> &'static EnumMap<AllocationSemantics, AllocatorSelector> {
@@ -166,6 +192,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     fn release(&mut self, tls: VMWorkerThread) {
         self.common.release(tls, true);
         // release the collected region
+
         self.last_gc_was_defrag
             .store(self.immix_space.release(true), Ordering::Relaxed);
     }
@@ -184,6 +211,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
 
     fn common(&self) -> &CommonPlan<VM> {
         &self.common
+    }
+
+    fn cache_roots(&self, _roots: Vec<crate::util::ObjectReference>) {
+        self.remember_set.lock().unwrap().extend(_roots.iter())
     }
 }
 
@@ -214,6 +245,9 @@ impl<VM: VMBinding> Immix<VM> {
                 global_metadata_specs,
             ),
             last_gc_was_defrag: AtomicBool::new(false),
+            remember_set: std::sync::Mutex::new(std::collections::HashSet::new()),
+            remember_set_idx: AtomicUsize::new(0),
+            copy_state: AtomicUsize::new(0),
         };
 
         {
@@ -227,5 +261,76 @@ impl<VM: VMBinding> Immix<VM> {
         }
 
         immix
+    }
+
+    fn schedule_concurrent_copying_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
+        use crate::scheduler::gc_work::*;
+        // Stop & scan mutators (mutator scanning can happen before STW)
+        scheduler.work_buckets[WorkBucketStage::Unconstrained]
+            .add(StopMutators::<ImmixProcessEdges<VM, { TraceKind::Fast }>>::new());
+
+        // Prepare global/collectors/mutators
+        scheduler.work_buckets[WorkBucketStage::Prepare].add(Prepare::<
+            ImmixGCWorkContext<VM, { TraceKind::Fast }>,
+        >::new(self));
+
+        // VM-specific weak ref processing
+        scheduler.work_buckets[WorkBucketStage::RefClosure]
+            .add(ProcessWeakRefs::<ImmixProcessEdges<VM, { TraceKind::Fast }>>::new());
+
+        // do the concurrent copying
+        scheduler.work_buckets[WorkBucketStage::RefClosure].add(Evacuation::<VM>::new());
+
+        // resume the mutator
+
+        // Release global/collectors/mutators
+        scheduler.work_buckets[WorkBucketStage::Release].add(Release::<
+            ImmixGCWorkContext<VM, { TraceKind::Fast }>,
+        >::new(self));
+
+        // Analysis GC work
+        #[cfg(feature = "analysis")]
+        {
+            use crate::util::analysis::GcHookWork;
+            scheduler.work_buckets[WorkBucketStage::Unconstrained].add(GcHookWork);
+        }
+
+        // Sanity
+        #[cfg(feature = "sanity")]
+        {
+            use crate::util::sanity::sanity_checker::ScheduleSanityGC;
+            scheduler.work_buckets[WorkBucketStage::Final].add(ScheduleSanityGC::<Self>::new(plan));
+        }
+
+        // Finalization
+        if !self.base().options.no_finalizer {
+            use crate::util::finalizable_processor::{Finalization, ForwardFinalization};
+            // finalization
+            scheduler.work_buckets[WorkBucketStage::RefClosure]
+                .add(Finalization::<ImmixProcessEdges<VM, { TraceKind::Fast }>>::new());
+            // forward refs
+            if self.constraints().needs_forward_after_liveness {
+                // scheduler.work_buckets[WorkBucketStage::RefForwarding]
+                //     .add(ForwardFinalization::<ImmixEvacuationClosure<VM>>::new());
+            }
+        }
+
+        // Set EndOfGC to run at the end
+        scheduler.set_finalizer(Some(EndOfGC));
+    }
+
+    fn schedule_immix_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
+        let in_defrag = self.immix_space.decide_whether_to_defrag(
+            self.is_emergency_collection(),
+            true,
+            self.base().cur_collection_attempts.load(Ordering::SeqCst),
+            self.base().is_user_triggered_collection(),
+            self.base().options.full_heap_system_gc,
+        );
+        if in_defrag {
+            scheduler.schedule_common_work::<ImmixGCWorkContext<VM, { TraceKind::Defrag }>>(self);
+        } else {
+            scheduler.schedule_common_work::<ImmixGCWorkContext<VM, { TraceKind::Fast }>>(self);
+        }
     }
 }

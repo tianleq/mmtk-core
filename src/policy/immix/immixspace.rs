@@ -27,6 +27,7 @@ use crate::{
     MMTK,
 };
 use atomic::Ordering;
+use std::sync::atomic::AtomicUsize;
 use std::{
     iter::Step,
     ops::Range,
@@ -50,6 +51,9 @@ pub struct ImmixSpace<VM: VMBinding> {
     mark_state: u8,
     /// Work packet scheduler
     scheduler: Arc<GCWorkScheduler<VM>>,
+    marking_sets: std::sync::Mutex<std::collections::HashSet<ObjectReference>>,
+    pub evacuation_sets: std::sync::Mutex<std::collections::HashSet<ObjectReference>>,
+    counter: AtomicUsize,
 }
 
 unsafe impl<VM: VMBinding> Sync for ImmixSpace<VM> {}
@@ -164,6 +168,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             defrag: Defrag::default(),
             mark_state: Self::UNMARKED_STATE,
             scheduler,
+            marking_sets: std::sync::Mutex::new(std::collections::HashSet::new()),
+            evacuation_sets: std::sync::Mutex::new(std::collections::HashSet::new()),
+            counter: AtomicUsize::new(0),
         }
     }
 
@@ -242,6 +249,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     .store(Line::RESET_MARK_STATE, Ordering::Release);
             }
         }
+
+        self.marking_sets.lock().unwrap().clear();
+        self.evacuation_sets.lock().unwrap().clear();
     }
 
     /// Release for the immix space. This is called when a GC finished.
@@ -257,6 +267,30 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 );
             }
         }
+        for chunk in self
+            .chunk_map
+            .all_chunks()
+            .filter(|c| (self.chunk_map).get(*c) == ChunkState::Allocated)
+        {
+            println!(
+                "chunk: {} -- {}",
+                chunk.start(),
+                chunk.start() + (Chunk::BYTES)
+            );
+        }
+        let v1 = self.marking_sets.lock().unwrap();
+        let v2 = self.evacuation_sets.lock().unwrap();
+        for o in v1.iter() {
+            if !v2.contains(o) {
+                println!("missing object: {:?} in the 2nd round", o);
+            }
+        }
+        for o in v2.iter() {
+            if !v1.contains(o) {
+                println!("extra object: {:?} in the 2nd round", o);
+            }
+        }
+
         // Clear reusable blocks list
         if !super::BLOCK_ONLY {
             self.reusable_blocks.reset();
@@ -360,6 +394,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             }
             // Visit node
             trace.process_node(object);
+            self.marking_sets.lock().unwrap().insert(object);
+            self.counter.fetch_add(1, Ordering::SeqCst);
         }
         object
     }
@@ -413,43 +449,93 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         semantics: CopySemantics,
         worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
-        let copy_context = worker.get_copy_context_mut();
-        let source_region = self
-            .chunk_map
-            .all_chunks()
-            .filter(|c| (self.chunk_map).get(*c) == ChunkState::Allocated)
-            .last()
-            .unwrap();
-        let need_evacuation = object.to_address() >= source_region.start()
-            && object.to_address() < source_region.start() + (Block::BYTES);
-
-        // no longer need the marking, so reuse it to determine the winnig collector thread
-        if self.attempt_unmark(object, self.mark_state) {
-            if need_evacuation {
-                let new_object =
-                    ForwardingWord::forward_object::<VM>(object, semantics, copy_context);
-                trace.process_node(new_object);
-                let target_block = Block::containing::<VM>(new_object);
-                target_block.set_state(BlockState::Marked);
-                // debug_assert_eq!(
-                //     Block::containing::<VM>(new_object).get_state(),
-                //     BlockState::Marked
-                // );
-                let source_block = Block::containing::<VM>(object);
-                source_block.set_state(BlockState::Unmarked);
-                new_object
+        if self.attempt_mark(object, Self::MARKED_STATE - self.mark_state) {
+            // Mark block and lines
+            if !super::BLOCK_ONLY {
+                if !super::MARK_LINE_AT_SCAN_TIME {
+                    self.mark_lines(object);
+                }
             } else {
-                trace.process_node(object);
-                object
+                Block::containing::<VM>(object).set_state(BlockState::Marked);
             }
-        } else {
-            if need_evacuation {
-                let forwarding_status = ForwardingWord::get_forwarding_status::<VM>(object);
-                ForwardingWord::spin_and_get_forwarded_object::<VM>(object, forwarding_status)
-            } else {
-                object
-            }
+            // Visit node
+            trace.process_node(object);
+            self.evacuation_sets.lock().unwrap().insert(object);
+            self.counter.fetch_sub(1, Ordering::SeqCst);
         }
+        object
+
+        // let copy_context = worker.get_copy_context_mut();
+        // let source_region = self
+        //     .chunk_map
+        //     .all_chunks()
+        //     .filter(|c| (self.chunk_map).get(*c) == ChunkState::Allocated)
+        //     .rev()
+        //     .last()
+        //     .unwrap();
+
+        // let need_evacuation = object.to_address() >= source_region.start()
+        //     && object.to_address() < source_region.start() + (Block::BYTES);
+        // // flip the mark_state
+        // if self.attempt_mark(object, Self::MARKED_STATE - self.mark_state) {
+        //     if need_evacuation {
+        //         let new_object =
+        //             ForwardingWord::forward_object::<VM>(object, semantics, copy_context);
+        //         trace.process_node(new_object);
+        //         let target_block = Block::containing::<VM>(new_object);
+        //         target_block.set_state(BlockState::Marked);
+        //         // debug_assert_eq!(
+        //         //     Block::containing::<VM>(new_object).get_state(),
+        //         //     BlockState::Marked
+        //         // );
+        //         let source_block = Block::containing::<VM>(object);
+        //         source_block.set_state(BlockState::Unmarked);
+        //         debug_assert!(source_block != target_block);
+        //         // println!("object: {:?}, new object: {:?}", object, new_object);
+        //         let max_retry = 50;
+        //         let mut counter = 0;
+        //         for _ in 0..max_retry {
+        //             unsafe {
+        //                 let status = std::arch::x86_64::_xbegin();
+        //                 if status == std::arch::x86_64::_XBEGIN_STARTED {
+        //                     // verify object
+        //                     let dst = new_object.to_address();
+        //                     let src = object.to_address();
+        //                     let bytes = VM::VMObjectModel::get_current_size(object);
+        //                     for i in 24..bytes {
+        //                         if (dst + i).load::<u8>() != ((src + i).load::<u8>()) {
+        //                             panic!("copy is corrupted")
+        //                         }
+        //                     }
+        //                     std::arch::x86_64::_xend();
+        //                     break;
+        //                 } else {
+        //                     counter += 1;
+        //                     continue;
+        //                 }
+        //             }
+        //         }
+        //         if counter == max_retry {
+        //             info!("tsx failed");
+        //         } else if counter > 0 {
+        //             info!("counter : {}", counter);
+        //         }
+        //         new_object
+        //     } else {
+        //         trace.process_node(object);
+        //         object
+        //     }
+        // } else {
+        //     if need_evacuation {
+        //         let forwarding_status = ForwardingWord::get_forwarding_status::<VM>(object);
+        //         let new_object =
+        //             ForwardingWord::spin_and_get_forwarded_object::<VM>(object, forwarding_status);
+        //         debug_assert!(object != new_object);
+        //         new_object
+        //     } else {
+        //         object
+        //     }
+        // }
     }
 
     /// Mark all the lines that the given object spans.
@@ -479,35 +565,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 object,
                 old_value as usize,
                 mark_state as usize,
-                None,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
-                break;
-            }
-        }
-        true
-    }
-
-    /// Atomically unmark an object.
-    #[inline(always)]
-    fn attempt_unmark(&self, object: ObjectReference, mark_state: u8) -> bool {
-        loop {
-            let old_value = load_metadata::<VM>(
-                &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
-                object,
-                None,
-                Some(Ordering::SeqCst),
-            ) as u8;
-            if old_value == mark_state - 1 {
-                return false;
-            }
-
-            if compare_exchange_metadata::<VM>(
-                &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
-                object,
-                old_value as usize,
-                (mark_state - 1) as usize,
                 None,
                 Ordering::SeqCst,
                 Ordering::SeqCst,
@@ -706,9 +763,10 @@ impl<VM: VMBinding> PolicyCopyContext for ImmixCopyContext<VM> {
         offset: isize,
     ) -> Address {
         if self.defrag_allocator.immix_space().in_defrag() {
+            debug_assert!(false, "defragmentation has been disabled");
             self.defrag_allocator.alloc(bytes, align, offset)
         } else {
-            self.copy_allocator.alloc(bytes, align, offset)
+            self.copy_allocator.alloc_clean(bytes, align, offset)
         }
     }
 }

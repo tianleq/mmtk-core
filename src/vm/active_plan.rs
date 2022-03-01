@@ -68,4 +68,7 @@ pub trait ActivePlan<VM: VMBinding> {
 
     /// Return the total count of mutators.
     fn number_of_mutators() -> usize;
+
+    /// Request mutators to take safepoint
+    fn request_safepoint();
 }

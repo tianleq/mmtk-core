@@ -107,6 +107,44 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
         }
     }
 
+    fn alloc_clean(&mut self, size: usize, align: usize, offset: isize) -> Address {
+        debug_assert!(
+            size <= crate::policy::immix::MAX_IMMIX_OBJECT_SIZE,
+            "Trying to allocate a {} bytes object, which is larger than MAX_IMMIX_OBJECT_SIZE {}",
+            size,
+            crate::policy::immix::MAX_IMMIX_OBJECT_SIZE
+        );
+        let result = align_allocation_no_fill::<VM>(self.cursor, align, offset);
+        let new_cursor = result + size;
+
+        if new_cursor > self.limit {
+            trace!(
+                "{:?}: Thread local buffer used up, go to alloc slow path",
+                self.tls
+            );
+            if size > Line::BYTES {
+                // Size larger than a line: do large allocation
+                self.overflow_alloc(size, align, offset)
+            } else {
+                // Size smaller than a line: fit into holes
+                self.alloc_slow(size, align, offset)
+            }
+        } else {
+            // Simple bump allocation.
+            fill_alignment_gap::<VM>(self.cursor, result);
+            self.cursor = new_cursor;
+            trace!(
+                "{:?}: Bump allocation size: {}, result: {}, new_cursor: {}, limit: {}",
+                self.tls,
+                size,
+                result,
+                self.cursor,
+                self.limit
+            );
+            result
+        }
+    }
+
     /// Acquire a clean block from ImmixSpace for allocation.
     fn alloc_slow_once(&mut self, size: usize, align: usize, offset: isize) -> Address {
         trace!("{:?}: alloc_slow_once", self.tls);

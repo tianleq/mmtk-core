@@ -19,6 +19,7 @@ pub struct ControllerCollectorContext<VM: VMBinding> {
     request_condvar: Condvar,
     scheduler: RwLock<Option<Arc<GCWorkScheduler<VM>>>>,
     request_flag: AtomicBool,
+    concurrent: AtomicBool,
     phantom: PhantomData<VM>,
 }
 
@@ -39,8 +40,14 @@ impl<VM: VMBinding> ControllerCollectorContext<VM> {
             request_condvar: Condvar::new(),
             scheduler: RwLock::new(None),
             request_flag: AtomicBool::new(false),
+            concurrent: AtomicBool::new(false),
             phantom: PhantomData,
         }
+    }
+
+    #[inline]
+    pub fn is_concurrent_collection(&self) -> bool {
+        self.concurrent.load(Ordering::SeqCst)
     }
 
     pub fn init(&self, scheduler: &Arc<GCWorkScheduler<VM>>) {
@@ -77,7 +84,7 @@ impl<VM: VMBinding> ControllerCollectorContext<VM> {
         }
     }
 
-    pub fn request(&self) {
+    pub fn request(&self, concurrent: bool) {
         if self.request_flag.load(Ordering::Relaxed) {
             return;
         }
@@ -85,6 +92,7 @@ impl<VM: VMBinding> ControllerCollectorContext<VM> {
         let mut guard = self.request_sync.lock().unwrap();
         if !self.request_flag.load(Ordering::Relaxed) {
             self.request_flag.store(true, Ordering::Relaxed);
+            self.concurrent.store(concurrent, Ordering::SeqCst);
             guard.request_count += 1;
             self.request_condvar.notify_all();
         }

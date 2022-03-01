@@ -123,6 +123,10 @@ pub trait Allocator<VM: VMBinding>: Downcast {
 
     fn alloc(&mut self, size: usize, align: usize, offset: isize) -> Address;
 
+    fn alloc_clean(&mut self, size: usize, align: usize, offset: isize) -> Address {
+        self.alloc(size, align, offset)
+    }
+
     #[inline(never)]
     fn alloc_slow(&mut self, size: usize, align: usize, offset: isize) -> Address {
         self.alloc_slow_inline(size, align, offset)

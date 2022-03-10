@@ -51,7 +51,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
     fn is_sane(&self) -> bool {
         true
     }
-    fn initialize_object_metadata(&self, object: ObjectReference, alloc: bool) {
+    fn initialize_object_metadata(&self, object: ObjectReference, _bytes: usize, alloc: bool) {
         let old_value = load_metadata::<VM>(
             &VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC,
             object,

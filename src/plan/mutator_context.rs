@@ -81,6 +81,17 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         allocator: AllocationSemantics,
     ) -> Address {
         unsafe {
+            let b = self
+                .allocators
+                .get_allocator(self.config.allocator_mapping[allocator])
+                .get_plan()
+                .base();
+            b.bytes_allocated_per_gc
+                .fetch_add(size + 8, atomic::Ordering::SeqCst);
+            b.alloc_per_gc.fetch_add(1, atomic::Ordering::SeqCst);
+        }
+
+        unsafe {
             self.allocators
                 .get_allocator_mut(self.config.allocator_mapping[allocator])
         }
@@ -94,12 +105,24 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         _bytes: usize,
         allocator: AllocationSemantics,
     ) {
+        crate::mmtk::ALLOC.store(false, atomic::Ordering::SeqCst);
+        unsafe {
+            let b = self
+                .allocators
+                .get_allocator(self.config.allocator_mapping[allocator])
+                .get_plan()
+                .base();
+            let alloc_per_gc = b.alloc_per_gc.load(atomic::Ordering::SeqCst);
+            let post_alloc_per_gc = b.post_alloc_per_gc.fetch_add(1, atomic::Ordering::SeqCst);
+            // assert!(alloc_per_gc == post_alloc_per_gc + 1, "not serialized");
+        }
+
         unsafe {
             self.allocators
                 .get_allocator_mut(self.config.allocator_mapping[allocator])
         }
         .get_space()
-        .initialize_object_metadata(refer, true)
+        .initialize_object_metadata(refer, _bytes, true)
     }
 
     fn get_tls(&self) -> VMMutatorThread {

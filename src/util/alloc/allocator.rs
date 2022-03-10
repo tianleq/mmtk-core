@@ -191,6 +191,7 @@ pub trait Allocator<VM: VMBinding>: Downcast {
         let mut emergency_collection = false;
         let mut previous_result_zero = false;
         loop {
+            let _tmp = plan.increase_allocation_bytes_by(0);
             // Try to allocate using the slow path
             let result = if is_mutator && stress_test && plan.is_precise_stress() {
                 // If we are doing precise stress GC, we invoke the special allow_slow_once call.
@@ -241,6 +242,16 @@ pub trait Allocator<VM: VMBinding>: Downcast {
                             )
                         };
                     let _allocation_bytes = plan.increase_allocation_bytes_by(allocated_size);
+
+                    // let v = crate::mmtk::ALLOC.load(Ordering::SeqCst);
+                    // if v {
+                    //     assert!(
+                    //         false,
+                    //         "post alloc has not been executed for the previous alloc"
+                    //     )
+                    // } else {
+                    //     crate::mmtk::ALLOC.store(true, Ordering::SeqCst)
+                    // }
 
                     // This is the allocation hook for the analysis trait. If you want to call
                     // an analysis counter specific allocation hook, then here is the place to do so

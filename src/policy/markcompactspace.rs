@@ -1,3 +1,6 @@
+use std::io::Write;
+use std::sync::atomic::AtomicUsize;
+
 use super::space::{CommonSpace, Space, SpaceOptions, SFT};
 use crate::policy::space::*;
 use crate::util::alloc::allocator::align_allocation_no_fill;
@@ -14,6 +17,12 @@ use atomic::Ordering;
 pub struct MarkCompactSpace<VM: VMBinding> {
     common: CommonSpace<VM>,
     pr: MonotonePageResource<VM>,
+    pub birth: std::sync::Mutex<std::collections::HashMap<ObjectReference, usize>>,
+    pub live: std::sync::Mutex<std::collections::HashMap<ObjectReference, usize>>,
+    pub death: std::sync::Mutex<std::collections::HashMap<usize, ObjectReference>>,
+    counter: AtomicUsize,
+    allocation_per_gc: AtomicUsize,
+    round: AtomicUsize,
 }
 
 const GC_MARK_BIT_MASK: usize = 1;
@@ -44,8 +53,25 @@ impl<VM: VMBinding> SFT for MarkCompactSpace<VM> {
         true
     }
 
-    fn initialize_object_metadata(&self, object: ObjectReference, _alloc: bool) {
+    fn initialize_object_metadata(&self, object: ObjectReference, bytes: usize, _alloc: bool) {
         crate::util::alloc_bit::set_alloc_bit(object);
+
+        let count = self
+            .counter
+            .fetch_add(bytes + Self::HEADER_RESERVED_IN_BYTES, Ordering::SeqCst);
+
+        self.birth
+            .lock()
+            .unwrap()
+            .insert(object, count + bytes + Self::HEADER_RESERVED_IN_BYTES);
+        let rtn = self
+            .live
+            .lock()
+            .unwrap()
+            .insert(object, count + bytes + Self::HEADER_RESERVED_IN_BYTES);
+        assert!(rtn == None);
+        self.allocation_per_gc
+            .fetch_add(bytes + Self::HEADER_RESERVED_IN_BYTES, Ordering::SeqCst);
     }
 
     #[cfg(feature = "sanity")]
@@ -135,12 +161,44 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
                 MonotonePageResource::new_contiguous(common.start, common.extent, 0, vm_map)
             },
             common,
+            birth: std::sync::Mutex::new(std::collections::HashMap::new()),
+            live: std::sync::Mutex::new(std::collections::HashMap::new()),
+            death: std::sync::Mutex::new(std::collections::HashMap::new()),
+            counter: AtomicUsize::new(0),
+            allocation_per_gc: AtomicUsize::new(0),
+            round: AtomicUsize::new(0),
         }
     }
 
-    pub fn prepare(&self) {}
+    pub fn prepare(&self) {
+        info!(
+            "allocation_per_gc: {}, counter: {}",
+            self.allocation_per_gc.load(Ordering::SeqCst),
+            self.counter.load(Ordering::SeqCst)
+        );
+        self.allocation_per_gc.store(0, Ordering::SeqCst);
+    }
 
-    pub fn release(&self) {}
+    pub fn release(&self) {
+        use std::fs::OpenOptions;
+        let round = self.round.fetch_add(1, Ordering::SeqCst);
+        let mut file = OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open("/home/tianleq/mmtk-info.txt")
+            .unwrap();
+        file.write(b"--------------------------\n").unwrap();
+        for (k, v) in self.death.lock().unwrap().iter() {
+            file.write(format!("object: {:?}, birth: {}, death: {}\n", v, *k, round).as_bytes())
+                .unwrap();
+        }
+        for (k, v) in self.birth.lock().unwrap().iter() {
+            file.write(format!("newly born object: {:?} {}\n", *k, v).as_bytes())
+                .unwrap();
+        }
+        self.death.lock().unwrap().clear();
+        self.birth.lock().unwrap().clear();
+    }
 
     pub fn trace_mark_object<T: TransitiveClosure>(
         &self,
@@ -257,12 +315,37 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
         let start = self.common.start;
         let end = self.pr.cursor();
         let mut to = start;
+        // assert!(self.death.lock().unwrap().len() == 0);
+        // {
+        //     let mut tmp: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        //     tmp.extend(self.live.lock().unwrap().values());
+        //     let v1 = tmp.len();
+        //     let v2 = self.live.lock().unwrap().len();
+        //     assert!(v1 == v2);
+        // }
 
         let linear_scan =
             crate::util::linear_scan::ObjectIterator::<VM, MarkCompactObjectSize<VM>, true>::new(
                 start, end,
             );
-        for obj in linear_scan.filter(|obj| Self::to_be_compacted(*obj)) {
+        let mut new_live = std::collections::HashMap::<ObjectReference, usize>::new();
+        // for obj in linear_scan.filter(|obj| Self::to_be_compacted(*obj)) {
+        for obj in linear_scan {
+            let id = *(self.live.lock().unwrap().get(&obj).unwrap());
+            if !Self::to_be_compacted(obj) {
+                self.death.lock().unwrap().insert(id, obj);
+                self.live.lock().unwrap().remove(&obj);
+                continue;
+            }
+            if self.death.lock().unwrap().contains_key(&id) {
+                println!(
+                    "object: {:?}, dead: {:?}",
+                    obj,
+                    self.death.lock().unwrap().get(&id).unwrap()
+                );
+                assert!(false);
+            }
+
             let copied_size =
                 VM::VMObjectModel::get_size_when_copied(obj) + Self::HEADER_RESERVED_IN_BYTES;
             let align = VM::VMObjectModel::get_align_when_copied(obj);
@@ -270,8 +353,21 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
             to = align_allocation_no_fill::<VM>(to, align, offset);
             let forwarding_pointer_addr = obj.to_address() - GC_EXTRA_HEADER_BYTES;
             unsafe { forwarding_pointer_addr.store(to) }
+
+            let object_addr = to + Self::HEADER_RESERVED_IN_BYTES;
+            let rtn = new_live.insert(unsafe { object_addr.to_object_reference() }, id);
+            assert!(rtn == None);
             to += copied_size;
         }
+        self.live.lock().unwrap().clear();
+        self.live.lock().unwrap().extend(new_live.iter());
+        // {
+        //     let mut tmp: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        //     tmp.extend(self.live.lock().unwrap().values());
+        //     let v1 = tmp.len();
+        //     let v2 = self.live.lock().unwrap().len();
+        //     assert!(v1 == v2);
+        // }
     }
 
     pub fn compact(&self) {

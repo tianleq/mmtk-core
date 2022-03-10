@@ -384,6 +384,10 @@ pub struct BasePlan<VM: VMBinding> {
     pub ro_space: ImmortalSpace<VM>,
     #[cfg(feature = "vm_space")]
     pub vm_space: ImmortalSpace<VM>,
+
+    pub bytes_allocated_per_gc: AtomicUsize,
+    pub alloc_per_gc: AtomicUsize,
+    pub post_alloc_per_gc: AtomicUsize,
 }
 
 #[cfg(feature = "vm_space")]
@@ -500,6 +504,9 @@ impl<VM: VMBinding> BasePlan<VM> {
             allocation_bytes: AtomicUsize::new(0),
             #[cfg(feature = "analysis")]
             analysis_manager,
+            bytes_allocated_per_gc: AtomicUsize::new(0),
+            alloc_per_gc: AtomicUsize::new(0),
+            post_alloc_per_gc: AtomicUsize::new(0),
         }
     }
 
@@ -780,13 +787,22 @@ impl<VM: VMBinding> BasePlan<VM> {
     ) -> bool {
         let stress_force_gc = self.should_do_stress_gc();
         if stress_force_gc {
-            debug!(
+            info!(
                 "Stress GC: allocation_bytes = {}, stress_factor = {}",
                 self.allocation_bytes.load(Ordering::Relaxed),
                 *self.options.stress_factor
             );
-            debug!("Doing stress GC");
+            info!("Doing stress GC");
             self.allocation_bytes.store(0, Ordering::SeqCst);
+            info!(
+                "bytes allocated per GC: {}, allocation per GC: {}, post allocation per GC: {}",
+                self.bytes_allocated_per_gc.load(Ordering::SeqCst),
+                self.alloc_per_gc.load(Ordering::SeqCst),
+                self.post_alloc_per_gc.load(Ordering::SeqCst),
+            );
+            self.bytes_allocated_per_gc.store(0, Ordering::SeqCst);
+            self.alloc_per_gc.store(0, Ordering::SeqCst);
+            self.post_alloc_per_gc.store(0, Ordering::SeqCst);
         }
 
         debug!(

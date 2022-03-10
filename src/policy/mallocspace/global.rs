@@ -77,7 +77,7 @@ impl<VM: VMBinding> SFT for MallocSpace<VM> {
         is_alloced_by_malloc(object)
     }
 
-    fn initialize_object_metadata(&self, object: ObjectReference, _alloc: bool) {
+    fn initialize_object_metadata(&self, object: ObjectReference, _bytes: usize, _alloc: bool) {
         trace!("initialize_object_metadata for object {}", object);
         let page_addr = conversions::page_align_down(object.to_address());
         set_page_mark(page_addr);

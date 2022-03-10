@@ -808,10 +808,14 @@ impl<VM: VMBinding> BasePlan<VM> {
             info!("Doing stress GC");
             self.allocation_bytes.store(0, Ordering::SeqCst);
             info!(
-                "Stress GC: allocation_bytes {}",
+                "bytes allocated per GC: {}, allocation per GC: {}, post allocation per GC: {}",
                 self.bytes_allocated_per_gc.load(Ordering::SeqCst),
+                self.alloc_per_gc.load(Ordering::SeqCst),
+                self.post_alloc_per_gc.load(Ordering::SeqCst),
             );
             self.bytes_allocated_per_gc.store(0, Ordering::SeqCst);
+            self.alloc_per_gc.store(0, Ordering::SeqCst);
+            self.post_alloc_per_gc.store(0, Ordering::SeqCst);
         }
 
         debug!(

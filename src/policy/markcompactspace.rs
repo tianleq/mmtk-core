@@ -225,7 +225,26 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
         self.allocation_per_gc.store(0, Ordering::SeqCst);
     }
 
-    pub fn release(&self) {}
+    pub fn release(&self) {
+        use std::fs::OpenOptions;
+        let round = self.round.fetch_add(1, Ordering::SeqCst);
+        let mut file = OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open("/home/tianleq/mmtk-info.txt")
+            .unwrap();
+        file.write(b"--------------------------\n").unwrap();
+        for (k, v) in self.death.lock().unwrap().iter() {
+            file.write(format!("object: {:?}, birth: {}, death: {}\n", v, *k, round).as_bytes())
+                .unwrap();
+        }
+        for (k, v) in self.birth.lock().unwrap().iter() {
+            file.write(format!("newly born object: {:?} {}\n", *k, v).as_bytes())
+                .unwrap();
+        }
+        self.death.lock().unwrap().clear();
+        self.birth.lock().unwrap().clear();
+    }
 
     pub fn log_object_lifetime_info(&self, log_file_name: &str) {
         use std::fs::OpenOptions;
@@ -433,7 +452,15 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
                 to += copied_size;
             }
         }
-        debug!("Calculate forward end: to = {}", to);
+        self.live.lock().unwrap().clear();
+        self.live.lock().unwrap().extend(new_live.iter());
+        // {
+        //     let mut tmp: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        //     tmp.extend(self.live.lock().unwrap().values());
+        //     let v1 = tmp.len();
+        //     let v2 = self.live.lock().unwrap().len();
+        //     assert!(v1 == v2);
+        // }
     }
 
     pub fn compact(&self) {

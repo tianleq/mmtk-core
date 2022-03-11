@@ -161,14 +161,54 @@ impl<VM: VMBinding> BumpAllocator<VM> {
             );
             if !stress_test {
                 self.set_limit(acquired_start, acquired_start + block_size);
+                self.alloc_no_block_request(size, align, offset)
             } else {
                 // For a stress test, we artificially make the fastpath fail by
                 // manipulating the limit as below.
                 // The assumption here is that we use an address range such that
                 // cursor > block_size always.
                 self.set_limit(acquired_start, unsafe { Address::from_usize(block_size) });
+                self.alloc_stress_no_block_request(size, align, offset)
             }
-            self.alloc(size, align, offset)
+            // self.alloc(size, align, offset)
         }
+    }
+
+    fn alloc_no_block_request(&mut self, size: usize, align: usize, offset: isize) -> Address {
+        let result = align_allocation_no_fill::<VM>(self.cursor, align, offset);
+        let new_cursor = result + size;
+
+        fill_alignment_gap::<VM>(self.cursor, result);
+        self.cursor = new_cursor;
+        trace!(
+            "Bump allocation size: {}, result: {}, new_cursor: {}, limit: {}",
+            size,
+            result,
+            self.cursor,
+            self.limit
+        );
+        result
+    }
+
+    fn alloc_stress_no_block_request(
+        &mut self,
+        size: usize,
+        align: usize,
+        offset: isize,
+    ) -> Address {
+        let result = align_allocation_no_fill::<VM>(self.cursor, align, offset);
+        let new_cursor = result + size;
+
+        fill_alignment_gap::<VM>(self.cursor, result);
+        self.limit -= new_cursor - self.cursor;
+        self.cursor = new_cursor;
+        trace!(
+            "alloc_slow: Bump allocation size: {}, result: {}, new_cursor: {}, limit: {}",
+            size,
+            result,
+            self.cursor,
+            self.limit
+        );
+        result
     }
 }

@@ -105,7 +105,6 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         _bytes: usize,
         allocator: AllocationSemantics,
     ) {
-        crate::mmtk::ALLOC.store(false, atomic::Ordering::SeqCst);
         unsafe {
             let b = self
                 .allocators

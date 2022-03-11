@@ -19,7 +19,7 @@ pub struct MarkCompactSpace<VM: VMBinding> {
     pr: MonotonePageResource<VM>,
     pub birth: std::sync::Mutex<std::collections::HashMap<ObjectReference, usize>>,
     pub live: std::sync::Mutex<std::collections::HashMap<ObjectReference, usize>>,
-    pub death: std::sync::Mutex<std::collections::HashMap<usize, ObjectReference>>,
+    pub death: std::sync::Mutex<std::collections::HashMap<usize, usize>>,
     counter: AtomicUsize,
     allocation_per_gc: AtomicUsize,
     round: AtomicUsize,
@@ -29,6 +29,8 @@ const GC_MARK_BIT_MASK: usize = 1;
 
 pub const GC_EXTRA_HEADER_WORD: usize = 1;
 const GC_EXTRA_HEADER_BYTES: usize = GC_EXTRA_HEADER_WORD << LOG_BYTES_IN_WORD;
+
+const LOG_FILE_PATH: &str = "/home/qtl/mmtk-info.txt";
 
 impl<VM: VMBinding> SFT for MarkCompactSpace<VM> {
     fn name(&self) -> &str {
@@ -185,11 +187,11 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
         let mut file = OpenOptions::new()
             .append(true)
             .create(true)
-            .open("/home/tianleq/mmtk-info.txt")
+            .open(LOG_FILE_PATH)
             .unwrap();
         file.write(b"--------------------------\n").unwrap();
         for (k, v) in self.death.lock().unwrap().iter() {
-            file.write(format!("object: {:?}, birth: {}, death: {}\n", v, *k, round).as_bytes())
+            file.write(format!("birth: {} {}, death: {}\n", *v, *k, round).as_bytes())
                 .unwrap();
         }
         for (k, v) in self.birth.lock().unwrap().iter() {
@@ -315,14 +317,6 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
         let start = self.common.start;
         let end = self.pr.cursor();
         let mut to = start;
-        // assert!(self.death.lock().unwrap().len() == 0);
-        // {
-        //     let mut tmp: std::collections::HashSet<usize> = std::collections::HashSet::new();
-        //     tmp.extend(self.live.lock().unwrap().values());
-        //     let v1 = tmp.len();
-        //     let v2 = self.live.lock().unwrap().len();
-        //     assert!(v1 == v2);
-        // }
 
         let linear_scan =
             crate::util::linear_scan::ObjectIterator::<VM, MarkCompactObjectSize<VM>, true>::new(
@@ -333,7 +327,10 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
         for obj in linear_scan {
             let id = *(self.live.lock().unwrap().get(&obj).unwrap());
             if !Self::to_be_compacted(obj) {
-                self.death.lock().unwrap().insert(id, obj);
+                self.death
+                    .lock()
+                    .unwrap()
+                    .insert(id, VM::VMObjectModel::get_current_size(obj));
                 self.live.lock().unwrap().remove(&obj);
                 continue;
             }

@@ -110,7 +110,7 @@ impl<VM: VMBinding> Plan for MarkCompact<VM> {
             ),
         );
         // do another trace to update references
-        scheduler.work_buckets[WorkBucketStage::RefForwarding].add(UpdateReferences::<VM>::new());
+        scheduler.work_buckets[WorkBucketStage::SecondRoots].add(UpdateReferences::<VM>::new());
         scheduler.work_buckets[WorkBucketStage::Compact].add(Compact::<VM>::new(&self.mc_space));
 
         if self

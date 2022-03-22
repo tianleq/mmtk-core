@@ -73,11 +73,21 @@ impl<VM: VMBinding> SFT for MallocSpace<VM> {
     }
 
     // For malloc space, we need to further check the alloc bit.
-    fn is_mmtk_object(&self, object: ObjectReference) -> bool {
+    fn is_in_space(&self, object: ObjectReference) -> bool {
         is_alloced_by_malloc(object)
     }
 
-    fn initialize_object_metadata(&self, object: ObjectReference, _bytes: usize, _alloc: bool) {
+    /// For malloc space, we just use the side metadata.
+    #[cfg(feature = "is_mmtk_object")]
+    #[inline(always)]
+    fn is_mmtk_object(&self, addr: Address) -> bool {
+        debug_assert!(!addr.is_zero());
+        // `addr` cannot be mapped by us. It should be mapped by the malloc library.
+        debug_assert!(!addr.is_mapped());
+        has_object_alloced_by_malloc(addr)
+    }
+
+    fn initialize_object_metadata(&self, object: ObjectReference, _alloc: bool) {
         trace!("initialize_object_metadata for object {}", object);
         let page_addr = conversions::page_align_down(object.to_address());
         set_page_mark(page_addr);

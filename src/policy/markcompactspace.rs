@@ -225,23 +225,38 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
         self.allocation_per_gc.store(0, Ordering::SeqCst);
     }
 
-    pub fn release(&self) {
+    pub fn release(&self) {}
+
+    pub fn log_object_lifetime_info(&self, log_file_name: &str) {
         use std::fs::OpenOptions;
-        let round = self.round.fetch_add(1, Ordering::SeqCst);
         let mut file = OpenOptions::new()
             .append(true)
             .create(true)
-            .open("/home/tianleq/mmtk-info.txt")
+            .open(format!("{}{}", LOG_FILE_PATH, log_file_name))
             .unwrap();
-        file.write(b"--------------------------\n").unwrap();
+        const KB: usize = 1 << 10;
+
+        let mut size = 0;
+        for e in self.live.lock().unwrap().values() {
+            size += e.1
+        }
+        write!(
+            file,
+            "heap size: {},{}\n",
+            (self.pr.cursor().as_usize() - HEAP_START.as_usize()) / KB,
+            size / KB
+        )
+        .unwrap();
         for (k, v) in self.death.lock().unwrap().iter() {
-            file.write(format!("object: {:?}, birth: {}, death: {}\n", v, *k, round).as_bytes())
+            file.write(format!("b: {} {}\n", *k, *v).as_bytes())
                 .unwrap();
         }
-        for (k, v) in self.birth.lock().unwrap().iter() {
-            file.write(format!("newly born object: {:?} {}\n", *k, v).as_bytes())
+        for (_, v) in self.birth.lock().unwrap().iter() {
+            file.write(format!("n: {} {}\n", v.0, v.1).as_bytes())
                 .unwrap();
         }
+        file.write(b"--------------------------\n").unwrap();
+        info!("Total new object: {}", self.birth.lock().unwrap().len());
         self.death.lock().unwrap().clear();
         self.birth.lock().unwrap().clear();
     }
@@ -452,15 +467,6 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
                 to += copied_size;
             }
         }
-        self.live.lock().unwrap().clear();
-        self.live.lock().unwrap().extend(new_live.iter());
-        // {
-        //     let mut tmp: std::collections::HashSet<usize> = std::collections::HashSet::new();
-        //     tmp.extend(self.live.lock().unwrap().values());
-        //     let v1 = tmp.len();
-        //     let v2 = self.live.lock().unwrap().len();
-        //     assert!(v1 == v2);
-        // }
     }
 
     pub fn compact(&self) {

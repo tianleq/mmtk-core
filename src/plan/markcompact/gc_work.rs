@@ -16,18 +16,44 @@ use std::ops::{Deref, DerefMut};
 /// iterate through the heap and calculate the new location of live objects
 pub struct CalculateForwardingAddress<VM: VMBinding> {
     mc_space: &'static MarkCompactSpace<VM>,
+    log_lifetime: bool,
 }
 
 impl<VM: VMBinding> GCWork<VM> for CalculateForwardingAddress<VM> {
     #[inline]
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        self.mc_space.calculate_forwarding_pointer();
+        self.mc_space
+            .calculate_forwarding_pointer(self.log_lifetime);
     }
 }
 
 impl<VM: VMBinding> CalculateForwardingAddress<VM> {
-    pub fn new(mc_space: &'static MarkCompactSpace<VM>) -> Self {
-        Self { mc_space }
+    pub fn new(mc_space: &'static MarkCompactSpace<VM>, log_lifetime: bool) -> Self {
+        Self {
+            mc_space,
+            log_lifetime,
+        }
+    }
+}
+
+pub struct LogObjectLifetimeInfo<VM: VMBinding> {
+    mc_space: &'static MarkCompactSpace<VM>,
+    log_file_name: String,
+}
+
+impl<VM: VMBinding> GCWork<VM> for LogObjectLifetimeInfo<VM> {
+    #[inline]
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+        self.mc_space.log_object_lifetime_info(&self.log_file_name);
+    }
+}
+
+impl<VM: VMBinding> LogObjectLifetimeInfo<VM> {
+    pub fn new(mc_space: &'static MarkCompactSpace<VM>, log_file_name: String) -> Self {
+        Self {
+            mc_space,
+            log_file_name,
+        }
     }
 }
 

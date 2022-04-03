@@ -101,11 +101,30 @@ impl<VM: VMBinding> Plan for MarkCompact<VM> {
         scheduler.work_buckets[WorkBucketStage::RefClosure]
             .add(ProcessWeakRefs::<MarkingProcessEdges<VM>>::new());
 
-        scheduler.work_buckets[WorkBucketStage::CalculateForwarding]
-            .add(CalculateForwardingAddress::<VM>::new(&self.mc_space));
+        scheduler.work_buckets[WorkBucketStage::CalculateForwarding].add(
+            CalculateForwardingAddress::<VM>::new(
+                &self.mc_space,
+                self.base()
+                    .collect_object_lifetime_info
+                    .load(atomic::Ordering::SeqCst),
+            ),
+        );
         // do another trace to update references
         scheduler.work_buckets[WorkBucketStage::RefForwarding].add(UpdateReferences::<VM>::new());
         scheduler.work_buckets[WorkBucketStage::Compact].add(Compact::<VM>::new(&self.mc_space));
+
+        if self
+            .base()
+            .collect_object_lifetime_info
+            .load(atomic::Ordering::SeqCst)
+        {
+            scheduler.work_buckets[WorkBucketStage::Release].add(
+                super::gc_work::LogObjectLifetimeInfo::<VM>::new(
+                    &self.mc_space,
+                    self.options().log_file_name.value.clone(),
+                ),
+            );
+        }
 
         // Release global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Release]

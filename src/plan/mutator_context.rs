@@ -80,17 +80,13 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         offset: isize,
         allocator: AllocationSemantics,
     ) -> Address {
-        unsafe {
-            let b = self
-                .allocators
+        let b = unsafe {
+            self.allocators
                 .get_allocator(self.config.allocator_mapping[allocator])
                 .get_plan()
-                .base();
-            b.bytes_allocated_per_gc
-                .fetch_add(size + 8, atomic::Ordering::SeqCst);
-            b.alloc_per_gc.fetch_add(1, atomic::Ordering::SeqCst);
-        }
-
+                .base()
+        };
+        b.alloc_done.store(false, atomic::Ordering::SeqCst);
         unsafe {
             self.allocators
                 .get_allocator_mut(self.config.allocator_mapping[allocator])
@@ -105,23 +101,25 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         _bytes: usize,
         allocator: AllocationSemantics,
     ) {
-        unsafe {
-            let b = self
-                .allocators
+        let b = unsafe {
+            self.allocators
                 .get_allocator(self.config.allocator_mapping[allocator])
                 .get_plan()
-                .base();
-            let alloc_per_gc = b.alloc_per_gc.load(atomic::Ordering::SeqCst);
-            let post_alloc_per_gc = b.post_alloc_per_gc.fetch_add(1, atomic::Ordering::SeqCst);
-            // assert!(alloc_per_gc == post_alloc_per_gc + 1, "not serialized");
-        }
-
+                .base()
+        };
+        // let c = b.post_alloc_per_gc.fetch_add(1, atomic::Ordering::SeqCst);
+        // println!("p: seq {} bytes {}", c, _bytes);
         unsafe {
             self.allocators
                 .get_allocator_mut(self.config.allocator_mapping[allocator])
         }
         .get_space()
-        .initialize_object_metadata(refer, _bytes, true)
+        .initialize_object_metadata(
+            refer,
+            _bytes,
+            b.collect_object_lifetime_info
+                .load(atomic::Ordering::SeqCst),
+        )
     }
 
     fn get_tls(&self) -> VMMutatorThread {

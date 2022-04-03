@@ -6,6 +6,7 @@ use crate::policy::space::*;
 use crate::util::alloc::allocator::align_allocation_no_fill;
 use crate::util::constants::LOG_BYTES_IN_WORD;
 use crate::util::heap::layout::heap_layout::{Mmapper, VMMap};
+use crate::util::heap::layout::vm_layout_constants::HEAP_START;
 use crate::util::heap::{HeapMeta, MonotonePageResource, PageResource, VMRequest};
 use crate::util::metadata::load_metadata;
 use crate::util::metadata::side_metadata::{SideMetadataContext, SideMetadataSpec};
@@ -17,12 +18,11 @@ use atomic::Ordering;
 pub struct MarkCompactSpace<VM: VMBinding> {
     common: CommonSpace<VM>,
     pr: MonotonePageResource<VM>,
-    pub birth: std::sync::Mutex<std::collections::HashMap<ObjectReference, usize>>,
-    pub live: std::sync::Mutex<std::collections::HashMap<ObjectReference, usize>>,
+    pub birth: std::sync::Mutex<std::collections::HashMap<ObjectReference, (usize, usize)>>,
+    pub live: std::sync::Mutex<std::collections::HashMap<ObjectReference, (usize, usize)>>,
     pub death: std::sync::Mutex<std::collections::HashMap<usize, usize>>,
     counter: AtomicUsize,
     allocation_per_gc: AtomicUsize,
-    round: AtomicUsize,
 }
 
 const GC_MARK_BIT_MASK: usize = 1;
@@ -30,7 +30,7 @@ const GC_MARK_BIT_MASK: usize = 1;
 pub const GC_EXTRA_HEADER_WORD: usize = 1;
 const GC_EXTRA_HEADER_BYTES: usize = GC_EXTRA_HEADER_WORD << LOG_BYTES_IN_WORD;
 
-const LOG_FILE_PATH: &str = "/home/qtl/mmtk-info.txt";
+const LOG_FILE_PATH: &str = "/home/qtl/";
 
 impl<VM: VMBinding> SFT for MarkCompactSpace<VM> {
     fn name(&self) -> &str {
@@ -55,25 +55,23 @@ impl<VM: VMBinding> SFT for MarkCompactSpace<VM> {
         true
     }
 
-    fn initialize_object_metadata(&self, object: ObjectReference, bytes: usize, _alloc: bool) {
+    fn initialize_object_metadata(&self, object: ObjectReference, bytes: usize, log_alloc: bool) {
         crate::util::alloc_bit::set_alloc_bit(object);
+        if log_alloc {
+            let count = self.counter.fetch_add(bytes, Ordering::SeqCst);
 
-        let count = self
-            .counter
-            .fetch_add(bytes + Self::HEADER_RESERVED_IN_BYTES, Ordering::SeqCst);
-
-        self.birth
-            .lock()
-            .unwrap()
-            .insert(object, count + bytes + Self::HEADER_RESERVED_IN_BYTES);
-        let rtn = self
-            .live
-            .lock()
-            .unwrap()
-            .insert(object, count + bytes + Self::HEADER_RESERVED_IN_BYTES);
-        assert!(rtn == None);
-        self.allocation_per_gc
-            .fetch_add(bytes + Self::HEADER_RESERVED_IN_BYTES, Ordering::SeqCst);
+            self.birth
+                .lock()
+                .unwrap()
+                .insert(object, (count + bytes, bytes));
+            let rtn = self
+                .live
+                .lock()
+                .unwrap()
+                .insert(object, (count + bytes, bytes));
+            assert!(rtn == None);
+            self.allocation_per_gc.fetch_add(bytes, Ordering::SeqCst);
+        }
     }
 
     #[cfg(feature = "sanity")]
@@ -168,7 +166,6 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
             death: std::sync::Mutex::new(std::collections::HashMap::new()),
             counter: AtomicUsize::new(0),
             allocation_per_gc: AtomicUsize::new(0),
-            round: AtomicUsize::new(0),
         }
     }
 
@@ -181,23 +178,38 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
         self.allocation_per_gc.store(0, Ordering::SeqCst);
     }
 
-    pub fn release(&self) {
+    pub fn release(&self) {}
+
+    pub fn log_object_lifetime_info(&self, log_file_name: &str) {
         use std::fs::OpenOptions;
-        let round = self.round.fetch_add(1, Ordering::SeqCst);
         let mut file = OpenOptions::new()
             .append(true)
             .create(true)
-            .open(LOG_FILE_PATH)
+            .open(format!("{}{}", LOG_FILE_PATH, log_file_name))
             .unwrap();
-        file.write(b"--------------------------\n").unwrap();
+        const KB: usize = 1 << 10;
+
+        let mut size = 0;
+        for e in self.live.lock().unwrap().values() {
+            size += e.1
+        }
+        write!(
+            file,
+            "heap size: {},{}\n",
+            (self.pr.cursor().as_usize() - HEAP_START.as_usize()) / KB,
+            size / KB
+        )
+        .unwrap();
         for (k, v) in self.death.lock().unwrap().iter() {
-            file.write(format!("birth: {} {}, death: {}\n", *v, *k, round).as_bytes())
+            file.write(format!("b: {} {}\n", *k, *v).as_bytes())
                 .unwrap();
         }
-        for (k, v) in self.birth.lock().unwrap().iter() {
-            file.write(format!("newly born object: {:?} {}\n", *k, v).as_bytes())
+        for (_, v) in self.birth.lock().unwrap().iter() {
+            file.write(format!("n: {} {}\n", v.0, v.1).as_bytes())
                 .unwrap();
         }
+        file.write(b"--------------------------\n").unwrap();
+        info!("Total new object: {}", self.birth.lock().unwrap().len());
         self.death.lock().unwrap().clear();
         self.birth.lock().unwrap().clear();
     }
@@ -313,65 +325,79 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
         Self::is_marked(object)
     }
 
-    pub fn calculate_forwarding_pointer(&self) {
+    pub fn calculate_forwarding_pointer(&self, log_lifetime: bool) {
         let start = self.common.start;
         let end = self.pr.cursor();
         let mut to = start;
-
         let linear_scan =
             crate::util::linear_scan::ObjectIterator::<VM, MarkCompactObjectSize<VM>, true>::new(
                 start, end,
             );
-        let mut new_live = std::collections::HashMap::<ObjectReference, usize>::new();
-        // for obj in linear_scan.filter(|obj| Self::to_be_compacted(*obj)) {
-        for obj in linear_scan {
-            let id = *(self.live.lock().unwrap().get(&obj).unwrap());
-            if !Self::to_be_compacted(obj) {
-                self.death
-                    .lock()
-                    .unwrap()
-                    .insert(id, VM::VMObjectModel::get_current_size(obj));
-                self.live.lock().unwrap().remove(&obj);
-                continue;
-            }
-            if self.death.lock().unwrap().contains_key(&id) {
-                println!(
-                    "object: {:?}, dead: {:?}",
-                    obj,
-                    self.death.lock().unwrap().get(&id).unwrap()
-                );
-                assert!(false);
-            }
+        if log_lifetime {
+            let mut new_live = std::collections::HashMap::<ObjectReference, (usize, usize)>::new();
+            // for obj in linear_scan.filter(|obj| Self::to_be_compacted(*obj)) {
+            for obj in linear_scan {
+                let mut l = self.live.lock().unwrap();
+                let o = l.get(&obj);
+                // let id = *(self.live.lock().unwrap().get(&obj).unwrap());
+                if !Self::to_be_compacted(obj) {
+                    if !o.is_none() {
+                        let id = *o.unwrap();
+                        self.death
+                            .lock()
+                            .unwrap()
+                            .insert(id.0, VM::VMObjectModel::get_current_size(obj));
+                        l.remove(&obj);
+                    }
+                    continue;
+                }
+                if !o.is_none() {
+                    let id = *o.unwrap();
+                    if self.death.lock().unwrap().contains_key(&id.0) {
+                        println!(
+                            "object: {:?}, dead: {:?}",
+                            obj,
+                            self.death.lock().unwrap().get(&id.0).unwrap()
+                        );
+                        assert!(false);
+                    }
+                }
+                let copied_size =
+                    VM::VMObjectModel::get_size_when_copied(obj) + Self::HEADER_RESERVED_IN_BYTES;
+                let align = VM::VMObjectModel::get_align_when_copied(obj);
+                let offset = VM::VMObjectModel::get_align_offset_when_copied(obj);
+                to = align_allocation_no_fill::<VM>(to, align, offset);
+                let forwarding_pointer_addr = obj.to_address() - GC_EXTRA_HEADER_BYTES;
+                unsafe { forwarding_pointer_addr.store(to) }
 
-            let copied_size =
-                VM::VMObjectModel::get_size_when_copied(obj) + Self::HEADER_RESERVED_IN_BYTES;
-            let align = VM::VMObjectModel::get_align_when_copied(obj);
-            let offset = VM::VMObjectModel::get_align_offset_when_copied(obj);
-            to = align_allocation_no_fill::<VM>(to, align, offset);
-            let forwarding_pointer_addr = obj.to_address() - GC_EXTRA_HEADER_BYTES;
-            unsafe { forwarding_pointer_addr.store(to) }
-
-            let object_addr = to + Self::HEADER_RESERVED_IN_BYTES;
-            let rtn = new_live.insert(unsafe { object_addr.to_object_reference() }, id);
-            assert!(rtn == None);
-            to += copied_size;
+                let object_addr = to + Self::HEADER_RESERVED_IN_BYTES;
+                if !o.is_none() {
+                    let id = *o.unwrap();
+                    let rtn = new_live.insert(unsafe { object_addr.to_object_reference() }, id);
+                    assert!(rtn == None);
+                }
+                to += copied_size;
+            }
+            self.live.lock().unwrap().clear();
+            self.live.lock().unwrap().extend(new_live.iter());
+        } else {
+            for obj in linear_scan.filter(|obj| Self::to_be_compacted(*obj)) {
+                let copied_size =
+                    VM::VMObjectModel::get_size_when_copied(obj) + Self::HEADER_RESERVED_IN_BYTES;
+                let align = VM::VMObjectModel::get_align_when_copied(obj);
+                let offset = VM::VMObjectModel::get_align_offset_when_copied(obj);
+                to = align_allocation_no_fill::<VM>(to, align, offset);
+                let forwarding_pointer_addr = obj.to_address() - GC_EXTRA_HEADER_BYTES;
+                unsafe { forwarding_pointer_addr.store(to) }
+                to += copied_size;
+            }
         }
-        self.live.lock().unwrap().clear();
-        self.live.lock().unwrap().extend(new_live.iter());
-        // {
-        //     let mut tmp: std::collections::HashSet<usize> = std::collections::HashSet::new();
-        //     tmp.extend(self.live.lock().unwrap().values());
-        //     let v1 = tmp.len();
-        //     let v2 = self.live.lock().unwrap().len();
-        //     assert!(v1 == v2);
-        // }
     }
 
     pub fn compact(&self) {
         let start = self.common.start;
         let end = self.pr.cursor();
         let mut to = end;
-
         let linear_scan =
             crate::util::linear_scan::ObjectIterator::<VM, MarkCompactObjectSize<VM>, true>::new(
                 start, end,

@@ -81,7 +81,7 @@ pub trait SFT {
         true
     }
     /// Initialize object metadata (in the header, or in the side metadata).
-    fn initialize_object_metadata(&self, object: ObjectReference, bytes: usize, alloc: bool);
+    fn initialize_object_metadata(&self, object: ObjectReference, bytes: usize, log_alloc: bool);
     /// Trace objects through SFT. This along with [`SFTProcessEdges`](mmtk/scheduler/gc_work/SFTProcessEdges)
     /// provides an easy way for most plans to trace objects without the need to implement any plan-specific
     /// code. However, tracing objects for some policies are more complicated, and they do not provide an

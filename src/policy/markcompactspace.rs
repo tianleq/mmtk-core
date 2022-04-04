@@ -408,13 +408,20 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
                 let align = VM::VMObjectModel::get_align_when_copied(obj);
                 let offset = VM::VMObjectModel::get_align_offset_when_copied(obj);
                 to = align_allocation_no_fill::<VM>(to, align, offset);
-                let forwarding_pointer_addr = obj.to_address() - GC_EXTRA_HEADER_BYTES;
-                unsafe { forwarding_pointer_addr.store(to) }
 
-                let object_addr = to + Self::HEADER_RESERVED_IN_BYTES;
+                // let forwarding_pointer_addr = obj.to_address() - GC_EXTRA_HEADER_BYTES;
+                // unsafe { forwarding_pointer_addr.store(to) }
+                let new_obj = VM::VMObjectModel::get_reference_when_copied_to(
+                    obj,
+                    to + Self::HEADER_RESERVED_IN_BYTES,
+                );
+
+                Self::store_header_forwarding_pointer(obj, new_obj);
+
+                // let object_addr = to + Self::HEADER_RESERVED_IN_BYTES;
                 if !o.is_none() {
                     let id = *o.unwrap();
-                    let rtn = new_live.insert(unsafe { object_addr.to_object_reference() }, id);
+                    let rtn = new_live.insert(new_obj, id);
                     assert!(rtn == None);
                 }
                 to += copied_size;
@@ -428,8 +435,21 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
                 let align = VM::VMObjectModel::get_align_when_copied(obj);
                 let offset = VM::VMObjectModel::get_align_offset_when_copied(obj);
                 to = align_allocation_no_fill::<VM>(to, align, offset);
-                let forwarding_pointer_addr = obj.to_address() - GC_EXTRA_HEADER_BYTES;
-                unsafe { forwarding_pointer_addr.store(to) }
+                let new_obj = VM::VMObjectModel::get_reference_when_copied_to(
+                    obj,
+                    to + Self::HEADER_RESERVED_IN_BYTES,
+                );
+
+                Self::store_header_forwarding_pointer(obj, new_obj);
+
+                trace!(
+                    "Calculate forward: {} (size when copied = {}) ~> {} (size = {})",
+                    obj,
+                    VM::VMObjectModel::get_size_when_copied(obj),
+                    to,
+                    copied_size
+                );
+
                 to += copied_size;
             }
         }

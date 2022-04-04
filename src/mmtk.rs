@@ -116,5 +116,3 @@ impl<VM: VMBinding> Default for MMTK<VM> {
         Self::new()
     }
 }
-
-pub static ALLOC: AtomicBool = AtomicBool::new(false);

@@ -261,40 +261,6 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
         self.birth.lock().unwrap().clear();
     }
 
-    pub fn log_object_lifetime_info(&self, log_file_name: &str) {
-        use std::fs::OpenOptions;
-        let mut file = OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open(format!("{}{}", LOG_FILE_PATH, log_file_name))
-            .unwrap();
-        const KB: usize = 1 << 10;
-
-        let mut size = 0;
-        for e in self.live.lock().unwrap().values() {
-            size += e.1
-        }
-        write!(
-            file,
-            "heap size: {},{}\n",
-            (self.pr.cursor().as_usize() - HEAP_START.as_usize()) / KB,
-            size / KB
-        )
-        .unwrap();
-        for (k, v) in self.death.lock().unwrap().iter() {
-            file.write(format!("b: {} {}\n", *k, *v).as_bytes())
-                .unwrap();
-        }
-        for (_, v) in self.birth.lock().unwrap().iter() {
-            file.write(format!("n: {} {}\n", v.0, v.1).as_bytes())
-                .unwrap();
-        }
-        file.write(b"--------------------------\n").unwrap();
-        info!("Total new object: {}", self.birth.lock().unwrap().len());
-        self.death.lock().unwrap().clear();
-        self.birth.lock().unwrap().clear();
-    }
-
     pub fn trace_mark_object<T: TransitiveClosure>(
         &self,
         trace: &mut T,

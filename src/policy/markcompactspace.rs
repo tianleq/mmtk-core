@@ -33,8 +33,6 @@ const GC_MARK_BIT_MASK: usize = 1;
 pub const GC_EXTRA_HEADER_WORD: usize = 1;
 const GC_EXTRA_HEADER_BYTES: usize = GC_EXTRA_HEADER_WORD << LOG_BYTES_IN_WORD;
 
-const LOG_FILE_PATH: &str = "/home/qtl/";
-
 impl<VM: VMBinding> SFT for MarkCompactSpace<VM> {
     fn name(&self) -> &str {
         self.get_name()
@@ -232,7 +230,7 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
         let mut file = OpenOptions::new()
             .append(true)
             .create(true)
-            .open(format!("{}{}", LOG_FILE_PATH, log_file_name))
+            .open(format!("{}", log_file_name))
             .unwrap();
         const KB: usize = 1 << 10;
 

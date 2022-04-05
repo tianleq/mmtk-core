@@ -123,14 +123,14 @@ impl<VM: VMBinding> MarkingProcessEdges<VM> {
 
 impl<VM: VMBinding> ProcessEdgesWork for MarkingProcessEdges<VM> {
     type VM = VM;
-    fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
-        let base = ProcessEdgesBase::new(edges, roots, mmtk);
+    fn new(depth: i32, edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+        let base = ProcessEdgesBase::new(depth, edges, roots, mmtk);
         let plan = base.plan().downcast_ref::<MarkCompact<VM>>().unwrap();
         Self { base, plan }
     }
 
     #[inline]
-    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+    fn trace_object(&mut self, _depth: i32, object: ObjectReference) -> ObjectReference {
         if object.is_null() {
             return object;
         }
@@ -141,6 +141,10 @@ impl<VM: VMBinding> ProcessEdgesWork for MarkingProcessEdges<VM> {
         } else {
             self.markcompact().common.trace_object::<Self>(self, object)
         }
+    }
+
+    fn depth(&self) -> i32 {
+        self.base.depth
     }
 }
 
@@ -173,14 +177,14 @@ impl<VM: VMBinding> ForwardingProcessEdges<VM> {
 
 impl<VM: VMBinding> ProcessEdgesWork for ForwardingProcessEdges<VM> {
     type VM = VM;
-    fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
-        let base = ProcessEdgesBase::new(edges, roots, mmtk);
+    fn new(depth: i32, edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+        let base = ProcessEdgesBase::new(depth, edges, roots, mmtk);
         let plan = base.plan().downcast_ref::<MarkCompact<VM>>().unwrap();
         Self { base, plan }
     }
 
     #[inline]
-    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+    fn trace_object(&mut self, _depth: i32, object: ObjectReference) -> ObjectReference {
         if object.is_null() {
             return object;
         }
@@ -191,6 +195,10 @@ impl<VM: VMBinding> ProcessEdgesWork for ForwardingProcessEdges<VM> {
         } else {
             self.markcompact().common.trace_object::<Self>(self, object)
         }
+    }
+
+    fn depth(&self) -> i32 {
+        self.base.depth
     }
 }
 

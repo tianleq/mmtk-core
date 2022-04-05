@@ -17,13 +17,13 @@ pub struct GenNurseryProcessEdges<VM: VMBinding> {
 impl<VM: VMBinding> ProcessEdgesWork for GenNurseryProcessEdges<VM> {
     type VM = VM;
 
-    fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
-        let base = ProcessEdgesBase::new(edges, roots, mmtk);
+    fn new(depth: i32, edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+        let base = ProcessEdgesBase::new(depth, edges, roots, mmtk);
         let gen = base.plan().generational();
         Self { gen, base }
     }
     #[inline]
-    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+    fn trace_object(&mut self, _depth: i32, object: ObjectReference) -> ObjectReference {
         if object.is_null() {
             return object;
         }
@@ -32,9 +32,14 @@ impl<VM: VMBinding> ProcessEdgesWork for GenNurseryProcessEdges<VM> {
     #[inline]
     fn process_edge(&mut self, slot: Address) {
         let object = unsafe { slot.load::<ObjectReference>() };
-        let new_object = self.trace_object(object);
+        let depth = self.depth();
+        let new_object = self.trace_object(depth, object);
         debug_assert!(!self.gen.nursery.in_space(new_object));
         unsafe { slot.store(new_object) };
+    }
+
+    fn depth(&self) -> i32 {
+        self.base.depth
     }
 }
 

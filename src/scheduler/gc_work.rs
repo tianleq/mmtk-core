@@ -331,6 +331,7 @@ pub struct ProcessEdgesBase<VM: VMBinding> {
     // Because a copying gc will dereference this pointer at least once for every object copy.
     worker: *mut GCWorker<VM>,
     pub roots: bool,
+    pub depth: i32,
 }
 
 unsafe impl<VM: VMBinding> Send for ProcessEdgesBase<VM> {}
@@ -338,7 +339,7 @@ unsafe impl<VM: VMBinding> Send for ProcessEdgesBase<VM> {}
 impl<VM: VMBinding> ProcessEdgesBase<VM> {
     // Requires an MMTk reference. Each plan-specific type that uses ProcessEdgesBase can get a static plan reference
     // at creation. This avoids overhead for dynamic dispatch or downcasting plan for each object traced.
-    pub fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+    pub fn new(depth: i32, edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
         #[cfg(feature = "extreme_assertions")]
         if crate::util::edge_logger::should_check_duplicate_edges(&*mmtk.plan) {
             for edge in &edges {
@@ -352,6 +353,7 @@ impl<VM: VMBinding> ProcessEdgesBase<VM> {
             mmtk,
             worker: std::ptr::null_mut(),
             roots,
+            depth,
         }
     }
     pub fn set_worker(&mut self, worker: &mut GCWorker<VM>) {
@@ -391,8 +393,8 @@ pub trait ProcessEdgesWork:
     const CAPACITY: usize = 4096;
     const OVERWRITE_REFERENCE: bool = true;
     const SCAN_OBJECTS_IMMEDIATELY: bool = true;
-    fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<Self::VM>) -> Self;
-    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference;
+    fn new(depth: i32, edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<Self::VM>) -> Self;
+    fn trace_object(&mut self, depth: i32, object: ObjectReference) -> ObjectReference;
 
     #[cfg(feature = "sanity")]
     fn cache_roots_for_sanity_gc(&mut self) {
@@ -438,14 +440,20 @@ pub trait ProcessEdgesWork:
         if self.nodes.is_empty() {
             return;
         }
-        let scan_objects_work = ScanObjects::<Self>::new(self.pop_nodes(), false);
+        let depth = self.depth();
+        let scan_objects_work = ScanObjects::<Self>::new(
+            if depth == -1 { -1 } else { depth + 1 },
+            self.pop_nodes(),
+            false,
+        );
         self.new_scan_work(scan_objects_work);
     }
 
     #[inline]
     fn process_edge(&mut self, slot: Address) {
         let object = unsafe { slot.load::<ObjectReference>() };
-        let new_object = self.trace_object(object);
+        let depth = self.depth();
+        let new_object = self.trace_object(depth, object);
         if Self::OVERWRITE_REFERENCE {
             unsafe { slot.store(new_object) };
         }
@@ -457,6 +465,8 @@ pub trait ProcessEdgesWork:
             self.process_edge(self.edges[i])
         }
     }
+
+    fn depth(&self) -> i32;
 }
 
 impl<E: ProcessEdgesWork> GCWork<E::VM> for E {
@@ -488,13 +498,13 @@ pub struct SFTProcessEdges<VM: VMBinding> {
 
 impl<VM: VMBinding> ProcessEdgesWork for SFTProcessEdges<VM> {
     type VM = VM;
-    fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
-        let base = ProcessEdgesBase::new(edges, roots, mmtk);
+    fn new(depth: i32, edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+        let base = ProcessEdgesBase::new(depth, edges, roots, mmtk);
         Self { base }
     }
 
     #[inline]
-    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+    fn trace_object(&mut self, _depth: i32, object: ObjectReference) -> ObjectReference {
         use crate::policy::space::*;
 
         if object.is_null() {
@@ -512,6 +522,10 @@ impl<VM: VMBinding> ProcessEdgesWork for SFTProcessEdges<VM> {
         // Invoke trace object on sft
         let sft = crate::mmtk::SFT_MAP.get(object.to_address());
         sft.sft_trace_object(trace, object, worker)
+    }
+
+    fn depth(&self) -> i32 {
+        self.base.depth
     }
 }
 
@@ -536,14 +550,16 @@ pub struct ScanObjects<Edges: ProcessEdgesWork> {
     #[allow(unused)]
     concurrent: bool,
     phantom: PhantomData<Edges>,
+    depth: i32,
 }
 
 impl<Edges: ProcessEdgesWork> ScanObjects<Edges> {
-    pub fn new(buffer: Vec<ObjectReference>, concurrent: bool) -> Self {
+    pub fn new(depth: i32, buffer: Vec<ObjectReference>, concurrent: bool) -> Self {
         Self {
             buffer,
             concurrent,
             phantom: PhantomData,
+            depth,
         }
     }
 }
@@ -551,7 +567,7 @@ impl<Edges: ProcessEdgesWork> ScanObjects<Edges> {
 impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanObjects<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
         trace!("ScanObjects");
-        <E::VM as VMBinding>::VMScanning::scan_objects::<E>(&self.buffer, worker);
+        <E::VM as VMBinding>::VMScanning::scan_objects::<E>(self.depth, &self.buffer, worker);
         trace!("ScanObjects End");
     }
 }
@@ -584,7 +600,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBuf<E> {
             if !self.modbuf.is_empty() {
                 let mut modbuf = vec![];
                 ::std::mem::swap(&mut modbuf, &mut self.modbuf);
-                GCWork::do_work(&mut ScanObjects::<E>::new(modbuf, false), worker, mmtk)
+                GCWork::do_work(&mut ScanObjects::<E>::new(-1, modbuf, false), worker, mmtk)
             }
         } else {
             // Do nothing

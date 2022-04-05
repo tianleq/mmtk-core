@@ -43,6 +43,7 @@ pub trait Scanning<VM: VMBinding> {
     /// Arguments:
     /// * `objects`: The slice of object references to be scanned.
     fn scan_objects<W: ProcessEdgesWork<VM = VM>>(
+        depth: i32,
         objects: &[ObjectReference],
         worker: &mut GCWorker<VM>,
     );

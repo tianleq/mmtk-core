@@ -25,8 +25,8 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork
 {
     type VM = VM;
 
-    fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
-        let base = ProcessEdgesBase::new(edges, roots, mmtk);
+    fn new(depth: i32, edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+        let base = ProcessEdgesBase::new(depth, edges, roots, mmtk);
         let plan = base.plan().downcast_ref::<GenImmix<VM>>().unwrap();
         Self { plan, base }
     }
@@ -46,7 +46,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork
     }
 
     #[inline]
-    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+    fn trace_object(&mut self, _depth: i32, object: ObjectReference) -> ObjectReference {
         if object.is_null() {
             return object;
         }
@@ -67,6 +67,10 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork
         self.plan
             .gen
             .trace_object_full_heap::<Self>(self, object, self.worker())
+    }
+
+    fn depth(&self) -> i32 {
+        self.base.depth
     }
 }
 

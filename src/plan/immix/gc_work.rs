@@ -38,8 +38,8 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
 
     const OVERWRITE_REFERENCE: bool = crate::policy::immix::DEFRAG;
 
-    fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
-        let base = ProcessEdgesBase::new(edges, roots, mmtk);
+    fn new(depth: i32, edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+        let base = ProcessEdgesBase::new(depth, edges, roots, mmtk);
         let plan = base.plan().downcast_ref::<Immix<VM>>().unwrap();
         Self { plan, base }
     }
@@ -59,7 +59,7 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
 
     /// Trace  and evacuate objects.
     #[inline(always)]
-    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+    fn trace_object(&mut self, _depth: i32, object: ObjectReference) -> ObjectReference {
         if object.is_null() {
             return object;
         }
@@ -82,10 +82,15 @@ impl<VM: VMBinding, const KIND: TraceKind> ProcessEdgesWork for ImmixProcessEdge
     #[inline]
     fn process_edge(&mut self, slot: Address) {
         let object = unsafe { slot.load::<ObjectReference>() };
-        let new_object = self.trace_object(object);
+        let depth = self.depth();
+        let new_object = self.trace_object(depth, object);
         if KIND == TRACE_KIND_DEFRAG && Self::OVERWRITE_REFERENCE {
             unsafe { slot.store(new_object) };
         }
+    }
+
+    fn depth(&self) -> i32 {
+        self.base.depth
     }
 }
 

@@ -32,10 +32,12 @@ pub struct ObjectsClosure<'a, E: ProcessEdgesWork> {
     mmtk: &'static MMTK<E::VM>,
     buffer: Vec<Address>,
     worker: &'a mut GCWorker<E::VM>,
+    depth: i32,
 }
 
 impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
     pub fn new(
+        depth: i32,
         mmtk: &'static MMTK<E::VM>,
         buffer: Vec<Address>,
         worker: &'a mut GCWorker<E::VM>,
@@ -44,6 +46,7 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
             mmtk,
             buffer,
             worker,
+            depth,
         }
     }
 }
@@ -60,7 +63,7 @@ impl<'a, E: ProcessEdgesWork> TransitiveClosure for ObjectsClosure<'a, E> {
             mem::swap(&mut new_edges, &mut self.buffer);
             self.worker.add_work(
                 WorkBucketStage::Closure,
-                E::new(new_edges, false, self.mmtk),
+                E::new(self.depth, new_edges, false, self.mmtk),
             );
         }
     }
@@ -76,7 +79,7 @@ impl<'a, E: ProcessEdgesWork> Drop for ObjectsClosure<'a, E> {
         mem::swap(&mut new_edges, &mut self.buffer);
         self.worker.add_work(
             WorkBucketStage::Closure,
-            E::new(new_edges, false, self.mmtk),
+            E::new(self.depth, new_edges, false, self.mmtk),
         );
     }
 }

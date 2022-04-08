@@ -399,7 +399,7 @@ pub struct BasePlan<VM: VMBinding> {
     pub vm_space: ImmortalSpace<VM>,
 
     pub bytes_allocated_per_gc: AtomicUsize,
-    pub alloc_done: AtomicBool,
+    pub harness_begin: AtomicBool,
     pub collect_object_lifetime_info: AtomicBool,
 }
 
@@ -518,8 +518,8 @@ impl<VM: VMBinding> BasePlan<VM> {
             #[cfg(feature = "analysis")]
             analysis_manager,
             bytes_allocated_per_gc: AtomicUsize::new(0),
-            alloc_done: AtomicBool::new(true),
-            collect_object_lifetime_info: AtomicBool::new(false),
+            harness_begin: AtomicBool::new(false),
+            collect_object_lifetime_info: AtomicBool::new(true),
         }
     }
 

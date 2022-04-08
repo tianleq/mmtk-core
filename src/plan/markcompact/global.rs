@@ -122,6 +122,7 @@ impl<VM: VMBinding> Plan for MarkCompact<VM> {
                 super::gc_work::LogObjectLifetimeInfo::<VM>::new(
                     &self.mc_space,
                     self.options().log_file_name.value.clone(),
+                    self.base().harness_begin.load(atomic::Ordering::SeqCst),
                 ),
             );
         }

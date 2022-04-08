@@ -80,13 +80,6 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         offset: isize,
         allocator: AllocationSemantics,
     ) -> Address {
-        let b = unsafe {
-            self.allocators
-                .get_allocator(self.config.allocator_mapping[allocator])
-                .get_plan()
-                .base()
-        };
-        b.alloc_done.store(false, atomic::Ordering::SeqCst);
         unsafe {
             self.allocators
                 .get_allocator_mut(self.config.allocator_mapping[allocator])

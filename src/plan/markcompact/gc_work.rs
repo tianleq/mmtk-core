@@ -9,6 +9,7 @@ use crate::util::{Address, ObjectReference};
 use crate::vm::ActivePlan;
 use crate::vm::Scanning;
 use crate::vm::VMBinding;
+use crate::Plan;
 use crate::MMTK;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
@@ -39,20 +40,27 @@ impl<VM: VMBinding> CalculateForwardingAddress<VM> {
 pub struct LogObjectLifetimeInfo<VM: VMBinding> {
     mc_space: &'static MarkCompactSpace<VM>,
     log_file_name: String,
+    harness: bool,
 }
 
 impl<VM: VMBinding> GCWork<VM> for LogObjectLifetimeInfo<VM> {
     #[inline]
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        self.mc_space.log_object_lifetime_info(&self.log_file_name);
+        self.mc_space
+            .log_object_lifetime_info(&self.log_file_name, self.harness);
     }
 }
 
 impl<VM: VMBinding> LogObjectLifetimeInfo<VM> {
-    pub fn new(mc_space: &'static MarkCompactSpace<VM>, log_file_name: String) -> Self {
+    pub fn new(
+        mc_space: &'static MarkCompactSpace<VM>,
+        log_file_name: String,
+        harness: bool,
+    ) -> Self {
         Self {
             mc_space,
             log_file_name,
+            harness,
         }
     }
 }
@@ -135,9 +143,14 @@ impl<VM: VMBinding> ProcessEdgesWork for MarkingProcessEdges<VM> {
             return object;
         }
         if self.markcompact().mc_space().in_space(object) {
+            let log = self
+                .plan
+                .base()
+                .collect_object_lifetime_info
+                .load(atomic::Ordering::SeqCst);
             self.markcompact()
                 .mc_space()
-                .trace_mark_object::<Self>(self, object)
+                .trace_mark_object::<Self>(_depth, self, object, log)
         } else {
             self.markcompact().common.trace_object::<Self>(self, object)
         }

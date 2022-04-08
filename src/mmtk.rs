@@ -95,6 +95,7 @@ impl<VM: VMBinding> MMTK<VM> {
             .base()
             .collect_object_lifetime_info
             .store(true, Ordering::SeqCst);
+        self.plan.base().harness_begin.store(true, Ordering::SeqCst);
     }
 
     pub fn harness_end(&'static self) {

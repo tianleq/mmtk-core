@@ -19,7 +19,7 @@ pub struct MarkCompactSpace<VM: VMBinding> {
     common: CommonSpace<VM>,
     pr: MonotonePageResource<VM>,
     pub birth: std::sync::Mutex<std::collections::HashMap<ObjectReference, (usize, usize)>>,
-    pub live: std::sync::Mutex<std::collections::HashMap<ObjectReference, (usize, usize)>>,
+    pub live: std::sync::Mutex<std::collections::HashMap<ObjectReference, (usize, usize, i32)>>,
     pub death: std::sync::Mutex<std::collections::HashMap<usize, usize>>,
     counter: AtomicUsize,
     allocation_per_gc: AtomicUsize,
@@ -71,7 +71,7 @@ impl<VM: VMBinding> SFT for MarkCompactSpace<VM> {
                 .live
                 .lock()
                 .unwrap()
-                .insert(object, (count + bytes, bytes));
+                .insert(object, (count + bytes, bytes, i32::MAX));
             assert!(rtn == None);
             self.allocation_per_gc.fetch_add(bytes, Ordering::SeqCst);
         }
@@ -225,7 +225,7 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
 
     pub fn release(&self) {}
 
-    pub fn log_object_lifetime_info(&self, log_file_name: &str) {
+    pub fn log_object_lifetime_info(&self, log_file_name: &str, harness: bool) {
         use std::fs::OpenOptions;
         let mut file = OpenOptions::new()
             .append(true)
@@ -249,11 +249,50 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
             file.write(format!("b: {} {}\n", *k, *v).as_bytes())
                 .unwrap();
         }
-        for (_, v) in self.birth.lock().unwrap().iter() {
+        let live = self.live.lock().unwrap();
+        let mut max_depth = 0;
+        let mut total_depth = 0;
+        let mut n = 0;
+        {
+            for (k, v) in live.iter() {
+                // file.write(format!("n: {} {} {}\n", v.0, v.1, v.2).as_bytes())
+                //     .unwrap();
+                max_depth = std::cmp::max(max_depth, v.2);
+                if v.2 == i32::MAX {
+                    VM::VMObjectModel::dump_object(*k);
+                    n += 1;
+                } else {
+                    total_depth += v.2;
+                }
+            }
+        }
+        file.write(
+            format!(
+                "max depth: {} avg depth: {}\n",
+                max_depth,
+                total_depth / (live.len() - n) as i32
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        for (k, v) in self.birth.lock().unwrap().iter() {
+            // if live.contains_key(&k) {
+            //     file.write(format!("n: {} {} {}\n", v.0, v.1, live.get(&k).unwrap().2).as_bytes())
+            //         .unwrap();
+            // } else {
+            //     file.write(format!("n: {} {}\n", v.0, v.1).as_bytes())
+            //         .unwrap();
+            // }
+
             file.write(format!("n: {} {}\n", v.0, v.1).as_bytes())
                 .unwrap();
         }
-        file.write(b"--------------------------\n").unwrap();
+        if harness {
+            file.write(b"--h--\n").unwrap();
+        } else {
+            file.write(b"----\n").unwrap();
+        }
+
         info!("Total new object: {}", self.birth.lock().unwrap().len());
         self.death.lock().unwrap().clear();
         self.birth.lock().unwrap().clear();
@@ -261,14 +300,30 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
 
     pub fn trace_mark_object<T: TransitiveClosure>(
         &self,
+        depth: i32,
         trace: &mut T,
         object: ObjectReference,
+        log: bool,
     ) -> ObjectReference {
         debug_assert!(
             crate::util::alloc_bit::is_alloced(object),
             "{:x}: alloc bit not set",
             object
         );
+        if log {
+            // debug_assert!(
+            //     self.live.lock().unwrap().contains_key(&object),
+            //     "live objects collection is corrupted"
+            // );
+            let exists = self.live.lock().unwrap().contains_key(&object);
+            if exists {
+                if depth != -1 {
+                    let mut t = self.live.lock().unwrap();
+                    let v = t.get_mut(&object).unwrap();
+                    v.2 = std::cmp::min(depth, v.2);
+                }
+            }
+        }
         if MarkCompactSpace::<VM>::test_and_mark(object) {
             trace.process_node(object);
         }
@@ -373,7 +428,8 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
                 start, end,
             );
         if log_lifetime {
-            let mut new_live = std::collections::HashMap::<ObjectReference, (usize, usize)>::new();
+            let mut new_live =
+                std::collections::HashMap::<ObjectReference, (usize, usize, i32)>::new();
             // for obj in linear_scan.filter(|obj| Self::to_be_compacted(*obj)) {
             for obj in linear_scan {
                 let mut l = self.live.lock().unwrap();

@@ -44,7 +44,7 @@ impl FinalizableProcessor {
         e: &mut E,
         object: ObjectReference,
     ) -> ObjectReference {
-        e.trace_object(-1, object)
+        e.trace_object(e.depth(), object)
     }
 
     pub fn scan<E: ProcessEdgesWork>(&mut self, tls: VMWorkerThread, e: &mut E, nursery: bool) {
@@ -115,7 +115,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for Finalization<E> {
             finalizable_processor.ready_for_finalize.len()
         );
 
-        let mut w = E::new(-1, vec![], false, mmtk);
+        let mut w = E::new(0, vec![], false, mmtk);
         w.set_worker(worker);
         finalizable_processor.scan(worker.tls, &mut w, mmtk.plan.is_current_gc_nursery());
         debug!(
@@ -138,7 +138,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ForwardFinalization<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         trace!("Forward finalization");
         let mut finalizable_processor = mmtk.finalizable_processor.lock().unwrap();
-        let mut w = E::new(-1, vec![], false, mmtk);
+        let mut w = E::new(0, vec![], false, mmtk);
         w.set_worker(worker);
         finalizable_processor.forward_candidate(&mut w, mmtk.plan.is_current_gc_nursery());
 

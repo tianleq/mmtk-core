@@ -251,26 +251,27 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
         }
         let live = self.live.lock().unwrap();
         let mut max_depth = 0;
-        let mut total_depth = 0;
-        let mut n = 0;
+        let mut total_depth: u64 = 0;
+        // let mut n = 0;
         {
             for (k, v) in live.iter() {
                 // file.write(format!("n: {} {} {}\n", v.0, v.1, v.2).as_bytes())
                 //     .unwrap();
                 max_depth = std::cmp::max(max_depth, v.2);
-                if v.2 == i32::MAX {
-                    VM::VMObjectModel::dump_object(*k);
-                    n += 1;
-                } else {
-                    total_depth += v.2;
-                }
+                // if v.2 == i32::MAX {
+                //     VM::VMObjectModel::dump_object(*k);
+                //     n += 1;
+                // } else {
+                //     total_depth += v.2 as u64;
+                // }
+                total_depth += v.2 as u64;
             }
         }
         file.write(
             format!(
                 "max depth: {} avg depth: {}\n",
                 max_depth,
-                total_depth / (live.len() - n) as i32
+                total_depth / (live.len()) as u64
             )
             .as_bytes(),
         )
@@ -311,17 +312,17 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
             object
         );
         if log {
-            // debug_assert!(
-            //     self.live.lock().unwrap().contains_key(&object),
-            //     "live objects collection is corrupted"
-            // );
-            let exists = self.live.lock().unwrap().contains_key(&object);
-            if exists {
-                if depth != -1 {
-                    let mut t = self.live.lock().unwrap();
-                    let v = t.get_mut(&object).unwrap();
-                    v.2 = std::cmp::min(depth, v.2);
-                }
+            debug_assert!(
+                self.live.lock().unwrap().contains_key(&object),
+                "live objects collection is corrupted"
+            );
+            let mut t = self.live.lock().unwrap();
+            if depth != -1 {
+                let v = t.get_mut(&object).unwrap();
+                v.2 = std::cmp::min(depth, v.2);
+            }
+            if t.get(&object).unwrap().2 == i32::MAX {
+                assert!(false, "weird");
             }
         }
         if MarkCompactSpace::<VM>::test_and_mark(object) {

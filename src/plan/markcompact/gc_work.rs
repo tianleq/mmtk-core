@@ -41,13 +41,14 @@ pub struct LogObjectLifetimeInfo<VM: VMBinding> {
     mc_space: &'static MarkCompactSpace<VM>,
     log_file_name: String,
     harness: bool,
+    counter: usize,
 }
 
 impl<VM: VMBinding> GCWork<VM> for LogObjectLifetimeInfo<VM> {
     #[inline]
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         self.mc_space
-            .log_object_lifetime_info(&self.log_file_name, self.harness);
+            .log_object_lifetime_info(&self.log_file_name, self.harness, self.counter);
     }
 }
 
@@ -56,11 +57,13 @@ impl<VM: VMBinding> LogObjectLifetimeInfo<VM> {
         mc_space: &'static MarkCompactSpace<VM>,
         log_file_name: String,
         harness: bool,
+        counter: usize,
     ) -> Self {
         Self {
             mc_space,
             log_file_name,
             harness,
+            counter,
         }
     }
 }

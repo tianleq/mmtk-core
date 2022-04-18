@@ -21,7 +21,7 @@ pub struct MarkCompactSpace<VM: VMBinding> {
     pub birth: std::sync::Mutex<std::collections::HashMap<ObjectReference, (usize, usize)>>,
     pub live: std::sync::Mutex<std::collections::HashMap<ObjectReference, (usize, usize, i32)>>,
     pub death: std::sync::Mutex<std::collections::HashMap<usize, usize>>,
-    counter: AtomicUsize,
+    pub counter: AtomicUsize,
     allocation_per_gc: AtomicUsize,
 }
 
@@ -225,7 +225,7 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
 
     pub fn release(&self) {}
 
-    pub fn log_object_lifetime_info(&self, log_file_name: &str, harness: bool) {
+    pub fn log_object_lifetime_info(&self, log_file_name: &str, harness: bool, counter: usize) {
         use std::fs::OpenOptions;
         let mut file = OpenOptions::new()
             .append(true)
@@ -254,24 +254,36 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
         let mut total_depth: u64 = 0;
         // let mut n = 0;
         {
+            let mut depth_info = std::collections::HashMap::new();
             for (k, v) in live.iter() {
                 // file.write(format!("n: {} {} {}\n", v.0, v.1, v.2).as_bytes())
                 //     .unwrap();
+                if harness && v.0 < counter {
+                    continue;
+                }
                 max_depth = std::cmp::max(max_depth, v.2);
-                // if v.2 == i32::MAX {
-                //     VM::VMObjectModel::dump_object(*k);
-                //     n += 1;
-                // } else {
-                //     total_depth += v.2 as u64;
-                // }
+                if max_depth > 250 {
+                    VM::VMObjectModel::dump_object(*k);
+                }
+                if depth_info.contains_key(&v.2) {
+                    let c = depth_info.get_mut(&v.2).unwrap();
+                    *c += 1;
+                } else {
+                    depth_info.insert(&v.2, 1);
+                }
+                debug_assert!(v.2 != -1, "object depth is corrupted");
                 total_depth += v.2 as u64;
+            }
+            for (k, v) in depth_info.iter() {
+                file.write(format!("object of depth: {} count: {}\n", *k, *v).as_bytes())
+                    .unwrap();
             }
         }
         file.write(
             format!(
                 "max depth: {} avg depth: {}\n",
                 max_depth,
-                total_depth / (live.len()) as u64
+                (total_depth as f64 / (live.len()) as f64).ceil()
             )
             .as_bytes(),
         )

@@ -27,11 +27,13 @@ use crate::util::opaque_pointer::*;
 use crate::util::options::UnsafeOptionsWrapper;
 use crate::vm::VMBinding;
 use enum_map::EnumMap;
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 pub struct MarkCompact<VM: VMBinding> {
     pub mc_space: MarkCompactSpace<VM>,
     pub common: CommonPlan<VM>,
+    counter: AtomicUsize,
 }
 
 pub const MARKCOMPACT_CONSTRAINTS: PlanConstraints = PlanConstraints {
@@ -123,6 +125,7 @@ impl<VM: VMBinding> Plan for MarkCompact<VM> {
                     &self.mc_space,
                     self.options().log_file_name.value.clone(),
                     self.base().harness_begin.load(atomic::Ordering::SeqCst),
+                    self.counter.load(atomic::Ordering::SeqCst),
                 ),
             );
         }
@@ -167,6 +170,12 @@ impl<VM: VMBinding> Plan for MarkCompact<VM> {
     fn get_collection_reserved_pages(&self) -> usize {
         0
     }
+
+    fn harness_helper(&self) {
+        let counter = self.mc_space.counter.load(atomic::Ordering::SeqCst);
+        self.counter.store(counter, atomic::Ordering::SeqCst);
+        info!("counter before harness begin finish: {}", counter);
+    }
 }
 
 impl<VM: VMBinding> MarkCompact<VM> {
@@ -206,6 +215,7 @@ impl<VM: VMBinding> MarkCompact<VM> {
                 &MARKCOMPACT_CONSTRAINTS,
                 global_metadata_specs,
             ),
+            counter: AtomicUsize::new(0),
         };
 
         // Use SideMetadataSanity to check if each spec is valid. This is also needed for check

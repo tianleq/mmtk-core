@@ -324,6 +324,8 @@ pub trait Plan: 'static + Sync + Downcast {
             object
         );
     }
+
+    fn harness_helper(&self) {}
 }
 
 impl_downcast!(Plan assoc VM);

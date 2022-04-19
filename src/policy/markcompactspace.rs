@@ -20,6 +20,7 @@ pub struct MarkCompactSpace<VM: VMBinding> {
     pr: MonotonePageResource<VM>,
     pub birth: std::sync::Mutex<std::collections::HashMap<ObjectReference, (usize, usize)>>,
     pub live: std::sync::Mutex<std::collections::HashMap<ObjectReference, (usize, usize, i32)>>,
+    pub live_object_depth_info: std::sync::Mutex<std::collections::HashMap<ObjectReference, i32>>,
     pub death: std::sync::Mutex<std::collections::HashMap<usize, usize>>,
     pub counter: AtomicUsize,
     allocation_per_gc: AtomicUsize,
@@ -209,6 +210,7 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
             birth: std::sync::Mutex::new(std::collections::HashMap::new()),
             live: std::sync::Mutex::new(std::collections::HashMap::new()),
             death: std::sync::Mutex::new(std::collections::HashMap::new()),
+            live_object_depth_info: std::sync::Mutex::new(std::collections::HashMap::new()),
             counter: AtomicUsize::new(0),
             allocation_per_gc: AtomicUsize::new(0),
         }
@@ -246,7 +248,7 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
         )
         .unwrap();
         for (k, v) in self.death.lock().unwrap().iter() {
-            file.write(format!("b: {} {}\n", *k, *v).as_bytes())
+            file.write(format!("d: {} {}\n", *k, *v).as_bytes())
                 .unwrap();
         }
         let live = self.live.lock().unwrap();
@@ -262,9 +264,9 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
                     continue;
                 }
                 max_depth = std::cmp::max(max_depth, v.2);
-                if max_depth > 250 {
-                    VM::VMObjectModel::dump_object(*k);
-                }
+                // if max_depth > 10000 {
+                //     VM::VMObjectModel::dump_object(*k);
+                // }
                 if depth_info.contains_key(&v.2) {
                     let c = depth_info.get_mut(&v.2).unwrap();
                     *c += 1;
@@ -309,6 +311,7 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
         info!("Total new object: {}", self.birth.lock().unwrap().len());
         self.death.lock().unwrap().clear();
         self.birth.lock().unwrap().clear();
+        self.live_object_depth_info.lock().unwrap().clear();
     }
 
     pub fn trace_mark_object<T: TransitiveClosure>(
@@ -328,13 +331,22 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
                 self.live.lock().unwrap().contains_key(&object),
                 "live objects collection is corrupted"
             );
-            let mut t = self.live.lock().unwrap();
+            // let mut t = self.live.lock().unwrap();
+            // if depth != -1 {
+            //     let v = t.get_mut(&object).unwrap();
+            //     v.2 = std::cmp::min(depth, v.2);
+            // }
+            // if t.get(&object).unwrap().2 == i32::MAX {
+            //     assert!(false, "weird");
+            // }
+            let mut t = self.live_object_depth_info.lock().unwrap();
             if depth != -1 {
-                let v = t.get_mut(&object).unwrap();
-                v.2 = std::cmp::min(depth, v.2);
-            }
-            if t.get(&object).unwrap().2 == i32::MAX {
-                assert!(false, "weird");
+                if t.contains_key(&object) {
+                    let v = t.get_mut(&object).unwrap();
+                    *v = std::cmp::min(depth, *v);
+                } else {
+                    t.insert(object, depth);
+                }
             }
         }
         if MarkCompactSpace::<VM>::test_and_mark(object) {
@@ -443,6 +455,7 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
         if log_lifetime {
             let mut new_live =
                 std::collections::HashMap::<ObjectReference, (usize, usize, i32)>::new();
+            let depth_info = self.live_object_depth_info.lock().unwrap();
             // for obj in linear_scan.filter(|obj| Self::to_be_compacted(*obj)) {
             for obj in linear_scan {
                 let mut l = self.live.lock().unwrap();
@@ -488,7 +501,8 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
                 // let object_addr = to + Self::HEADER_RESERVED_IN_BYTES;
                 if !o.is_none() {
                     let id = *o.unwrap();
-                    let rtn = new_live.insert(new_obj, id);
+                    let depth = depth_info.get(&obj).unwrap();
+                    let rtn = new_live.insert(new_obj, (id.0, id.1, *depth));
                     assert!(rtn == None);
                 }
                 to += copied_size;

@@ -11,7 +11,7 @@ use crate::util::heap::{HeapMeta, MonotonePageResource, PageResource, VMRequest}
 use crate::util::metadata::load_metadata;
 use crate::util::metadata::side_metadata::{SideMetadataContext, SideMetadataSpec};
 use crate::util::metadata::{compare_exchange_metadata, extract_side_metadata};
-use crate::util::{alloc_bit, Address, ObjectReference};
+use crate::util::{alloc_bit, Address, ObjectReference, VMMutatorThread};
 use crate::{vm::*, TransitiveClosure};
 use atomic::Ordering;
 
@@ -21,8 +21,9 @@ pub struct MarkCompactSpace<VM: VMBinding> {
     pub birth: std::sync::Mutex<std::collections::HashMap<ObjectReference, (usize, usize)>>,
     pub live: std::sync::Mutex<std::collections::HashMap<ObjectReference, (usize, usize, i32)>>,
     pub live_object_depth_info: std::sync::Mutex<std::collections::HashMap<ObjectReference, i32>>,
-    pub death: std::sync::Mutex<std::collections::HashMap<usize, usize>>,
+    pub death: std::sync::Mutex<std::collections::HashMap<usize, i32>>,
     pub counter: AtomicUsize,
+    round: AtomicUsize,
     allocation_per_gc: AtomicUsize,
 }
 
@@ -212,6 +213,7 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
             death: std::sync::Mutex::new(std::collections::HashMap::new()),
             live_object_depth_info: std::sync::Mutex::new(std::collections::HashMap::new()),
             counter: AtomicUsize::new(0),
+            round: AtomicUsize::new(0),
             allocation_per_gc: AtomicUsize::new(0),
         }
     }
@@ -223,11 +225,33 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
             self.counter.load(Ordering::SeqCst)
         );
         self.allocation_per_gc.store(0, Ordering::SeqCst);
+        self.round.fetch_add(1, Ordering::SeqCst);
     }
 
     pub fn release(&self) {}
 
-    pub fn log_object_lifetime_info(&self, log_file_name: &str, harness: bool, counter: usize) {
+    pub fn flush_object_lifetime_info(&self, log_file_name: &str) {
+        use std::fs::OpenOptions;
+        let mut file = OpenOptions::new()
+            .append(true)
+            .create(false)
+            .open(format!("{}", log_file_name))
+            .unwrap();
+
+        for e in self.live.lock().unwrap().values() {
+            file.write(format!("l: {} {}\n", e.0, e.2).as_bytes())
+                .unwrap();
+        }
+    }
+
+    pub fn log_object_lifetime_info(
+        &self,
+        log_file_name: &str,
+        harness: bool,
+        counter: usize,
+        threads_stack_info: &Vec<(VMMutatorThread, usize, usize)>,
+        thread_stack_roots_count: usize,
+    ) {
         use std::fs::OpenOptions;
         let mut file = OpenOptions::new()
             .append(true)
@@ -247,58 +271,76 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
             size / KB
         )
         .unwrap();
+
+        {
+            file.write(
+                format!(
+                    "Number of thread stack roots: {}\n",
+                    thread_stack_roots_count
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+            for e in threads_stack_info.iter() {
+                file.write(format!("thread: {:?} depth: {} size: {}\n", e.0, e.1, e.2).as_bytes())
+                    .unwrap();
+            }
+        }
+
         for (k, v) in self.death.lock().unwrap().iter() {
             file.write(format!("d: {} {}\n", *k, *v).as_bytes())
                 .unwrap();
         }
-        let live = self.live.lock().unwrap();
+        let mut live_object_depth_info = self.live_object_depth_info.lock().unwrap();
         let mut max_depth = 0;
         let mut total_depth: u64 = 0;
+        let median_depth;
+        {
+            let mut val: Vec<i32> = live_object_depth_info.values().map(|x| *x).collect();
+            val.sort();
+            let size = val.len();
+            match size {
+                even if even % 2 == 0 => {
+                    let fst_med = val[(even / 2) - 1];
+                    let snd_med = val[even / 2];
+                    median_depth = ((fst_med + snd_med) as f64 / 2.0).ceil() as usize;
+                }
+                odd => median_depth = val[odd / 2] as usize,
+            }
+        }
         // let mut n = 0;
         {
             let mut depth_info = std::collections::HashMap::new();
-            for (k, v) in live.iter() {
-                // file.write(format!("n: {} {} {}\n", v.0, v.1, v.2).as_bytes())
-                //     .unwrap();
-                if harness && v.0 < counter {
-                    continue;
-                }
-                max_depth = std::cmp::max(max_depth, v.2);
+            for (_k, v) in live_object_depth_info.iter() {
+                max_depth = std::cmp::max(max_depth, *v);
                 // if max_depth > 10000 {
                 //     VM::VMObjectModel::dump_object(*k);
                 // }
-                if depth_info.contains_key(&v.2) {
-                    let c = depth_info.get_mut(&v.2).unwrap();
-                    *c += 1;
+                if depth_info.contains_key(&v) {
+                    *depth_info.get_mut(&v).unwrap() += 1;
                 } else {
-                    depth_info.insert(&v.2, 1);
+                    depth_info.insert(v, 1);
                 }
-                debug_assert!(v.2 != -1, "object depth is corrupted");
-                total_depth += v.2 as u64;
+                debug_assert!(*v != -1, "object depth is corrupted");
+                total_depth += *v as u64;
             }
             for (k, v) in depth_info.iter() {
                 file.write(format!("object of depth: {} count: {}\n", *k, *v).as_bytes())
                     .unwrap();
             }
         }
+
         file.write(
             format!(
-                "max depth: {} avg depth: {}\n",
+                "max depth: {} avg depth: {} median depth: {}\n",
                 max_depth,
-                (total_depth as f64 / (live.len()) as f64).ceil()
+                (total_depth as f64 / (live_object_depth_info.len()) as f64).ceil(),
+                median_depth
             )
             .as_bytes(),
         )
         .unwrap();
-        for (k, v) in self.birth.lock().unwrap().iter() {
-            // if live.contains_key(&k) {
-            //     file.write(format!("n: {} {} {}\n", v.0, v.1, live.get(&k).unwrap().2).as_bytes())
-            //         .unwrap();
-            // } else {
-            //     file.write(format!("n: {} {}\n", v.0, v.1).as_bytes())
-            //         .unwrap();
-            // }
-
+        for (_k, v) in self.birth.lock().unwrap().iter() {
             file.write(format!("n: {} {}\n", v.0, v.1).as_bytes())
                 .unwrap();
         }
@@ -311,7 +353,7 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
         info!("Total new object: {}", self.birth.lock().unwrap().len());
         self.death.lock().unwrap().clear();
         self.birth.lock().unwrap().clear();
-        self.live_object_depth_info.lock().unwrap().clear();
+        live_object_depth_info.clear();
     }
 
     pub fn trace_mark_object<T: TransitiveClosure>(
@@ -464,25 +506,12 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
                 if !Self::to_be_compacted(obj) {
                     if !o.is_none() {
                         let id = *o.unwrap();
-                        self.death
-                            .lock()
-                            .unwrap()
-                            .insert(id.0, VM::VMObjectModel::get_current_size(obj));
+                        self.death.lock().unwrap().insert(id.0, o.unwrap().2);
                         l.remove(&obj);
                     }
                     continue;
                 }
-                if !o.is_none() {
-                    let id = *o.unwrap();
-                    if self.death.lock().unwrap().contains_key(&id.0) {
-                        println!(
-                            "object: {:?}, dead: {:?}",
-                            obj,
-                            self.death.lock().unwrap().get(&id.0).unwrap()
-                        );
-                        assert!(false);
-                    }
-                }
+
                 let copied_size =
                     VM::VMObjectModel::get_size_when_copied(obj) + Self::HEADER_RESERVED_IN_BYTES;
                 let align = VM::VMObjectModel::get_align_when_copied(obj);
@@ -500,10 +529,28 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
 
                 // let object_addr = to + Self::HEADER_RESERVED_IN_BYTES;
                 if !o.is_none() {
+                    // if the object is not newly allocated, at this round, it may have a different depth
+                    // calculate the average depth/keep the max depth/median depth(how to do this efficiently)
+
+                    // let id = *o.unwrap();
+                    // let depth = depth_info.get(&obj).unwrap();
+                    // let rtn = new_live.insert(new_obj, (id.0, id.1, *depth));
+                    // assert!(rtn == None);
                     let id = *o.unwrap();
                     let depth = depth_info.get(&obj).unwrap();
-                    let rtn = new_live.insert(new_obj, (id.0, id.1, *depth));
-                    assert!(rtn == None);
+                    if !self.birth.lock().unwrap().contains_key(&obj) {
+                        assert!(id.2 != i32::MAX, "live objects have invalid depth");
+                        let number_of_gc = self.round.load(Ordering::SeqCst);
+                        let average_depth = (id.2 * number_of_gc as i32 + *depth) as f64
+                            / (number_of_gc + 1) as f64;
+                        let min_depth = std::cmp::min(*depth, id.2);
+                        let rtn =
+                            new_live.insert(new_obj, (id.0, id.1, average_depth.ceil() as i32));
+                        assert!(rtn == None);
+                    } else {
+                        let rtn = new_live.insert(new_obj, (id.0, id.1, *depth));
+                        assert!(rtn == None);
+                    }
                 }
                 to += copied_size;
             }

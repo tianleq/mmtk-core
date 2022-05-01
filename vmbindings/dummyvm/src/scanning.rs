@@ -42,4 +42,12 @@ impl Scanning<DummyVM> for VMScanning {
     fn prepare_for_roots_re_scanning() {
         unimplemented!()
     }
+
+    fn thread_stack_depth(_mutator: &'static Mutator<DummyVM>) -> usize {
+        unimplemented!()
+    }
+
+    fn thread_stack_size(_mutator: &'static Mutator<DummyVM>) -> usize {
+        unimplemented!()
+    }
 }

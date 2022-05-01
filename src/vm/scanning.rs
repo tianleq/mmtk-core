@@ -69,4 +69,8 @@ pub trait Scanning<VM: VMBinding> {
     fn supports_return_barrier() -> bool;
 
     fn prepare_for_roots_re_scanning();
+
+    fn thread_stack_depth(mutator: &'static Mutator<VM>) -> usize;
+
+    fn thread_stack_size(mutator: &'static Mutator<VM>) -> usize;
 }

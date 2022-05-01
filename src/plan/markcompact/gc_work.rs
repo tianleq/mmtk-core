@@ -13,6 +13,7 @@ use crate::Plan;
 use crate::MMTK;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
+use std::sync::atomic::AtomicUsize;
 
 /// iterate through the heap and calculate the new location of live objects
 pub struct CalculateForwardingAddress<VM: VMBinding> {
@@ -42,13 +43,27 @@ pub struct LogObjectLifetimeInfo<VM: VMBinding> {
     log_file_name: String,
     harness: bool,
     counter: usize,
+    threads_stack_count: &'static AtomicUsize,
 }
 
 impl<VM: VMBinding> GCWork<VM> for LogObjectLifetimeInfo<VM> {
     #[inline]
     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        self.mc_space
-            .log_object_lifetime_info(&self.log_file_name, self.harness, self.counter);
+        let mut threads_stack_info = vec![];
+        for mutator in VM::VMActivePlan::mutators() {
+            let depth = VM::VMScanning::thread_stack_depth(mutator);
+            let size = VM::VMScanning::thread_stack_size(mutator);
+            threads_stack_info.push((mutator.mutator_tls, depth, size));
+        }
+
+        self.mc_space.log_object_lifetime_info(
+            &self.log_file_name,
+            self.harness,
+            self.counter,
+            &threads_stack_info,
+            self.threads_stack_count.load(atomic::Ordering::SeqCst),
+        );
+        self.threads_stack_count.store(0, atomic::Ordering::SeqCst);
     }
 }
 
@@ -58,12 +73,14 @@ impl<VM: VMBinding> LogObjectLifetimeInfo<VM> {
         log_file_name: String,
         harness: bool,
         counter: usize,
+        threads_stack_count: &'static AtomicUsize,
     ) -> Self {
         Self {
             mc_space,
             log_file_name,
             harness,
             counter,
+            threads_stack_count,
         }
     }
 }
@@ -135,8 +152,14 @@ impl<VM: VMBinding> MarkingProcessEdges<VM> {
 impl<VM: VMBinding> ProcessEdgesWork for MarkingProcessEdges<VM> {
     type VM = VM;
     fn new(depth: i32, edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+        let length = edges.len();
         let base = ProcessEdgesBase::new(depth, edges, roots, mmtk);
         let plan = base.plan().downcast_ref::<MarkCompact<VM>>().unwrap();
+        if roots {
+            plan.thread_stack_roots_count
+                .fetch_add(length, atomic::Ordering::SeqCst);
+        }
+
         Self { base, plan }
     }
 

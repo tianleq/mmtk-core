@@ -106,6 +106,7 @@ impl<VM: VMBinding> MMTK<VM> {
             .base()
             .collect_object_lifetime_info
             .store(false, Ordering::SeqCst);
+        self.plan.flush_info();
     }
 
     pub fn get_plan(&self) -> &dyn Plan<VM = VM> {

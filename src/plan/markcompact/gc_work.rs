@@ -53,7 +53,8 @@ impl<VM: VMBinding> GCWork<VM> for LogObjectLifetimeInfo<VM> {
         for mutator in VM::VMActivePlan::mutators() {
             let depth = VM::VMScanning::thread_stack_depth(mutator);
             let size = VM::VMScanning::thread_stack_size(mutator);
-            threads_stack_info.push((mutator.mutator_tls, depth, size));
+            let root_count = VM::VMScanning::thread_root_count(mutator);
+            threads_stack_info.push((mutator.mutator_tls, depth, size, root_count));
         }
 
         self.mc_space.log_object_lifetime_info(

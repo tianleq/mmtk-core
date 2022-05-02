@@ -73,4 +73,6 @@ pub trait Scanning<VM: VMBinding> {
     fn thread_stack_depth(mutator: &'static Mutator<VM>) -> usize;
 
     fn thread_stack_size(mutator: &'static Mutator<VM>) -> usize;
+
+    fn thread_root_count(mutator: &'static Mutator<VM>) -> usize;
 }

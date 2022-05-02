@@ -249,7 +249,7 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
         log_file_name: &str,
         harness: bool,
         counter: usize,
-        threads_stack_info: &Vec<(VMMutatorThread, usize, usize)>,
+        threads_stack_info: &Vec<(VMMutatorThread, usize, usize, usize)>,
         thread_stack_roots_count: usize,
     ) {
         use std::fs::OpenOptions;

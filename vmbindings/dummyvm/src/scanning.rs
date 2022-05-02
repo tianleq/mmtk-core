@@ -50,4 +50,8 @@ impl Scanning<DummyVM> for VMScanning {
     fn thread_stack_size(_mutator: &'static Mutator<DummyVM>) -> usize {
         unimplemented!()
     }
+
+    fn thread_root_count(_mutator: &'static Mutator<DummyVM>) -> usize {
+        unimplemented!()
+    }
 }

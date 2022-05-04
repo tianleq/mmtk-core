@@ -34,7 +34,6 @@ pub struct MarkCompact<VM: VMBinding> {
     pub mc_space: MarkCompactSpace<VM>,
     pub common: CommonPlan<VM>,
     counter: AtomicUsize,
-    pub thread_stack_roots_count: AtomicUsize,
 }
 
 pub const MARKCOMPACT_CONSTRAINTS: PlanConstraints = PlanConstraints {
@@ -127,7 +126,6 @@ impl<VM: VMBinding> Plan for MarkCompact<VM> {
                     self.options().log_file_name.value.clone(),
                     self.base().harness_begin.load(atomic::Ordering::SeqCst),
                     self.counter.load(atomic::Ordering::SeqCst),
-                    &self.thread_stack_roots_count,
                 ),
             );
         }
@@ -224,7 +222,6 @@ impl<VM: VMBinding> MarkCompact<VM> {
                 global_metadata_specs,
             ),
             counter: AtomicUsize::new(0),
-            thread_stack_roots_count: AtomicUsize::new(0),
         };
 
         // Use SideMetadataSanity to check if each spec is valid. This is also needed for check

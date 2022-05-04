@@ -273,6 +273,19 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
         .unwrap();
 
         {
+            let mut thread_stack_roots_count = 0;
+            for e in threads_stack_info.iter() {
+                thread_stack_roots_count += e.3;
+                file.write(
+                    format!(
+                        "thread: {:?} roots: {} depth: {} size: {}\n",
+                        e.0, e.3, e.1, e.2
+                    )
+                    .as_bytes(),
+                )
+                .unwrap();
+            }
+            info!("Number of thread stack roots: {}", thread_stack_roots_count);
             file.write(
                 format!(
                     "Number of thread stack roots: {}\n",
@@ -281,10 +294,6 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
                 .as_bytes(),
             )
             .unwrap();
-            for e in threads_stack_info.iter() {
-                file.write(format!("thread: {:?} depth: {} size: {}\n", e.0, e.1, e.2).as_bytes())
-                    .unwrap();
-            }
         }
 
         for (k, v) in self.death.lock().unwrap().iter() {
@@ -540,12 +549,11 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
                     let depth = depth_info.get(&obj).unwrap();
                     if !self.birth.lock().unwrap().contains_key(&obj) {
                         assert!(id.2 != i32::MAX, "live objects have invalid depth");
-                        let number_of_gc = self.round.load(Ordering::SeqCst);
-                        let average_depth = (id.2 * number_of_gc as i32 + *depth) as f64
-                            / (number_of_gc + 1) as f64;
-                        let min_depth = std::cmp::min(*depth, id.2);
-                        let rtn =
-                            new_live.insert(new_obj, (id.0, id.1, average_depth.ceil() as i32));
+                        // let number_of_gc = self.round.load(Ordering::SeqCst);
+                        // let average_depth = (id.2 * number_of_gc as i32 + *depth) as f64
+                        //     / (number_of_gc + 1) as f64;
+                        let max_depth = std::cmp::max(*depth, id.2);
+                        let rtn = new_live.insert(new_obj, (id.0, id.1, max_depth));
                         assert!(rtn == None);
                     } else {
                         let rtn = new_live.insert(new_obj, (id.0, id.1, *depth));

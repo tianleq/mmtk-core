@@ -250,7 +250,6 @@ impl<VM: VMBinding> MarkCompactSpace<VM> {
         harness: bool,
         counter: usize,
         threads_stack_info: &Vec<(VMMutatorThread, usize, usize, usize)>,
-        thread_stack_roots_count: usize,
     ) {
         use std::fs::OpenOptions;
         let mut file = OpenOptions::new()

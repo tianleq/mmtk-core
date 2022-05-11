@@ -449,6 +449,7 @@ impl<VM: VMBinding> BasePlan<VM> {
         global_side_metadata_specs: Vec<SideMetadataSpec>,
     ) -> BasePlan<VM> {
         let stats = Stats::new(&options);
+        let lgo_lifetime = options.log_lifetime.value;
         // Initializing the analysis manager and routines
         #[cfg(feature = "analysis")]
         let analysis_manager = AnalysisManager::new(&stats);
@@ -523,7 +524,7 @@ impl<VM: VMBinding> BasePlan<VM> {
             analysis_manager,
             bytes_allocated_per_gc: AtomicUsize::new(0),
             harness_begin: AtomicBool::new(false),
-            collect_object_lifetime_info: AtomicBool::new(true),
+            collect_object_lifetime_info: AtomicBool::new(lgo_lifetime),
         }
     }
 

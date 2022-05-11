@@ -91,10 +91,13 @@ impl<VM: VMBinding> MMTK<VM> {
         self.inside_harness.store(true, Ordering::SeqCst);
         self.plan.base().stats.start_all();
         self.scheduler.enable_stat();
-        self.plan
-            .base()
-            .collect_object_lifetime_info
-            .store(true, Ordering::SeqCst);
+        if self.plan.options().log_lifetime.value {
+            self.plan
+                .base()
+                .collect_object_lifetime_info
+                .store(true, Ordering::SeqCst);
+        }
+
         self.plan.base().harness_begin.store(true, Ordering::SeqCst);
         self.plan.harness_helper();
     }

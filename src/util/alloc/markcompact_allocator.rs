@@ -48,6 +48,7 @@ impl<VM: VMBinding> Allocator<VM> for MarkCompactAllocator<VM> {
         self.bump_allocator.get_thread_local_buffer_granularity()
     }
 
+    #[inline(always)]
     fn alloc(&mut self, size: usize, align: usize, offset: isize) -> Address {
         let rtn = self
             .bump_allocator
@@ -61,6 +62,7 @@ impl<VM: VMBinding> Allocator<VM> for MarkCompactAllocator<VM> {
         }
     }
 
+    #[inline(always)]
     fn alloc_slow_once(&mut self, size: usize, align: usize, offset: isize) -> Address {
         trace!("alloc_slow");
         self.bump_allocator.alloc_slow_once(size, align, offset)
@@ -71,6 +73,7 @@ impl<VM: VMBinding> Allocator<VM> for MarkCompactAllocator<VM> {
     // Performs three kinds of allocations: (i) if the hard limit has been met;
     // (ii) the bump pointer semantics from the fastpath; and (iii) if the stress
     // factor has been crossed.
+    #[inline(always)]
     fn alloc_slow_once_precise_stress(
         &mut self,
         size: usize,

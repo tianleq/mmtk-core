@@ -347,7 +347,7 @@ options! {
     // The size of vmspace. This needs to be initialized before creating an MMTk instance (currently by setting env vars)
     // FIXME: This value is set for JikesRVM. We need a proper way to set options.
     //   We need to set these values programmatically in VM specific code.
-    vm_space_size:         usize                [env_var: true, command_line: false] [|v: &usize| *v > 0]    = 0x7cc_cccc,
+    vm_space_size:         usize                [env_var: true, command_line: false] [|v: &usize| *v > 0] = 0x7cc_cccc,
     // Perf events to measure
     // Semicolons are used to separate events
     // Each event is in the format of event_name,pid,cpu (see man perf_event_open for what pid and cpu mean).
@@ -355,11 +355,12 @@ options! {
     //
     // Measuring perf events for work packets. NOTE that be VERY CAREFUL when using this option, as this may greatly slowdown GC performance.
     // TODO: Ideally this option should only be included when the features 'perf_counter' and 'work_packet_stats' are enabled. The current macro does not allow us to do this.
-    work_perf_events:       PerfEventOptions     [env_var: true, command_line: true] [|_| cfg!(all(feature = "perf_counter", feature = "work_packet_stats"))] = PerfEventOptions {events: vec![]},
+    work_perf_events:      PerfEventOptions     [env_var: true, command_line: true] [|_| cfg!(all(feature = "perf_counter", feature = "work_packet_stats"))] = PerfEventOptions {events: vec![]},
     // Measuring perf events for GC and mutators
     // TODO: Ideally this option should only be included when the features 'perf_counter' are enabled. The current macro does not allow us to do this.
-    phase_perf_events:      PerfEventOptions     [env_var: true, command_line: true] [|_| cfg!(feature = "perf_counter")] = PerfEventOptions {events: vec![]},
-    log_file_name: String [env_var: true, command_line: true]  [always_valid] = "mmtk-info.txt".to_string()
+    phase_perf_events:     PerfEventOptions     [env_var: true, command_line: true] [|_| cfg!(feature = "perf_counter")] = PerfEventOptions {events: vec![]},
+    log_file_name:         String               [env_var: true, command_line: true] [always_valid] = "mmtk-info.txt".to_string(),
+    log_lifetime:          bool                 [env_var: true, command_line: true] [always_valid] = false
 }
 
 #[cfg(test)]

@@ -49,5 +49,7 @@ pub fn create_gencopy_mutator<VM: VMBinding>(
         mutator_tls,
         config,
         plan: gencopy,
+        critical_section_active: false,
+        critical_section_counter: 0,
     }
 }

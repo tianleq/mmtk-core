@@ -22,6 +22,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 const META_DATA_PAGES_PER_REGION: usize = CARD_META_PAGES_PER_REGION;
 
+pub const GC_EXTRA_HEADER_WORD: usize = 1;
+const GC_EXTRA_HEADER_BYTES: usize =
+    GC_EXTRA_HEADER_WORD << crate::util::constants::LOG_BYTES_IN_WORD;
+
 /// This type implements a simple copying space.
 pub struct CopySpace<VM: VMBinding> {
     common: CommonSpace<VM>,
@@ -127,6 +131,51 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for CopySpace<
 }
 
 impl<VM: VMBinding> CopySpace<VM> {
+    /// We need one extra header word for each object. Considering the alignment requirement, this is
+    /// the actual bytes we need to reserve for each allocation.
+    pub const HEADER_RESERVED_IN_BYTES: usize = if VM::MAX_ALIGNMENT > GC_EXTRA_HEADER_BYTES {
+        VM::MAX_ALIGNMENT
+    } else {
+        GC_EXTRA_HEADER_BYTES
+    }
+    .next_power_of_two();
+
+    // The following are a few functions for manipulating header forwarding poiner.
+    // Basically for each allocation request, we allocate extra bytes of [`HEADER_RESERVED_IN_BYTES`].
+    // From the allocation result we get (e.g. `alloc_res`), `alloc_res + HEADER_RESERVED_IN_BYTES` is the cell
+    // address we return to the binding. It ensures we have at least one word (`GC_EXTRA_HEADER_WORD`) before
+    // the cell address, and ensures the cell address is properly aligned.
+    // From the cell address, `cell - GC_EXTRA_HEADER_WORD` is where we store the header forwarding pointer.
+
+    /// Get the address for header forwarding pointer
+    #[inline(always)]
+    fn header_object_owner_address(object: ObjectReference) -> Address {
+        VM::VMObjectModel::object_start_ref(object) - GC_EXTRA_HEADER_BYTES
+    }
+
+    /// Get header forwarding pointer for an object
+    #[inline(always)]
+    fn get_header_object_owner(object: ObjectReference) -> ObjectReference {
+        unsafe { Self::header_object_owner_address(object).load::<ObjectReference>() }
+    }
+
+    /// Store header forwarding pointer for an object
+    #[inline(always)]
+    fn store_header_object_owner(object: ObjectReference, object_owner: ObjectReference) {
+        unsafe {
+            Self::header_object_owner_address(object).store::<ObjectReference>(object_owner);
+        }
+    }
+
+    // Clear header forwarding pointer for an object
+    #[inline(always)]
+    fn clear_header_object_owner(object: ObjectReference) {
+        crate::util::memory::zero(
+            Self::header_object_owner_address(object),
+            GC_EXTRA_HEADER_BYTES,
+        );
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: &'static str,
@@ -195,10 +244,24 @@ impl<VM: VMBinding> CopySpace<VM> {
         unsafe {
             #[cfg(feature = "global_alloc_bit")]
             self.reset_alloc_bit();
+            self.reset_critical_bit();
             self.pr.reset();
         }
         self.common.metadata.reset();
         self.from_space.store(false, Ordering::SeqCst);
+    }
+
+    unsafe fn reset_critical_bit(&self) {
+        let current_chunk = self.pr.get_current_chunk();
+        if self.common.contiguous {
+            crate::util::critical_bit::bzero_critical_bit(
+                self.common.start,
+                current_chunk + crate::util::heap::layout::vm_layout_constants::BYTES_IN_CHUNK
+                    - self.common.start,
+            );
+        } else {
+            unimplemented!();
+        }
     }
 
     #[cfg(feature = "global_alloc_bit")]

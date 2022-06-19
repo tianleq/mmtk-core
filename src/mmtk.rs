@@ -13,6 +13,7 @@ use crate::util::reference_processor::ReferenceProcessors;
 use crate::util::sanity::sanity_checker::SanityChecker;
 use crate::vm::VMBinding;
 use std::default::Default;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -49,6 +50,7 @@ pub struct MMTK<VM: VMBinding> {
     #[cfg(feature = "sanity")]
     pub(crate) sanity_checker: Mutex<SanityChecker>,
     inside_harness: AtomicBool,
+    pub(crate) active_critical_section_count: AtomicUsize,
 }
 
 impl<VM: VMBinding> MMTK<VM> {
@@ -82,6 +84,7 @@ impl<VM: VMBinding> MMTK<VM> {
             #[cfg(feature = "sanity")]
             sanity_checker: Mutex::new(SanityChecker::new()),
             inside_harness: AtomicBool::new(false),
+            active_critical_section_count: AtomicUsize::new(0),
         }
     }
 

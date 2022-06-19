@@ -212,6 +212,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             "{:x}: alloc bit not set",
             object
         );
+
         let nursery_object = self.is_in_nursery(object);
         if !self.in_nursery_gc || nursery_object {
             // Note that test_and_mark() has side effects
@@ -239,6 +240,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                 // println!("- cn {}", cell);
                 #[cfg(feature = "global_alloc_bit")]
                 crate::util::alloc_bit::unset_addr_alloc_bit(cell);
+                crate::util::critical_bit::unset_addr_critical_bit(cell);
                 self.pr.release_pages(get_super_page(cell));
             }
         } else {
@@ -246,6 +248,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                 // println!("- ts {}", cell);
                 #[cfg(feature = "global_alloc_bit")]
                 crate::util::alloc_bit::unset_addr_alloc_bit(cell);
+                crate::util::critical_bit::unset_addr_critical_bit(cell);
                 self.pr.release_pages(get_super_page(cell));
             }
         }

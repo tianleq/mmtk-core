@@ -47,5 +47,7 @@ pub fn create_genimmix_mutator<VM: VMBinding>(
         mutator_tls,
         config,
         plan: genimmix,
+        critical_section_active: false,
+        critical_section_counter: 0,
     }
 }

@@ -62,6 +62,8 @@ pub struct Mutator<VM: VMBinding> {
     pub mutator_tls: VMMutatorThread,
     pub plan: &'static dyn Plan<VM = VM>,
     pub config: MutatorConfig<VM>,
+    pub critical_section_active: bool,
+    pub critical_section_counter: usize,
 }
 
 impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
@@ -99,7 +101,13 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
                 .get_allocator_mut(self.config.allocator_mapping[allocator])
         }
         .get_space()
-        .initialize_object_metadata(refer, true)
+        .initialize_object_metadata(refer, true);
+        // let owner = unsafe { std::mem::transmute::<VMMutatorThread, usize>(self.mutator_tls) };
+
+        if self.critical_section_active {
+            crate::util::critical_bit::set_critical_bit(refer);
+            self.critical_section_counter += _bytes;
+        }
     }
 
     fn get_tls(&self) -> VMMutatorThread {

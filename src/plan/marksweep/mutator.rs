@@ -56,5 +56,7 @@ pub fn create_ms_mutator<VM: VMBinding>(
         mutator_tls,
         config,
         plan,
+        critical_section_active: false,
+        critical_section_counter: 0,
     }
 }

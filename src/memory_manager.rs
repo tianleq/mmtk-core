@@ -544,3 +544,17 @@ pub fn add_work_packets<VM: VMBinding>(
 pub fn on_closure_end<VM: VMBinding>(mmtk: &'static MMTK<VM>, f: Box<dyn Send + Fn() -> bool>) {
     mmtk.scheduler.on_closure_end(f)
 }
+
+pub fn critical_section_start<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
+    let active_critical_section_count = mmtk
+        .active_critical_section_count
+        .fetch_add(1, Ordering::SeqCst);
+    // println!("{}", active_critical_section_count);
+}
+
+pub fn critical_section_finish<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
+    let active_critical_section_count = mmtk
+        .active_critical_section_count
+        .fetch_sub(1, Ordering::SeqCst);
+    println!("{}", active_critical_section_count);
+}

@@ -1,24 +1,25 @@
 // All functions here are extern function. There is no point for marking them as unsafe.
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
-use libc::c_char;
-use std::ffi::CStr;
-use mmtk::memory_manager;
-use mmtk::AllocationSemantics;
-use mmtk::util::{ObjectReference, Address};
-use mmtk::util::opaque_pointer::*;
-use mmtk::scheduler::{GCController, GCWorker};
-use mmtk::Mutator;
-use mmtk::MMTK;
 use crate::DummyVM;
 use crate::SINGLETON;
+use libc::c_char;
+use mmtk::memory_manager;
+use mmtk::scheduler::{GCController, GCWorker};
+use mmtk::util::opaque_pointer::*;
+use mmtk::util::{Address, ObjectReference};
+use mmtk::AllocationSemantics;
+use mmtk::Mutator;
+use mmtk::MMTK;
+use std::ffi::CStr;
 
 #[no_mangle]
 pub extern "C" fn mmtk_gc_init(heap_size: usize) {
     // # Safety
     // Casting `SINGLETON` as mutable is safe because `gc_init` will only be executed once by a single thread during startup.
     #[allow(clippy::cast_ref_to_mut)]
-    let singleton_mut = unsafe { &mut *(&*SINGLETON as *const MMTK<DummyVM> as *mut MMTK<DummyVM>) };
+    let singleton_mut =
+        unsafe { &mut *(&*SINGLETON as *const MMTK<DummyVM> as *mut MMTK<DummyVM>) };
     memory_manager::gc_init(singleton_mut, heap_size)
 }
 
@@ -33,18 +34,37 @@ pub extern "C" fn mmtk_destroy_mutator(mutator: *mut Mutator<DummyVM>) {
 }
 
 #[no_mangle]
-pub extern "C" fn mmtk_alloc(mutator: *mut Mutator<DummyVM>, size: usize,
-                    align: usize, offset: isize, mut semantics: AllocationSemantics) -> Address {
-    if size >= SINGLETON.get_plan().constraints().max_non_los_default_alloc_bytes {
+pub extern "C" fn mmtk_alloc(
+    mutator: *mut Mutator<DummyVM>,
+    size: usize,
+    align: usize,
+    offset: isize,
+    mut semantics: AllocationSemantics,
+) -> Address {
+    if size
+        >= SINGLETON
+            .get_plan()
+            .constraints()
+            .max_non_los_default_alloc_bytes
+    {
         semantics = AllocationSemantics::Los;
     }
     memory_manager::alloc::<DummyVM>(unsafe { &mut *mutator }, size, align, offset, semantics)
 }
 
 #[no_mangle]
-pub extern "C" fn mmtk_post_alloc(mutator: *mut Mutator<DummyVM>, refer: ObjectReference,
-                                        bytes: usize, mut semantics: AllocationSemantics) {
-    if bytes >= SINGLETON.get_plan().constraints().max_non_los_default_alloc_bytes {
+pub extern "C" fn mmtk_post_alloc(
+    mutator: *mut Mutator<DummyVM>,
+    refer: ObjectReference,
+    bytes: usize,
+    mut semantics: AllocationSemantics,
+) {
+    if bytes
+        >= SINGLETON
+            .get_plan()
+            .constraints()
+            .max_non_los_default_alloc_bytes
+    {
         semantics = AllocationSemantics::Los;
     }
     memory_manager::post_alloc::<DummyVM>(unsafe { &mut *mutator }, refer, bytes, semantics)
@@ -56,7 +76,10 @@ pub extern "C" fn mmtk_will_never_move(object: ObjectReference) -> bool {
 }
 
 #[no_mangle]
-pub extern "C" fn mmtk_start_control_collector(tls: VMWorkerThread, controller: &'static mut GCController<DummyVM>) {
+pub extern "C" fn mmtk_start_control_collector(
+    tls: VMWorkerThread,
+    controller: &'static mut GCController<DummyVM>,
+) {
     memory_manager::start_control_collector(&SINGLETON, tls, controller);
 }
 
@@ -96,7 +119,7 @@ pub extern "C" fn mmtk_total_bytes() -> usize {
 }
 
 #[no_mangle]
-pub extern "C" fn mmtk_is_live_object(object: ObjectReference) -> bool{
+pub extern "C" fn mmtk_is_live_object(object: ObjectReference) -> bool {
     memory_manager::is_live_object(object)
 }
 
@@ -155,7 +178,11 @@ pub extern "C" fn mmtk_harness_end() {
 pub extern "C" fn mmtk_process(name: *const c_char, value: *const c_char) -> bool {
     let name_str: &CStr = unsafe { CStr::from_ptr(name) };
     let value_str: &CStr = unsafe { CStr::from_ptr(value) };
-    memory_manager::process(&SINGLETON, name_str.to_str().unwrap(), value_str.to_str().unwrap())
+    memory_manager::process(
+        &SINGLETON,
+        name_str.to_str().unwrap(),
+        value_str.to_str().unwrap(),
+    )
 }
 
 #[no_mangle]
@@ -166,4 +193,14 @@ pub extern "C" fn mmtk_starting_heap_address() -> Address {
 #[no_mangle]
 pub extern "C" fn mmtk_last_heap_address() -> Address {
     memory_manager::last_heap_address()
+}
+
+#[no_mangle]
+pub extern "C" fn mmtk_critical_section_start(jni_env: *const libc::c_void) {
+    memory_manager::critical_section_start(&SINGLETON)
+}
+
+#[no_mangle]
+pub extern "C" fn mmtk_critical_section_finish(jni_env: *const libc::c_void) {
+    memory_manager::critical_section_finish(&SINGLETON)
 }

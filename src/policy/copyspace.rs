@@ -324,6 +324,8 @@ impl<VM: VMBinding> CopySpace<VM> {
                 semantics.unwrap(),
                 worker.get_copy_context_mut(),
             );
+            let object_owner = Self::get_header_object_owner(object);
+            Self::store_header_object_owner(new_object, object_owner);
             trace!("Forwarding pointer");
             trace.process_node(new_object);
             trace!("Copied [{:?} -> {:?}]", object, new_object);
@@ -391,7 +393,11 @@ impl<VM: VMBinding> PolicyCopyContext for CopySpaceCopyContext<VM> {
         align: usize,
         offset: isize,
     ) -> Address {
-        self.copy_allocator.alloc(bytes, align, offset)
+        self.copy_allocator.alloc(
+            bytes + CopySpace::<VM>::HEADER_RESERVED_IN_BYTES,
+            align,
+            offset,
+        )
     }
 }
 

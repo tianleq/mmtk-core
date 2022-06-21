@@ -615,6 +615,47 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessModBuf<E> {
     }
 }
 
+pub struct LogModBuf<E: ProcessEdgesWork> {
+    modbuf: Vec<ObjectReference>,
+    phantom: PhantomData<E>,
+    meta: MetadataSpec,
+}
+
+impl<E: ProcessEdgesWork> LogModBuf<E> {
+    pub fn new(modbuf: Vec<ObjectReference>, meta: MetadataSpec) -> Self {
+        Self {
+            modbuf,
+            meta,
+            phantom: PhantomData,
+        }
+    }
+}
+
+impl<E: ProcessEdgesWork> GCWork<E::VM> for LogModBuf<E> {
+    #[inline(always)]
+    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
+        if !self.modbuf.is_empty() {
+            for obj in &self.modbuf {
+                store_metadata::<E::VM>(&self.meta, *obj, 1, None, Some(Ordering::SeqCst));
+            }
+
+            let mut modbuf = vec![];
+            ::std::mem::swap(&mut modbuf, &mut self.modbuf);
+            // log object references in the modBuf since those objects have object references owned by other threads
+            // TODO
+        }
+        // if mmtk.plan.is_current_gc_nursery() {
+        //     if !self.modbuf.is_empty() {
+        //         let mut modbuf = vec![];
+        //         ::std::mem::swap(&mut modbuf, &mut self.modbuf);
+        //         GCWork::do_work(&mut ScanObjects::<E>::new(modbuf, false), worker, mmtk)
+        //     }
+        // } else {
+        //     // Do nothing
+        // }
+    }
+}
+
 use crate::mmtk::MMTK;
 use crate::plan::Plan;
 use crate::plan::PlanTraceObject;

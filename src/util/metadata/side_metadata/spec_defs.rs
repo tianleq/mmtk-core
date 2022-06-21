@@ -57,7 +57,6 @@ define_side_metadata_specs!(
     // Mark the start of an object
     ALLOC_BIT       = (global: true, log_num_of_bits: 0, log_bytes_in_region: LOG_MIN_OBJECT_SIZE as usize),
     CRITICAL_BIT    = (global: true, log_num_of_bits: 0, log_bytes_in_region: LOG_MIN_OBJECT_SIZE as usize),
-    OBJECT_OWNER    = (global: true, log_num_of_bits: 6, log_bytes_in_region: LOG_MIN_OBJECT_SIZE as usize),
     // Track chunks used by (malloc) marksweep
     MS_ACTIVE_CHUNK = (global: true, log_num_of_bits: 3, log_bytes_in_region: LOG_BYTES_IN_CHUNK as usize),
 );

@@ -106,7 +106,6 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
 
         if self.critical_section_active {
             crate::util::critical_bit::set_critical_bit(refer);
-            self.critical_section_counter += _bytes;
         }
     }
 

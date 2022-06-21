@@ -43,7 +43,7 @@ const RESERVED_ALLOCATORS: ReservedAllocators = ReservedAllocators {
 lazy_static! {
     pub static ref ALLOCATOR_MAPPING: EnumMap<AllocationSemantics, AllocatorSelector> = {
         let mut map = create_allocator_mapping(RESERVED_ALLOCATORS, true);
-        map[AllocationSemantics::Default] = AllocatorSelector::BumpPointer(0);
+        map[AllocationSemantics::Default] = AllocatorSelector::MarkCompact(0);
         map
     };
 }
@@ -57,7 +57,7 @@ pub fn create_ss_mutator<VM: VMBinding>(
         allocator_mapping: &*ALLOCATOR_MAPPING,
         space_mapping: Box::new({
             let mut vec = create_space_mapping(RESERVED_ALLOCATORS, true, plan);
-            vec.push((AllocatorSelector::BumpPointer(0), ss.tospace()));
+            vec.push((AllocatorSelector::MarkCompact(0), ss.tospace()));
             vec
         }),
         prepare_func: &ss_mutator_prepare,

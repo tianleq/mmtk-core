@@ -121,3 +121,84 @@ impl<E: ProcessEdgesWork> Barrier for ObjectRememberingBarrier<E> {
         }
     }
 }
+
+pub struct ObjectLoggingBarrier<E: ProcessEdgesWork> {
+    mmtk: &'static MMTK<E::VM>,
+    modbuf: Vec<ObjectReference>,
+    /// The metadata used for log bit. Though this allows taking an arbitrary metadata spec,
+    /// for this field, 0 means logged, and 1 means unlogged (the same as the vm::object_model::VMGlobalLogBitSpec).
+    meta: MetadataSpec,
+}
+
+impl<E: ProcessEdgesWork> ObjectLoggingBarrier<E> {
+    #[allow(unused)]
+    pub fn new(mmtk: &'static MMTK<E::VM>, meta: MetadataSpec) -> Self {
+        Self {
+            mmtk,
+            modbuf: vec![],
+            meta,
+        }
+    }
+
+    /// Attepmt to atomically log an object.
+    /// Returns true if the object is not logged previously.
+    #[inline(always)]
+    fn log_object(&self, object: ObjectReference) -> bool {
+        loop {
+            let old_value =
+                load_metadata::<E::VM>(&self.meta, object, None, Some(Ordering::SeqCst));
+            if old_value == 0 {
+                return false;
+            }
+            if compare_exchange_metadata::<E::VM>(
+                &self.meta,
+                object,
+                1,
+                0,
+                None,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                return true;
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn enqueue_node(&mut self, obj: ObjectReference) {
+        // If the objecct is unlogged, log it and push it to mod buffer
+        if self.log_object(obj) {
+            self.modbuf.push(obj);
+            if self.modbuf.len() >= E::CAPACITY {
+                self.flush();
+            }
+        }
+    }
+}
+
+impl<E: ProcessEdgesWork> Barrier for ObjectLoggingBarrier<E> {
+    #[cold]
+    fn flush(&mut self) {
+        let mut modbuf = vec![];
+        std::mem::swap(&mut modbuf, &mut self.modbuf);
+        debug_assert!(
+            !self.mmtk.scheduler.work_buckets[WorkBucketStage::Final].is_activated(),
+            "{:?}",
+            self as *const _
+        );
+        if !modbuf.is_empty() {
+            self.mmtk.scheduler.work_buckets[WorkBucketStage::Closure]
+                .add(LogModBuf::<E>::new(modbuf, self.meta));
+        }
+    }
+
+    #[inline(always)]
+    fn post_write_barrier(&mut self, target: WriteTarget) {
+        match target {
+            WriteTarget::Object(obj) => {
+                self.enqueue_node(obj);
+            }
+            _ => unreachable!(),
+        }
+    }
+}

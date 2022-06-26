@@ -176,7 +176,7 @@ pub struct SideMetadataContext {
 impl SideMetadataContext {
     #[cfg(not(feature = "global_alloc_bit"))]
     pub fn new_global_specs(specs: &[SideMetadataSpec]) -> Vec<SideMetadataSpec> {
-        let mut ret = vec![];
+        let mut ret = vec![crate::util::critical_bit::CRITICAL_SIDE_METADATA_SPEC];
         ret.extend_from_slice(specs);
         ret
     }
@@ -184,7 +184,10 @@ impl SideMetadataContext {
     #[cfg(feature = "global_alloc_bit")]
     pub fn new_global_specs(specs: &[SideMetadataSpec]) -> Vec<SideMetadataSpec> {
         let mut ret = vec![];
-        ret.extend_from_slice(&[ALLOC_SIDE_METADATA_SPEC]);
+        ret.extend_from_slice(&[
+            ALLOC_SIDE_METADATA_SPEC,
+            crate::util::critical_bit::CRITICAL_SIDE_METADATA_SPEC,
+        ]);
         ret.extend_from_slice(specs);
         ret
     }

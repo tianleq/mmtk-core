@@ -8,9 +8,9 @@ use crate::plan::mutator_context::{
 use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
-use crate::util::alloc::BumpAllocator;
+use crate::util::alloc::MarkCompactAllocator;
 use crate::util::{VMMutatorThread, VMWorkerThread};
-use crate::vm::VMBinding;
+use crate::vm::{ObjectModel, VMBinding};
 use enum_map::EnumMap;
 
 pub fn ss_mutator_prepare<VM: VMBinding>(_mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {
@@ -24,7 +24,7 @@ pub fn ss_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMWork
             .allocators
             .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
     }
-    .downcast_mut::<BumpAllocator<VM>>()
+    .downcast_mut::<MarkCompactAllocator<VM>>()
     .unwrap();
     bump_allocator.rebind(
         mutator
@@ -50,8 +50,10 @@ lazy_static! {
 
 pub fn create_ss_mutator<VM: VMBinding>(
     mutator_tls: VMMutatorThread,
-    plan: &'static dyn Plan<VM = VM>,
+    // plan: &'static dyn Plan<VM = VM>,
+    mmtk: &'static crate::MMTK<VM>,
 ) -> Mutator<VM> {
+    let plan = &*mmtk.plan;
     let ss = plan.downcast_ref::<SemiSpace<VM>>().unwrap();
     let config = MutatorConfig {
         allocator_mapping: &*ALLOCATOR_MAPPING,
@@ -66,7 +68,9 @@ pub fn create_ss_mutator<VM: VMBinding>(
 
     Mutator {
         allocators: Allocators::<VM>::new(mutator_tls, plan, &config.space_mapping),
-        barrier: Box::new(NoBarrier),
+        barrier: Box::new(crate::plan::barriers::ObjectLoggingBarrier::<
+            crate::plan::generational::gc_work::GenNurseryProcessEdges<VM>,
+        >::new(mmtk, *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC)),
         mutator_tls,
         config,
         plan,

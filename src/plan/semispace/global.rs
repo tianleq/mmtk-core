@@ -18,7 +18,8 @@ use crate::util::heap::VMRequest;
 use crate::util::metadata::side_metadata::{SideMetadataContext, SideMetadataSanity};
 use crate::util::opaque_pointer::VMWorkerThread;
 use crate::util::options::UnsafeOptionsWrapper;
-use crate::{plan::global::BasePlan, vm::VMBinding};
+use crate::BarrierSelector;
+use crate::{plan::global::BasePlan, vm::ObjectModel, vm::VMBinding};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -44,6 +45,8 @@ pub const SS_CONSTRAINTS: PlanConstraints = PlanConstraints {
     num_specialized_scans: 1,
     max_non_los_default_alloc_bytes:
         crate::plan::plan_constraints::MAX_NON_LOS_ALLOC_BYTES_COPYING_PLAN,
+    barrier: BarrierSelector::ObjectLoggingBarrier,
+    needs_log_bit: true,
     ..PlanConstraints::default()
 };
 
@@ -138,7 +141,10 @@ impl<VM: VMBinding> SemiSpace<VM> {
         options: Arc<UnsafeOptionsWrapper>,
     ) -> Self {
         let mut heap = HeapMeta::new(HEAP_START, HEAP_END);
-        let global_metadata_specs = SideMetadataContext::new_global_specs(&[]);
+        let specs = crate::util::metadata::extract_side_metadata(&[
+            *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
+        ]);
+        let global_metadata_specs = SideMetadataContext::new_global_specs(&specs);
 
         let res = SemiSpace {
             hi: AtomicBool::new(false),

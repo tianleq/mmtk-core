@@ -7,8 +7,8 @@ use crate::policy::space::Space;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
 use crate::util::{Address, ObjectReference};
 use crate::util::{VMMutatorThread, VMWorkerThread};
+use crate::vm::ActivePlan;
 use crate::vm::VMBinding;
-
 use enum_map::EnumMap;
 
 type SpaceMapping<VM> = Vec<(AllocatorSelector, &'static dyn Space<VM>)>;
@@ -63,7 +63,7 @@ pub struct Mutator<VM: VMBinding> {
     pub plan: &'static dyn Plan<VM = VM>,
     pub config: MutatorConfig<VM>,
     pub critical_section_active: bool,
-    pub critical_section_counter: usize,
+    pub critical_section_counter: u32,
 }
 
 impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
@@ -96,17 +96,26 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         _bytes: usize,
         allocator: AllocationSemantics,
     ) {
-        unsafe {
+        let space = unsafe {
             self.allocators
                 .get_allocator_mut(self.config.allocator_mapping[allocator])
         }
-        .get_space()
-        .initialize_object_metadata(refer, true);
-        // let owner = unsafe { std::mem::transmute::<VMMutatorThread, usize>(self.mutator_tls) };
+        .get_space();
+        space.initialize_object_metadata(refer, true);
+        // space.set_object_owner(refer, unsafe {
+        //     std::mem::transmute::<VMMutatorThread, usize>(self.mutator_tls)
+        // });
+        const OWNER_MASK: usize = 0x00000000FFFFFFFF;
+        let owner = VM::VMActivePlan::mutator_id(self.mutator_tls);
+        let mutator = VM::VMActivePlan::mutator(self.mutator_tls);
+        let object_owner = (mutator.critical_section_counter as usize) << 32 | (owner & OWNER_MASK);
+        debug_assert!(owner == (object_owner & OWNER_MASK));
+        space.set_object_owner(refer, object_owner);
 
         if self.critical_section_active {
             crate::util::critical_bit::set_critical_bit(refer);
         }
+        // set object owner
     }
 
     fn get_tls(&self) -> VMMutatorThread {
@@ -145,6 +154,11 @@ pub trait MutatorContext<VM: VMBinding>: Send + 'static {
 
     fn record_modified_node(&mut self, obj: ObjectReference) {
         self.barrier().post_write_barrier(WriteTarget::Object(obj));
+    }
+
+    fn record_non_local_object(&mut self, obj: ObjectReference, new_val: ObjectReference) {
+        self.barrier()
+            .pre_write_barrier(WriteTarget::Object(obj), new_val);
     }
 }
 

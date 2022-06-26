@@ -41,9 +41,7 @@ pub fn create_mutator<VM: VMBinding>(
 ) -> Box<Mutator<VM>> {
     Box::new(match *mmtk.options.plan {
         PlanSelector::NoGC => crate::plan::nogc::mutator::create_nogc_mutator(tls, &*mmtk.plan),
-        PlanSelector::SemiSpace => {
-            crate::plan::semispace::mutator::create_ss_mutator(tls, &*mmtk.plan)
-        }
+        PlanSelector::SemiSpace => crate::plan::semispace::mutator::create_ss_mutator(tls, mmtk),
         PlanSelector::GenCopy => {
             crate::plan::generational::copying::mutator::create_gencopy_mutator(tls, mmtk)
         }

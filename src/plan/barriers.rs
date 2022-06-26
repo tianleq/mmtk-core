@@ -14,6 +14,7 @@ use crate::MMTK;
 pub enum BarrierSelector {
     NoBarrier,
     ObjectBarrier,
+    ObjectLoggingBarrier,
 }
 
 impl BarrierSelector {
@@ -32,6 +33,7 @@ pub enum WriteTarget {
 pub trait Barrier: 'static + Send {
     fn flush(&mut self);
     fn post_write_barrier(&mut self, target: WriteTarget);
+    fn pre_write_barrier(&mut self, _target: WriteTarget, new_val: ObjectReference);
 }
 
 pub struct NoBarrier;
@@ -39,6 +41,7 @@ pub struct NoBarrier;
 impl Barrier for NoBarrier {
     fn flush(&mut self) {}
     fn post_write_barrier(&mut self, _target: WriteTarget) {}
+    fn pre_write_barrier(&mut self, _target: WriteTarget, new_val: ObjectReference) {}
 }
 
 pub struct ObjectRememberingBarrier<E: ProcessEdgesWork> {
@@ -120,6 +123,8 @@ impl<E: ProcessEdgesWork> Barrier for ObjectRememberingBarrier<E> {
             _ => unreachable!(),
         }
     }
+
+    fn pre_write_barrier(&mut self, _target: WriteTarget, new_val: ObjectReference) {}
 }
 
 pub struct ObjectLoggingBarrier<E: ProcessEdgesWork> {
@@ -174,6 +179,20 @@ impl<E: ProcessEdgesWork> ObjectLoggingBarrier<E> {
             }
         }
     }
+
+    #[inline(always)]
+    fn header_object_owner_address(object: ObjectReference) -> Address {
+        use crate::vm::ObjectModel;
+        const GC_EXTRA_HEADER_BYTES: usize = 8;
+        <E::VM as crate::vm::VMBinding>::VMObjectModel::object_start_ref(object)
+            - GC_EXTRA_HEADER_BYTES
+    }
+
+    /// Get header forwarding pointer for an object
+    #[inline(always)]
+    fn get_header_object_owner(object: ObjectReference) -> usize {
+        unsafe { Self::header_object_owner_address(object).load::<usize>() }
+    }
 }
 
 impl<E: ProcessEdgesWork> Barrier for ObjectLoggingBarrier<E> {
@@ -197,6 +216,19 @@ impl<E: ProcessEdgesWork> Barrier for ObjectLoggingBarrier<E> {
         match target {
             WriteTarget::Object(obj) => {
                 self.enqueue_node(obj);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn pre_write_barrier(&mut self, target: WriteTarget, new_val: ObjectReference) {
+        match target {
+            WriteTarget::Object(obj) => {
+                let owner = Self::get_header_object_owner(obj);
+                let new_owner = Self::get_header_object_owner(new_val);
+                if owner != new_owner {
+                    self.enqueue_node(obj);
+                }
             }
             _ => unreachable!(),
         }

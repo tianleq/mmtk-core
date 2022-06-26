@@ -70,6 +70,11 @@ impl<VM: VMBinding> SFT for CopySpace<VM> {
     }
 
     #[inline(always)]
+    fn set_object_owner(&self, object: ObjectReference, object_owner: usize) {
+        Self::store_header_object_owner(object, object_owner);
+    }
+
+    #[inline(always)]
     fn sft_trace_object(
         &self,
         trace: SFTProcessEdgesMutRef,
@@ -155,15 +160,15 @@ impl<VM: VMBinding> CopySpace<VM> {
 
     /// Get header forwarding pointer for an object
     #[inline(always)]
-    fn get_header_object_owner(object: ObjectReference) -> ObjectReference {
-        unsafe { Self::header_object_owner_address(object).load::<ObjectReference>() }
+    fn get_header_object_owner(object: ObjectReference) -> usize {
+        unsafe { Self::header_object_owner_address(object).load::<usize>() }
     }
 
     /// Store header forwarding pointer for an object
     #[inline(always)]
-    fn store_header_object_owner(object: ObjectReference, object_owner: ObjectReference) {
+    fn store_header_object_owner(object: ObjectReference, object_owner: usize) {
         unsafe {
-            Self::header_object_owner_address(object).store::<ObjectReference>(object_owner);
+            Self::header_object_owner_address(object).store::<usize>(object_owner);
         }
     }
 
@@ -325,6 +330,7 @@ impl<VM: VMBinding> CopySpace<VM> {
                 worker.get_copy_context_mut(),
             );
             let object_owner = Self::get_header_object_owner(object);
+
             Self::store_header_object_owner(new_object, object_owner);
             trace!("Forwarding pointer");
             trace.process_node(new_object);
@@ -369,13 +375,12 @@ impl<VM: VMBinding> CopySpace<VM> {
 }
 
 use crate::plan::Plan;
-use crate::util::alloc::Allocator;
-use crate::util::alloc::BumpAllocator;
+use crate::util::alloc::{Allocator, MarkCompactAllocator};
 use crate::util::opaque_pointer::VMWorkerThread;
 
 /// Copy allocator for CopySpace
 pub struct CopySpaceCopyContext<VM: VMBinding> {
-    copy_allocator: BumpAllocator<VM>,
+    copy_allocator: MarkCompactAllocator<VM>,
 }
 
 impl<VM: VMBinding> PolicyCopyContext for CopySpaceCopyContext<VM> {
@@ -393,11 +398,7 @@ impl<VM: VMBinding> PolicyCopyContext for CopySpaceCopyContext<VM> {
         align: usize,
         offset: isize,
     ) -> Address {
-        self.copy_allocator.alloc(
-            bytes + CopySpace::<VM>::HEADER_RESERVED_IN_BYTES,
-            align,
-            offset,
-        )
+        self.copy_allocator.alloc(bytes, align, offset)
     }
 }
 
@@ -408,7 +409,7 @@ impl<VM: VMBinding> CopySpaceCopyContext<VM> {
         tospace: &'static CopySpace<VM>,
     ) -> Self {
         CopySpaceCopyContext {
-            copy_allocator: BumpAllocator::new(tls.0, tospace, plan),
+            copy_allocator: MarkCompactAllocator::new(tls.0, tospace, plan),
         }
     }
 }

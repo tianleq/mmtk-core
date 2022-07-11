@@ -84,6 +84,7 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
     fn sft_trace_object(
         &self,
         _trace: SFTProcessEdgesMutRef,
+        _source: ObjectReference,
         _object: ObjectReference,
         _worker: GCWorkerMutRef,
     ) -> ObjectReference {
@@ -121,6 +122,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
     fn trace_object<T: TransitiveClosure, const KIND: TraceKind>(
         &self,
         trace: &mut T,
+        source: ObjectReference,
         object: ObjectReference,
         copy: Option<CopySemantics>,
         worker: &mut GCWorker<VM>,

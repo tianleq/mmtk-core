@@ -48,6 +48,8 @@ pub fn create_genimmix_mutator<VM: VMBinding>(
         config,
         plan: genimmix,
         critical_section_active: false,
-        critical_section_counter: 0,
+        request_id: 0,
+        cirtical_section_object_counter: 0,
+        critical_section_memory_footprint: 0,
     }
 }

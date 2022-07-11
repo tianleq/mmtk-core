@@ -111,6 +111,7 @@ pub trait SFT {
     fn sft_trace_object(
         &self,
         trace: SFTProcessEdgesMutRef,
+        source: ObjectReference,
         object: ObjectReference,
         worker: GCWorkerMutRef,
     ) -> ObjectReference;
@@ -179,6 +180,7 @@ impl SFT for EmptySpaceSFT {
     fn sft_trace_object(
         &self,
         _trace: SFTProcessEdgesMutRef,
+        _source: ObjectReference,
         _object: ObjectReference,
         _worker: GCWorkerMutRef,
     ) -> ObjectReference {

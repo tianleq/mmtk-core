@@ -18,7 +18,7 @@ use crate::util::object_forwarding;
 use crate::util::{Address, ObjectReference};
 use crate::vm::*;
 use libc::{mprotect, PROT_EXEC, PROT_NONE, PROT_READ, PROT_WRITE};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 const META_DATA_PAGES_PER_REGION: usize = CARD_META_PAGES_PER_REGION;
 
@@ -31,6 +31,10 @@ pub struct CopySpace<VM: VMBinding> {
     common: CommonSpace<VM>,
     pr: MonotonePageResource<VM>,
     from_space: AtomicBool,
+    live_objects_counter: AtomicUsize,
+    all_live_objects_counter: AtomicUsize,
+    non_local_objects: &'static std::sync::Mutex<std::collections::HashSet<ObjectReference>>,
+    pub live_objects: std::sync::Mutex<std::collections::HashSet<ObjectReference>>,
 }
 
 impl<VM: VMBinding> SFT for CopySpace<VM> {
@@ -78,11 +82,13 @@ impl<VM: VMBinding> SFT for CopySpace<VM> {
     fn sft_trace_object(
         &self,
         trace: SFTProcessEdgesMutRef,
+        source: ObjectReference,
         object: ObjectReference,
         worker: GCWorkerMutRef,
     ) -> ObjectReference {
         let trace = trace.into_mut::<VM>();
         let worker = worker.into_mut::<VM>();
+        assert!(false);
         self.trace_object(trace, object, self.common.copy, worker)
     }
 }
@@ -122,11 +128,43 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for CopySpace<
     fn trace_object<T: TransitiveClosure, const KIND: crate::policy::gc_work::TraceKind>(
         &self,
         trace: &mut T,
+        source: ObjectReference,
         object: ObjectReference,
         copy: Option<CopySemantics>,
         worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
-        self.trace_object(trace, object, copy, worker)
+        let mut non_local = self.non_local_objects.lock().unwrap();
+        const OWNER_MASK: usize = 0x00000000FFFFFFFF;
+        let source_owner = Self::get_header_object_owner(source) & OWNER_MASK;
+        let object_owner = Self::get_header_object_owner(object) & OWNER_MASK;
+        if !self.is_from_space() {
+            assert!(self.in_space(object));
+            // The object has been visited now check if it is public or not
+            // trace the object again if it becomes public
+            if !non_local.contains(&object) {
+                if non_local.contains(&source) || source_owner != object_owner {
+                    non_local.insert(object);
+                    trace.process_node(object);
+                }
+            }
+            return object;
+        }
+        // first time reach this object
+        // however, this object may have been found public in previous gc and if that is the case
+        // update the reference in the hashset to maintain the invariant.(hashset only contains to space objects)
+        let result = self.trace_object(trace, object, copy, worker);
+        if source_owner != object_owner
+            || non_local.contains(&source)
+            || non_local.contains(&object)
+        {
+            non_local.remove(&object);
+            assert!(self.is_from_space());
+            assert!(!self.in_space(result));
+            non_local.insert(result);
+        }
+        let tmp = Self::get_header_object_owner(result);
+        assert!(tmp == Self::get_header_object_owner(object));
+        result
     }
 
     #[inline(always)]
@@ -160,7 +198,7 @@ impl<VM: VMBinding> CopySpace<VM> {
 
     /// Get header forwarding pointer for an object
     #[inline(always)]
-    fn get_header_object_owner(object: ObjectReference) -> usize {
+    pub fn get_header_object_owner(object: ObjectReference) -> usize {
         unsafe { Self::header_object_owner_address(object).load::<usize>() }
     }
 
@@ -191,6 +229,7 @@ impl<VM: VMBinding> CopySpace<VM> {
         vm_map: &'static VMMap,
         mmapper: &'static Mmapper,
         heap: &mut HeapMeta,
+        non_local_objects: &'static std::sync::Mutex<std::collections::HashSet<ObjectReference>>,
     ) -> Self {
         let local_specs = extract_side_metadata(&[
             *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC,
@@ -226,6 +265,10 @@ impl<VM: VMBinding> CopySpace<VM> {
             },
             common,
             from_space: AtomicBool::new(from_space),
+            live_objects_counter: AtomicUsize::new(0),
+            all_live_objects_counter: AtomicUsize::new(0),
+            non_local_objects,
+            live_objects: std::sync::Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -243,6 +286,9 @@ impl<VM: VMBinding> CopySpace<VM> {
                 self.pr.cursor() - self.common.start,
             );
         }
+        self.live_objects_counter.store(0, Ordering::SeqCst);
+        self.all_live_objects_counter.store(0, Ordering::SeqCst);
+        // self.non_local_objects.lock().unwrap().clear();
     }
 
     pub fn release(&self) {
@@ -254,6 +300,28 @@ impl<VM: VMBinding> CopySpace<VM> {
         }
         self.common.metadata.reset();
         self.from_space.store(false, Ordering::SeqCst);
+        self.live_objects.lock().unwrap().clear();
+    }
+
+    pub fn live_object_info(&self, object_owner: usize) -> (usize, usize) {
+        let mut result = 0;
+        let mut bytes = 0;
+        for o in self.live_objects.lock().unwrap().iter() {
+            let metadata = Self::get_header_object_owner(*o);
+            if metadata == object_owner {
+                result += 1;
+                bytes += VM::VMObjectModel::get_current_size(*o);
+            }
+        }
+        assert!(
+            self.live_objects_counter.load(Ordering::SeqCst)
+                == self.live_objects.lock().unwrap().len()
+        );
+        // println!(
+        //     "critical live objects: {}",
+        //     self.live_objects_counter.load(Ordering::SeqCst)
+        // );
+        (result, bytes)
     }
 
     unsafe fn reset_critical_bit(&self) {
@@ -299,6 +367,7 @@ impl<VM: VMBinding> CopySpace<VM> {
         // If this is not from space, we do not need to trace it (the object has been copied to the tosapce)
         if !self.is_from_space() {
             // The copy semantics for tospace should be none.
+            assert!(false);
             return object;
         }
 
@@ -335,6 +404,18 @@ impl<VM: VMBinding> CopySpace<VM> {
             trace!("Forwarding pointer");
             trace.process_node(new_object);
             trace!("Copied [{:?} -> {:?}]", object, new_object);
+            if crate::util::critical_bit::is_alloced_in_critical_section(object) {
+                self.live_objects_counter.fetch_add(
+                    // VM::VMObjectModel::get_current_size(object),
+                    1,
+                    Ordering::SeqCst,
+                );
+                self.live_objects.lock().unwrap().insert(new_object);
+                assert!(crate::util::critical_bit::is_alloced_in_critical_section(
+                    new_object
+                ));
+            }
+            self.all_live_objects_counter.fetch_add(1, Ordering::SeqCst);
             new_object
         }
     }

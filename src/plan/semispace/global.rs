@@ -1,4 +1,5 @@
 use super::gc_work::SSGCWorkContext;
+use super::NON_LOCAL_OBJECTS;
 use crate::plan::global::CommonPlan;
 use crate::plan::global::GcStatus;
 use crate::plan::semispace::mutator::ALLOCATOR_MAPPING;
@@ -20,6 +21,7 @@ use crate::util::opaque_pointer::VMWorkerThread;
 use crate::util::options::UnsafeOptionsWrapper;
 use crate::BarrierSelector;
 use crate::{plan::global::BasePlan, vm::ObjectModel, vm::VMBinding};
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -36,6 +38,7 @@ pub struct SemiSpace<VM: VMBinding> {
     pub copyspace1: CopySpace<VM>,
     #[fallback_trace]
     pub common: CommonPlan<VM>,
+    gc_counter: AtomicUsize,
 }
 
 pub const SS_CONSTRAINTS: PlanConstraints = PlanConstraints {
@@ -43,9 +46,9 @@ pub const SS_CONSTRAINTS: PlanConstraints = PlanConstraints {
     gc_header_bits: 2,
     gc_header_words: 0,
     num_specialized_scans: 1,
-    max_non_los_default_alloc_bytes:
-        crate::plan::plan_constraints::MAX_NON_LOS_ALLOC_BYTES_COPYING_PLAN,
-    barrier: BarrierSelector::ObjectLoggingBarrier,
+    // max_non_los_default_alloc_bytes:
+    //     crate::plan::plan_constraints::MAX_NON_LOS_ALLOC_BYTES_COPYING_PLAN,
+    barrier: BarrierSelector::NoBarrier,
     needs_log_bit: true,
     ..PlanConstraints::default()
 };
@@ -108,6 +111,85 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
+        {
+            let mut mutators = self.base().mutators.lock().unwrap();
+            self.gc_counter.fetch_add(mutators.len(), Ordering::SeqCst);
+            println!(
+                "----semispace release {}----",
+                self.gc_counter.load(Ordering::SeqCst)
+            );
+            use crate::vm::ActivePlan;
+            const OWNER_MASK: usize = 0x00000000FFFFFFFF;
+            let mut invalid = vec![];
+            for m in mutators.iter() {
+                let mut published_object_within_the_req = 0;
+                let owner = VM::VMActivePlan::mutator_id(*m);
+                let mutator = VM::VMActivePlan::mutator(*m);
+                let request_id = mutator.request_id;
+                let object_owner = (request_id as usize) << 32 | (owner & OWNER_MASK);
+                let live_info = self.fromspace().live_object_info(object_owner);
+                let mut bytes = 0;
+                for e in NON_LOCAL_OBJECTS.lock().unwrap().iter() {
+                    if crate::util::critical_bit::is_alloced_in_critical_section(*e) {
+                        let metadata = CopySpace::<VM>::get_header_object_owner(*e);
+                        assert!(metadata != 0);
+                        if metadata == object_owner {
+                            if self.fromspace().in_space(*e) {
+                                // these objects are added by previous gc and they are no longer reachable
+                                invalid.push(*e);
+                            } else {
+                                published_object_within_the_req += 1;
+                                bytes += VM::VMObjectModel::get_current_size(*e);
+                            }
+                        }
+                    }
+                }
+
+                println!(
+                    "{} gc m-{} r-{} : alloc {} objects {} bytes, {} public object {} bytes, {} live object {} bytes",
+                    self.gc_counter.load(Ordering::SeqCst),
+                    owner,
+                    request_id,
+                    mutator.cirtical_section_object_counter,
+                    mutator.critical_section_memory_footprint,
+                    published_object_within_the_req,
+                    bytes,
+                    live_info.0,
+                    live_info.1
+                );
+                mutator.critical_section_memory_footprint = 0;
+                mutator.cirtical_section_object_counter = 0;
+            }
+            for mutator in VM::VMActivePlan::mutators() {
+                let mut published_object_within_the_req = 0;
+                let owner = VM::VMActivePlan::mutator_id(mutator.mutator_tls);
+                let request_id = mutator.request_id;
+                let object_owner = (request_id as usize) << 32 | (owner & OWNER_MASK);
+                let mut bytes = 0;
+                for e in NON_LOCAL_OBJECTS.lock().unwrap().iter() {
+                    if crate::util::critical_bit::is_alloced_in_critical_section(*e) {
+                        let metadata = CopySpace::<VM>::get_header_object_owner(*e);
+                        assert!(metadata != 0);
+                        if metadata == object_owner {
+                            published_object_within_the_req += 1;
+                            bytes += VM::VMObjectModel::get_current_size(*e);
+                        }
+                    }
+                }
+                println!(
+                    "m-{} r-{} : {} public object, {} bytes",
+                    owner, request_id, published_object_within_the_req, bytes
+                );
+            }
+
+            {
+                for e in invalid.iter() {
+                    NON_LOCAL_OBJECTS.lock().unwrap().remove(e);
+                }
+            }
+            mutators.clear();
+        }
+
         self.common.release(tls, true);
         // release the collected region
         self.fromspace().release();
@@ -157,6 +239,7 @@ impl<VM: VMBinding> SemiSpace<VM> {
                 vm_map,
                 mmapper,
                 &mut heap,
+                &NON_LOCAL_OBJECTS,
             ),
             copyspace1: CopySpace::new(
                 "copyspace1",
@@ -167,6 +250,7 @@ impl<VM: VMBinding> SemiSpace<VM> {
                 vm_map,
                 mmapper,
                 &mut heap,
+                &NON_LOCAL_OBJECTS,
             ),
             common: CommonPlan::new(
                 vm_map,
@@ -176,6 +260,7 @@ impl<VM: VMBinding> SemiSpace<VM> {
                 &SS_CONSTRAINTS,
                 global_metadata_specs,
             ),
+            gc_counter: AtomicUsize::new(0),
         };
 
         // Use SideMetadataSanity to check if each spec is valid. This is also needed for check

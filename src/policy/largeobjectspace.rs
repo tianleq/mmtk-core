@@ -84,6 +84,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
     fn sft_trace_object(
         &self,
         trace: SFTProcessEdgesMutRef,
+        source: ObjectReference,
         object: ObjectReference,
         _worker: GCWorkerMutRef,
     ) -> ObjectReference {
@@ -123,6 +124,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LargeObjec
     fn trace_object<T: TransitiveClosure, const KIND: crate::policy::gc_work::TraceKind>(
         &self,
         trace: &mut T,
+        source: ObjectReference,
         object: ObjectReference,
         _copy: Option<CopySemantics>,
         _worker: &mut GCWorker<VM>,

@@ -23,6 +23,7 @@ pub trait PolicyTraceObject<VM: VMBinding> {
     fn trace_object<T: TransitiveClosure, const KIND: TraceKind>(
         &self,
         trace: &mut T,
+        source: ObjectReference,
         object: ObjectReference,
         copy: Option<CopySemantics>,
         worker: &mut GCWorker<VM>,

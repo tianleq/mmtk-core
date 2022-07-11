@@ -61,6 +61,7 @@ impl<VM: VMBinding> SFT for LockFreeImmortalSpace<VM> {
     fn sft_trace_object(
         &self,
         _trace: SFTProcessEdgesMutRef,
+        _source: ObjectReference,
         _object: ObjectReference,
         _worker: GCWorkerMutRef,
     ) -> ObjectReference {
@@ -158,6 +159,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LockFreeIm
     fn trace_object<T: TransitiveClosure, const KIND: crate::policy::gc_work::TraceKind>(
         &self,
         _trace: &mut T,
+        _source: ObjectReference,
         _object: ObjectReference,
         _copy: Option<CopySemantics>,
         _worker: &mut GCWorker<VM>,

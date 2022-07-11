@@ -9,6 +9,7 @@ pub trait EdgeVisitor {
     /// Call this function for each edge.
     fn visit_edge(&mut self, edge: Address);
     // TODO: Add visit_soft_edge, visit_weak_edge, ... here.
+    fn visit_edge_with_source(&mut self, source: ObjectReference, edge: Address);
 }
 
 /// VM-specific methods for scanning roots/objects.

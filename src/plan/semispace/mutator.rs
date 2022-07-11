@@ -6,11 +6,10 @@ use crate::plan::mutator_context::{
     create_allocator_mapping, create_space_mapping, ReservedAllocators,
 };
 use crate::plan::AllocationSemantics;
-use crate::plan::Plan;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
 use crate::util::alloc::MarkCompactAllocator;
 use crate::util::{VMMutatorThread, VMWorkerThread};
-use crate::vm::{ObjectModel, VMBinding};
+use crate::vm::VMBinding;
 use enum_map::EnumMap;
 
 pub fn ss_mutator_prepare<VM: VMBinding>(_mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {
@@ -68,13 +67,13 @@ pub fn create_ss_mutator<VM: VMBinding>(
 
     Mutator {
         allocators: Allocators::<VM>::new(mutator_tls, plan, &config.space_mapping),
-        barrier: Box::new(crate::plan::barriers::ObjectLoggingBarrier::<
-            crate::plan::generational::gc_work::GenNurseryProcessEdges<VM>,
-        >::new(mmtk, *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC)),
+        barrier: Box::new(NoBarrier),
         mutator_tls,
         config,
         plan,
         critical_section_active: false,
-        critical_section_counter: 0,
+        request_id: 0,
+        cirtical_section_object_counter: 0,
+        critical_section_memory_footprint: 0,
     }
 }

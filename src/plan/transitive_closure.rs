@@ -25,24 +25,28 @@ impl<T: ProcessEdgesWork> TransitiveClosure for T {
 
 /// A transitive closure visitor to collect all the edges of an object.
 pub struct ObjectsClosure<'a, E: ProcessEdgesWork> {
-    buffer: Vec<Address>,
+    edge_buffer: Vec<Address>,
+    source_buffer: Vec<ObjectReference>,
     worker: &'a mut GCWorker<E::VM>,
 }
 
 impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
     pub fn new(worker: &'a mut GCWorker<E::VM>) -> Self {
         Self {
-            buffer: vec![],
+            edge_buffer: vec![],
+            source_buffer: vec![],
             worker,
         }
     }
 
     fn flush(&mut self) {
         let mut new_edges = Vec::new();
-        mem::swap(&mut new_edges, &mut self.buffer);
+        let mut new_sources = Vec::new();
+        mem::swap(&mut new_edges, &mut self.edge_buffer);
+        mem::swap(&mut new_sources, &mut self.source_buffer);
         self.worker.add_work(
             WorkBucketStage::Closure,
-            E::new(new_edges, false, self.worker.mmtk),
+            E::new(new_sources, new_edges, false, self.worker.mmtk),
         );
     }
 }
@@ -50,16 +54,40 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
 impl<'a, E: ProcessEdgesWork> EdgeVisitor for ObjectsClosure<'a, E> {
     #[inline(always)]
     fn visit_edge(&mut self, slot: Address) {
-        if self.buffer.is_empty() {
-            self.buffer.reserve(E::CAPACITY);
+        if self.edge_buffer.is_empty() {
+            self.edge_buffer.reserve(E::CAPACITY);
         }
-        self.buffer.push(slot);
-        if self.buffer.len() >= E::CAPACITY {
+        self.edge_buffer.push(slot);
+        if self.edge_buffer.len() >= E::CAPACITY {
             let mut new_edges = Vec::new();
-            mem::swap(&mut new_edges, &mut self.buffer);
+            mem::swap(&mut new_edges, &mut self.edge_buffer);
             self.worker.add_work(
                 WorkBucketStage::Closure,
-                E::new(new_edges, false, self.worker.mmtk),
+                E::new(vec![], new_edges, false, self.worker.mmtk),
+            );
+        }
+    }
+
+    #[inline(always)]
+    fn visit_edge_with_source(&mut self, source: ObjectReference, slot: Address) {
+        debug_assert!(
+            self.edge_buffer.len() == self.source_buffer.len(),
+            "source buffer and edge buffer are corrupted"
+        );
+        if self.edge_buffer.is_empty() {
+            self.edge_buffer.reserve(E::CAPACITY);
+            self.source_buffer.reserve(E::CAPACITY);
+        }
+        self.edge_buffer.push(slot);
+        self.source_buffer.push(source);
+        if self.edge_buffer.len() >= E::CAPACITY {
+            let mut new_edges = Vec::new();
+            let mut new_sources = Vec::new();
+            mem::swap(&mut new_edges, &mut self.edge_buffer);
+            mem::swap(&mut new_sources, &mut self.source_buffer);
+            self.worker.add_work(
+                WorkBucketStage::Closure,
+                E::new(new_sources, new_edges, false, self.worker.mmtk),
             );
         }
     }

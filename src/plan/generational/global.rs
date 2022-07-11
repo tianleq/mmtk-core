@@ -1,4 +1,5 @@
 use crate::plan::global::CommonPlan;
+use crate::plan::semispace::NON_LOCAL_OBJECTS;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::plan::TransitiveClosure;
@@ -58,6 +59,7 @@ impl<VM: VMBinding> Gen<VM> {
                 vm_map,
                 mmapper,
                 &mut heap,
+                &NON_LOCAL_OBJECTS,
             ),
             common: CommonPlan::new(
                 vm_map,

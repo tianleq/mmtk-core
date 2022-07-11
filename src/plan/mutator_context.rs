@@ -63,7 +63,9 @@ pub struct Mutator<VM: VMBinding> {
     pub plan: &'static dyn Plan<VM = VM>,
     pub config: MutatorConfig<VM>,
     pub critical_section_active: bool,
-    pub critical_section_counter: u32,
+    pub request_id: u32,
+    pub cirtical_section_object_counter: u32,
+    pub critical_section_memory_footprint: usize,
 }
 
 impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
@@ -102,20 +104,26 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         }
         .get_space();
         space.initialize_object_metadata(refer, true);
-        // space.set_object_owner(refer, unsafe {
-        //     std::mem::transmute::<VMMutatorThread, usize>(self.mutator_tls)
-        // });
+
+        // set object owner
         const OWNER_MASK: usize = 0x00000000FFFFFFFF;
         let owner = VM::VMActivePlan::mutator_id(self.mutator_tls);
+        debug_assert!(owner == (owner & OWNER_MASK));
         let mutator = VM::VMActivePlan::mutator(self.mutator_tls);
-        let object_owner = (mutator.critical_section_counter as usize) << 32 | (owner & OWNER_MASK);
-        debug_assert!(owner == (object_owner & OWNER_MASK));
-        space.set_object_owner(refer, object_owner);
+        let object_owner;
 
         if self.critical_section_active {
             crate::util::critical_bit::set_critical_bit(refer);
+
+            self.critical_section_memory_footprint += _bytes;
+            self.cirtical_section_object_counter += 1;
+
+            object_owner = (mutator.request_id as usize) << 32 | (owner & OWNER_MASK);
+        } else {
+            object_owner = owner & OWNER_MASK;
         }
-        // set object owner
+
+        space.set_object_owner(refer, object_owner);
     }
 
     fn get_tls(&self) -> VMMutatorThread {

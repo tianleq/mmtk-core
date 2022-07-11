@@ -556,5 +556,5 @@ pub fn critical_section_finish<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
     let active_critical_section_count = mmtk
         .active_critical_section_count
         .fetch_sub(1, Ordering::SeqCst);
-    println!("{}", active_critical_section_count);
+    // println!("{}", active_critical_section_count);
 }

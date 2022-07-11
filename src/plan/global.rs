@@ -402,6 +402,8 @@ pub struct BasePlan<VM: VMBinding> {
     #[cfg(feature = "vm_space")]
     #[trace]
     pub vm_space: ImmortalSpace<VM>,
+    pub stress_enabled: AtomicBool,
+    pub mutators: std::sync::Mutex<std::vec::Vec<VMMutatorThread>>,
 }
 
 #[cfg(feature = "vm_space")]
@@ -518,6 +520,8 @@ impl<VM: VMBinding> BasePlan<VM> {
             allocation_bytes: AtomicUsize::new(0),
             #[cfg(feature = "analysis")]
             analysis_manager,
+            stress_enabled: AtomicBool::new(false),
+            mutators: std::sync::Mutex::new(vec![]),
         }
     }
 
@@ -787,6 +791,7 @@ impl<VM: VMBinding> BasePlan<VM> {
     /// the stress factor, we should do a stress GC.
     pub fn should_do_stress_gc(&self) -> bool {
         self.initialized.load(Ordering::SeqCst)
+            && self.stress_enabled.load(Ordering::SeqCst)
             && (self.allocation_bytes.load(Ordering::SeqCst) > *self.options.stress_factor)
     }
 
@@ -975,6 +980,7 @@ pub trait PlanTraceObject<VM: VMBinding> {
     fn trace_object<T: TransitiveClosure, const KIND: TraceKind>(
         &self,
         trace: &mut T,
+        source: ObjectReference,
         object: ObjectReference,
         worker: &mut GCWorker<VM>,
     ) -> ObjectReference;

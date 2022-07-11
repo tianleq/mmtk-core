@@ -5,6 +5,7 @@ use crate::plan::generational::global::Gen;
 use crate::plan::global::BasePlan;
 use crate::plan::global::CommonPlan;
 use crate::plan::global::GcStatus;
+use crate::plan::semispace::NON_LOCAL_OBJECTS;
 use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
@@ -185,6 +186,7 @@ impl<VM: VMBinding> GenCopy<VM> {
             vm_map,
             mmapper,
             &mut heap,
+            &NON_LOCAL_OBJECTS,
         );
         let copyspace1 = CopySpace::new(
             "copyspace1",
@@ -195,6 +197,7 @@ impl<VM: VMBinding> GenCopy<VM> {
             vm_map,
             mmapper,
             &mut heap,
+            &NON_LOCAL_OBJECTS,
         );
 
         let res = GenCopy {

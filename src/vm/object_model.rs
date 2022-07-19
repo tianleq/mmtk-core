@@ -276,6 +276,12 @@ pub trait ObjectModel<VM: VMBinding> {
     /// Arguments:
     /// * `object`: The object to be dumped.
     fn dump_object(object: ObjectReference);
+
+    /// Return debugging information for an object.
+    ///
+    /// Arguments:
+    /// * `object`: The object to be dumped.
+    fn dump_object_string(object: ObjectReference) -> &'static std::ffi::CStr;
 }
 
 pub mod specs {

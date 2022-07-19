@@ -38,7 +38,6 @@ pub struct SemiSpace<VM: VMBinding> {
     pub copyspace1: CopySpace<VM>,
     #[fallback_trace]
     pub common: CommonPlan<VM>,
-    gc_counter: AtomicUsize,
 }
 
 pub const SS_CONSTRAINTS: PlanConstraints = PlanConstraints {
@@ -113,18 +112,58 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
     fn release(&mut self, tls: VMWorkerThread) {
         {
             let mut mutators = self.base().mutators.lock().unwrap();
-            self.gc_counter.fetch_add(mutators.len(), Ordering::SeqCst);
-            println!(
-                "----semispace release {}----",
-                self.gc_counter.load(Ordering::SeqCst)
-            );
+            self.base()
+                .gc_counter
+                .fetch_add(mutators.len(), Ordering::SeqCst);
+            let mut result_file = std::fs::OpenOptions::new()
+                .write(true)
+                .append(true)
+                .create(true)
+                .open("/home/tianleq/run.txt")
+                .unwrap();
+
+            use std::io::Write;
+            writeln!(&mut result_file, "----semispace release----").unwrap();
             use crate::vm::ActivePlan;
             const OWNER_MASK: usize = 0x00000000FFFFFFFF;
             let mut invalid = vec![];
+            let mut err = false;
+            for m in mutators.iter() {
+                let mutator = VM::VMActivePlan::mutator(*m);
+                if mutator.critical_section_active {
+                    err = true;
+                    break;
+                }
+            }
+            if err {
+                for m in mutators.iter() {
+                    let mutator = VM::VMActivePlan::mutator(*m);
+                    println!(
+                        "gc: {}, mutator: {} -- reqest: {}, active: {} ",
+                        self.base().gc_counter.load(Ordering::SeqCst),
+                        VM::VMActivePlan::mutator_id(*m),
+                        mutator.request_id,
+                        mutator.critical_section_active
+                    );
+                }
+                unsafe {
+                    unsafe { std::ptr::null_mut::<i32>().write(42) };
+                }
+            }
             for m in mutators.iter() {
                 let mut published_object_within_the_req = 0;
                 let owner = VM::VMActivePlan::mutator_id(*m);
                 let mutator = VM::VMActivePlan::mutator(*m);
+
+                if mutator.critical_section_active {
+                    println!("mutators: {}", mutators.len());
+                    assert!(
+                        !mutator.critical_section_active,
+                        "t: {} -- {} should have left critical section",
+                        owner, mutator.request_id
+                    );
+                }
+
                 let request_id = mutator.request_id;
                 let object_owner = (request_id as usize) << 32 | (owner & OWNER_MASK);
                 let live_info = self.fromspace().live_object_info(object_owner);
@@ -145,9 +184,10 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
                     }
                 }
 
-                println!(
+                writeln!(
+                    &mut result_file,
                     "{} gc m-{} r-{} : alloc {} objects {} bytes, {} public object {} bytes, {} live object {} bytes",
-                    self.gc_counter.load(Ordering::SeqCst),
+                    self.base().gc_counter.load(Ordering::SeqCst),
                     owner,
                     request_id,
                     mutator.cirtical_section_object_counter,
@@ -156,9 +196,7 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
                     bytes,
                     live_info.0,
                     live_info.1
-                );
-                mutator.critical_section_memory_footprint = 0;
-                mutator.cirtical_section_object_counter = 0;
+                ).unwrap();
             }
             for mutator in VM::VMActivePlan::mutators() {
                 let mut published_object_within_the_req = 0;
@@ -176,10 +214,12 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
                         }
                     }
                 }
-                println!(
+                writeln!(
+                    &mut result_file,
                     "m-{} r-{} : {} public object, {} bytes",
                     owner, request_id, published_object_within_the_req, bytes
-                );
+                )
+                .unwrap();
             }
 
             {
@@ -189,7 +229,6 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
             }
             mutators.clear();
         }
-
         self.common.release(tls, true);
         // release the collected region
         self.fromspace().release();
@@ -260,7 +299,6 @@ impl<VM: VMBinding> SemiSpace<VM> {
                 &SS_CONSTRAINTS,
                 global_metadata_specs,
             ),
-            gc_counter: AtomicUsize::new(0),
         };
 
         // Use SideMetadataSanity to check if each spec is valid. This is also needed for check

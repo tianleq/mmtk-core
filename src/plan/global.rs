@@ -404,6 +404,7 @@ pub struct BasePlan<VM: VMBinding> {
     pub vm_space: ImmortalSpace<VM>,
     pub stress_enabled: AtomicBool,
     pub mutators: std::sync::Mutex<std::vec::Vec<VMMutatorThread>>,
+    pub gc_counter: AtomicUsize,
 }
 
 #[cfg(feature = "vm_space")]
@@ -522,6 +523,7 @@ impl<VM: VMBinding> BasePlan<VM> {
             analysis_manager,
             stress_enabled: AtomicBool::new(false),
             mutators: std::sync::Mutex::new(vec![]),
+            gc_counter: AtomicUsize::new(0),
         }
     }
 
@@ -931,7 +933,11 @@ impl<VM: VMBinding> CommonPlan<VM> {
     pub fn release(&mut self, tls: VMWorkerThread, full_heap: bool) {
         self.immortal.release();
         self.los.release(full_heap);
-        self.base.release(tls, full_heap)
+        self.base.release(tls, full_heap);
+        assert!(
+            self.base.mutators.lock().unwrap().len() == 0,
+            "mutators vector is not cleared properly"
+        );
     }
 
     pub fn stacks_prepared(&self) -> bool {

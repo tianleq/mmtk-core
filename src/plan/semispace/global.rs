@@ -119,7 +119,7 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
                 .write(true)
                 .append(true)
                 .create(true)
-                .open("/home/tianleq/run.txt")
+                .open("/home/qtl/Programming/tmp/run.txt")
                 .unwrap();
 
             use std::io::Write;
@@ -136,6 +136,9 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
                 }
             }
             if err {
+                let size = mutators.len();
+                let mut count = 0;
+                println!("number of mutators: {}", mutators.len());
                 for m in mutators.iter() {
                     let mutator = VM::VMActivePlan::mutator(*m);
                     println!(
@@ -145,10 +148,10 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
                         mutator.request_id,
                         mutator.critical_section_active
                     );
+                    count += 1;
                 }
-                unsafe {
-                    unsafe { std::ptr::null_mut::<i32>().write(42) };
-                }
+                assert!(false);
+                // unsafe { std::ptr::null_mut::<i32>().write(42) };
             }
             for m in mutators.iter() {
                 let mut published_object_within_the_req = 0;

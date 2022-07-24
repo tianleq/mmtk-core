@@ -36,4 +36,8 @@ impl ActivePlan<DummyVM> for VMActivePlan {
     fn get_next_mutator() -> Option<&'static mut Mutator<DummyVM>> {
         unimplemented!()
     }
+
+    fn print_thread_stack() {
+        unimplemented!()
+    }
 }

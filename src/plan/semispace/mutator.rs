@@ -1,5 +1,5 @@
 use super::SemiSpace;
-use crate::plan::barriers::NoBarrier;
+use crate::plan::barriers::ObjectLoggingBarrier;
 use crate::plan::mutator_context::Mutator;
 use crate::plan::mutator_context::MutatorConfig;
 use crate::plan::mutator_context::{
@@ -9,7 +9,8 @@ use crate::plan::AllocationSemantics;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
 use crate::util::alloc::MarkCompactAllocator;
 use crate::util::{VMMutatorThread, VMWorkerThread};
-use crate::vm::VMBinding;
+use crate::vm::{ObjectModel, VMBinding};
+
 use enum_map::EnumMap;
 
 pub fn ss_mutator_prepare<VM: VMBinding>(_mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {
@@ -67,7 +68,10 @@ pub fn create_ss_mutator<VM: VMBinding>(
 
     Mutator {
         allocators: Allocators::<VM>::new(mutator_tls, plan, &config.space_mapping),
-        barrier: Box::new(NoBarrier),
+        barrier: Box::new(ObjectLoggingBarrier::<VM>::new(
+            mmtk,
+            *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
+        )),
         mutator_tls,
         config,
         plan,

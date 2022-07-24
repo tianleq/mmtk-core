@@ -7,6 +7,7 @@ use crate::scheduler::WorkBucketStage;
 use crate::util::metadata::load_metadata;
 use crate::util::metadata::{compare_exchange_metadata, MetadataSpec};
 use crate::util::*;
+use crate::vm::{ActivePlan, VMBinding};
 use crate::MMTK;
 
 /// BarrierSelector describes which barrier to use.
@@ -41,7 +42,7 @@ pub struct NoBarrier;
 impl Barrier for NoBarrier {
     fn flush(&mut self) {}
     fn post_write_barrier(&mut self, _target: WriteTarget) {}
-    fn pre_write_barrier(&mut self, _target: WriteTarget, new_val: ObjectReference) {}
+    fn pre_write_barrier(&mut self, _target: WriteTarget, _new_val: ObjectReference) {}
 }
 
 pub struct ObjectRememberingBarrier<E: ProcessEdgesWork> {
@@ -124,25 +125,20 @@ impl<E: ProcessEdgesWork> Barrier for ObjectRememberingBarrier<E> {
         }
     }
 
-    fn pre_write_barrier(&mut self, _target: WriteTarget, new_val: ObjectReference) {}
+    fn pre_write_barrier(&mut self, _target: WriteTarget, _new_val: ObjectReference) {}
 }
 
-pub struct ObjectLoggingBarrier<E: ProcessEdgesWork> {
-    mmtk: &'static MMTK<E::VM>,
-    modbuf: Vec<ObjectReference>,
+pub struct ObjectLoggingBarrier<VM: VMBinding> {
+    mmtk: &'static MMTK<VM>,
     /// The metadata used for log bit. Though this allows taking an arbitrary metadata spec,
     /// for this field, 0 means logged, and 1 means unlogged (the same as the vm::object_model::VMGlobalLogBitSpec).
     meta: MetadataSpec,
 }
 
-impl<E: ProcessEdgesWork> ObjectLoggingBarrier<E> {
+impl<VM: VMBinding> ObjectLoggingBarrier<VM> {
     #[allow(unused)]
-    pub fn new(mmtk: &'static MMTK<E::VM>, meta: MetadataSpec) -> Self {
-        Self {
-            mmtk,
-            modbuf: vec![],
-            meta,
-        }
+    pub fn new(mmtk: &'static MMTK<VM>, meta: MetadataSpec) -> Self {
+        Self { mmtk, meta }
     }
 
     /// Attepmt to atomically log an object.
@@ -150,12 +146,11 @@ impl<E: ProcessEdgesWork> ObjectLoggingBarrier<E> {
     #[inline(always)]
     fn log_object(&self, object: ObjectReference) -> bool {
         loop {
-            let old_value =
-                load_metadata::<E::VM>(&self.meta, object, None, Some(Ordering::SeqCst));
+            let old_value = load_metadata::<VM>(&self.meta, object, None, Some(Ordering::SeqCst));
             if old_value == 0 {
                 return false;
             }
-            if compare_exchange_metadata::<E::VM>(
+            if compare_exchange_metadata::<VM>(
                 &self.meta,
                 object,
                 1,
@@ -169,14 +164,19 @@ impl<E: ProcessEdgesWork> ObjectLoggingBarrier<E> {
         }
     }
 
-    #[inline(always)]
-    fn enqueue_node(&mut self, obj: ObjectReference) {
+    fn trace_non_local_object(&mut self, obj: ObjectReference) {
         // If the objecct is unlogged, log it and push it to mod buffer
         if self.log_object(obj) {
-            self.modbuf.push(obj);
-            if self.modbuf.len() >= E::CAPACITY {
-                self.flush();
-            }
+            // self.modbuf.push(obj);
+            // if self.modbuf.len() >= E::CAPACITY {
+            //     self.flush();
+            // }
+        }
+    }
+
+    fn print_mutator_stack_trace(&self, obj: ObjectReference) {
+        if self.log_object(obj) {
+            // VM::VMActivePlan::print_thread_stack();
         }
     }
 
@@ -184,7 +184,7 @@ impl<E: ProcessEdgesWork> ObjectLoggingBarrier<E> {
     fn header_object_owner_address(object: ObjectReference) -> Address {
         use crate::vm::ObjectModel;
         const GC_EXTRA_HEADER_BYTES: usize = 8;
-        <E::VM as crate::vm::VMBinding>::VMObjectModel::object_start_ref(object)
+        <VM as crate::vm::VMBinding>::VMObjectModel::object_start_ref(object)
             - GC_EXTRA_HEADER_BYTES
     }
 
@@ -195,31 +195,14 @@ impl<E: ProcessEdgesWork> ObjectLoggingBarrier<E> {
     }
 }
 
-impl<E: ProcessEdgesWork> Barrier for ObjectLoggingBarrier<E> {
+impl<VM: VMBinding> Barrier for ObjectLoggingBarrier<VM> {
     #[cold]
     fn flush(&mut self) {
-        let mut modbuf = vec![];
-        std::mem::swap(&mut modbuf, &mut self.modbuf);
-        debug_assert!(
-            !self.mmtk.scheduler.work_buckets[WorkBucketStage::Final].is_activated(),
-            "{:?}",
-            self as *const _
-        );
-        if !modbuf.is_empty() {
-            self.mmtk.scheduler.work_buckets[WorkBucketStage::Closure]
-                .add(LogModBuf::<E>::new(modbuf, self.meta));
-        }
+        unimplemented!()
     }
 
     #[inline(always)]
-    fn post_write_barrier(&mut self, target: WriteTarget) {
-        match target {
-            WriteTarget::Object(obj) => {
-                self.enqueue_node(obj);
-            }
-            _ => unreachable!(),
-        }
-    }
+    fn post_write_barrier(&mut self, _target: WriteTarget) {}
 
     fn pre_write_barrier(&mut self, target: WriteTarget, new_val: ObjectReference) {
         match target {
@@ -227,7 +210,8 @@ impl<E: ProcessEdgesWork> Barrier for ObjectLoggingBarrier<E> {
                 let owner = Self::get_header_object_owner(obj);
                 let new_owner = Self::get_header_object_owner(new_val);
                 if owner != new_owner {
-                    self.enqueue_node(obj);
+                    self.print_mutator_stack_trace(obj);
+                    // self.trace_non_local_object(obj);
                 }
             }
             _ => unreachable!(),

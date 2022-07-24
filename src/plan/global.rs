@@ -405,6 +405,7 @@ pub struct BasePlan<VM: VMBinding> {
     pub stress_enabled: AtomicBool,
     pub mutators: std::sync::Mutex<std::vec::Vec<VMMutatorThread>>,
     pub gc_counter: AtomicUsize,
+    pub gc_id: AtomicUsize,
 }
 
 #[cfg(feature = "vm_space")]
@@ -524,6 +525,7 @@ impl<VM: VMBinding> BasePlan<VM> {
             stress_enabled: AtomicBool::new(false),
             mutators: std::sync::Mutex::new(vec![]),
             gc_counter: AtomicUsize::new(0),
+            gc_id: AtomicUsize::new(0),
         }
     }
 

@@ -142,7 +142,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for CopySpace<
             .write(true)
             .append(true)
             .create(true)
-            .open("/home/tianleq/public-objects.txt")
+            .open("/home/qtl/Programming/tmp/public-objects.txt")
             .unwrap();
         if !self.is_from_space() {
             assert!(self.in_space(object));
@@ -368,7 +368,7 @@ impl<VM: VMBinding> CopySpace<VM> {
             .write(true)
             .append(true)
             .create(true)
-            .open("/home/tianleq/public-objects.txt")
+            .open("/home/qtl/Programming/tmp/public-objects.txt")
             .unwrap();
         // writeln!(&mut public_objects_file, "--------").unwrap();
     }

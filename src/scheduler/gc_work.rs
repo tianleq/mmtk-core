@@ -232,6 +232,7 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
         }
 
         mmtk.plan.base().set_gc_status(GcStatus::NotInGC);
+        mmtk.plan.base().gc_id.fetch_add(1, Ordering::SeqCst);
 
         // Reset the triggering information.
         mmtk.plan.base().reset_collection_trigger();

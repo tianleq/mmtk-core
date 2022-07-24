@@ -49,7 +49,7 @@ pub trait ActivePlan<VM: VMBinding> {
     /// The caller needs to make sure that the thread is a mutator thread.
     fn mutator(tls: VMMutatorThread) -> &'static mut Mutator<VM>;
 
-    /// Return the mutatorthread id.
+    /// Return the mutator thread id.
     ///
     /// Arguments:
     /// * `tls`: The thread to query.
@@ -57,6 +57,15 @@ pub trait ActivePlan<VM: VMBinding> {
     /// # Safety
     /// The caller needs to make sure that the thread is a mutator thread.
     fn mutator_id(tls: VMMutatorThread) -> usize;
+
+    /// Print the mutator thread stack.
+    ///
+    /// Arguments:
+    /// * `tls`: The thread to be print.
+    ///
+    /// # Safety
+    /// The caller needs to make sure that the thread is a mutator thread.
+    fn print_thread_stack();
 
     /// Reset the mutator iterator so that `get_next_mutator()` returns the first mutator.
     fn reset_mutator_iterator();

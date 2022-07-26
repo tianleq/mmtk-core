@@ -7,7 +7,7 @@ use crate::scheduler::WorkBucketStage;
 use crate::util::metadata::load_metadata;
 use crate::util::metadata::{compare_exchange_metadata, MetadataSpec};
 use crate::util::*;
-use crate::vm::{ActivePlan, VMBinding};
+use crate::vm::VMBinding;
 use crate::MMTK;
 
 /// BarrierSelector describes which barrier to use.
@@ -15,7 +15,7 @@ use crate::MMTK;
 pub enum BarrierSelector {
     NoBarrier,
     ObjectBarrier,
-    ObjectLoggingBarrier,
+    ObjectOwnerBarrier,
 }
 
 impl BarrierSelector {
@@ -128,14 +128,14 @@ impl<E: ProcessEdgesWork> Barrier for ObjectRememberingBarrier<E> {
     fn pre_write_barrier(&mut self, _target: WriteTarget, _new_val: ObjectReference) {}
 }
 
-pub struct ObjectLoggingBarrier<VM: VMBinding> {
+pub struct ObjectOwnerBarrier<VM: VMBinding> {
     mmtk: &'static MMTK<VM>,
     /// The metadata used for log bit. Though this allows taking an arbitrary metadata spec,
     /// for this field, 0 means logged, and 1 means unlogged (the same as the vm::object_model::VMGlobalLogBitSpec).
     meta: MetadataSpec,
 }
 
-impl<VM: VMBinding> ObjectLoggingBarrier<VM> {
+impl<VM: VMBinding> ObjectOwnerBarrier<VM> {
     #[allow(unused)]
     pub fn new(mmtk: &'static MMTK<VM>, meta: MetadataSpec) -> Self {
         Self { mmtk, meta }
@@ -195,26 +195,25 @@ impl<VM: VMBinding> ObjectLoggingBarrier<VM> {
     }
 }
 
-impl<VM: VMBinding> Barrier for ObjectLoggingBarrier<VM> {
+impl<VM: VMBinding> Barrier for ObjectOwnerBarrier<VM> {
     #[cold]
-    fn flush(&mut self) {
-        unimplemented!()
-    }
+    fn flush(&mut self) {}
 
     #[inline(always)]
     fn post_write_barrier(&mut self, _target: WriteTarget) {}
 
     fn pre_write_barrier(&mut self, target: WriteTarget, new_val: ObjectReference) {
-        match target {
-            WriteTarget::Object(obj) => {
-                let owner = Self::get_header_object_owner(obj);
-                let new_owner = Self::get_header_object_owner(new_val);
-                if owner != new_owner {
-                    self.print_mutator_stack_trace(obj);
-                    // self.trace_non_local_object(obj);
-                }
-            }
-            _ => unreachable!(),
-        }
+        // match target {
+        //     WriteTarget::Object(obj) => {
+        //         // let owner = Self::get_header_object_owner(obj);
+        //         // let new_owner = Self::get_header_object_owner(new_val);
+        //         // if owner != new_owner {
+        //         //     self.print_mutator_stack_trace(obj);
+        //         //     // self.trace_non_local_object(obj);
+        //         // }
+        //         // self.print_mutator_stack_trace(obj);
+        //     }
+        //     _ => unreachable!(),
+        // }
     }
 }

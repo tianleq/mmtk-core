@@ -21,7 +21,6 @@ use crate::util::opaque_pointer::VMWorkerThread;
 use crate::util::options::UnsafeOptionsWrapper;
 use crate::BarrierSelector;
 use crate::{plan::global::BasePlan, vm::ObjectModel, vm::VMBinding};
-use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -47,7 +46,7 @@ pub const SS_CONSTRAINTS: PlanConstraints = PlanConstraints {
     num_specialized_scans: 1,
     // max_non_los_default_alloc_bytes:
     //     crate::plan::plan_constraints::MAX_NON_LOS_ALLOC_BYTES_COPYING_PLAN,
-    barrier: BarrierSelector::NoBarrier,
+    barrier: BarrierSelector::ObjectOwnerBarrier,
     needs_log_bit: true,
     ..PlanConstraints::default()
 };
@@ -119,7 +118,7 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
                 .write(true)
                 .append(true)
                 .create(true)
-                .open("/home/qtl/Programming/tmp/run.txt")
+                .open("/home/tianleq/run.txt")
                 .unwrap();
 
             use std::io::Write;

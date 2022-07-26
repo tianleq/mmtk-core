@@ -74,7 +74,7 @@ impl<P: Plan> GCWork<P::VM> for ScheduleSanityGC<P> {
         // }
         for roots in &mmtk.sanity_checker.lock().unwrap().roots {
             scheduler.work_buckets[WorkBucketStage::Closure].add(
-                SanityGCProcessEdges::<P::VM>::new(roots.clone(), true, mmtk),
+                SanityGCProcessEdges::<P::VM>::new(vec![], roots.clone(), true, mmtk),
             );
         }
         scheduler.work_buckets[WorkBucketStage::Prepare]
@@ -161,15 +161,24 @@ impl<VM: VMBinding> ProcessEdgesWork for SanityGCProcessEdges<VM> {
     type VM = VM;
 
     const OVERWRITE_REFERENCE: bool = false;
-    fn new(edges: Vec<Address>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+    fn new(
+        sources: Vec<ObjectReference>,
+        edges: Vec<Address>,
+        roots: bool,
+        mmtk: &'static MMTK<VM>,
+    ) -> Self {
         Self {
-            base: ProcessEdgesBase::new(edges, roots, mmtk),
+            base: ProcessEdgesBase::new(sources, edges, roots, mmtk),
             // ..Default::default()
         }
     }
 
     #[inline]
-    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+    fn trace_object(
+        &mut self,
+        source: ObjectReference,
+        object: ObjectReference,
+    ) -> ObjectReference {
         if object.is_null() {
             return object;
         }

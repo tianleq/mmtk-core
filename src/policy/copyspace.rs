@@ -137,13 +137,13 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for CopySpace<
         const OWNER_MASK: usize = 0x00000000FFFFFFFF;
         let source_owner = Self::get_header_object_owner(source) & OWNER_MASK;
         let object_owner = Self::get_header_object_owner(object) & OWNER_MASK;
-        use std::io::Write;
-        let mut public_objects_file = std::fs::OpenOptions::new()
-            .write(true)
-            .append(true)
-            .create(true)
-            .open("/home/qtl/Programming/tmp/public-objects.txt")
-            .unwrap();
+        // use std::io::Write;
+        // let mut public_objects_file = std::fs::OpenOptions::new()
+        //     .write(true)
+        //     .append(true)
+        //     .create(true)
+        //     .open("/home/qtl/Programming/tmp/public-objects.txt")
+        //     .unwrap();
         if !self.is_from_space() {
             assert!(self.in_space(object));
             // The object has been visited now check if it is public or not
@@ -363,13 +363,13 @@ impl<VM: VMBinding> CopySpace<VM> {
         self.common.metadata.reset();
         self.from_space.store(false, Ordering::SeqCst);
         self.live_objects.lock().unwrap().clear();
-        use std::io::Write;
-        let mut public_objects_file = std::fs::OpenOptions::new()
-            .write(true)
-            .append(true)
-            .create(true)
-            .open("/home/qtl/Programming/tmp/public-objects.txt")
-            .unwrap();
+        // use std::io::Write;
+        // let mut public_objects_file = std::fs::OpenOptions::new()
+        //     .write(true)
+        //     .append(true)
+        //     .create(true)
+        //     .open("/home/tianleq/public-objects.txt")
+        //     .unwrap();
         // writeln!(&mut public_objects_file, "--------").unwrap();
     }
 

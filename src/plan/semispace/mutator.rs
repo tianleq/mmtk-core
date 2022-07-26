@@ -1,5 +1,5 @@
 use super::SemiSpace;
-use crate::plan::barriers::ObjectLoggingBarrier;
+use crate::plan::barriers::ObjectOwnerBarrier;
 use crate::plan::mutator_context::Mutator;
 use crate::plan::mutator_context::MutatorConfig;
 use crate::plan::mutator_context::{
@@ -68,7 +68,7 @@ pub fn create_ss_mutator<VM: VMBinding>(
 
     Mutator {
         allocators: Allocators::<VM>::new(mutator_tls, plan, &config.space_mapping),
-        barrier: Box::new(ObjectLoggingBarrier::<VM>::new(
+        barrier: Box::new(ObjectOwnerBarrier::<VM>::new(
             mmtk,
             *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC,
         )),

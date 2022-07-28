@@ -67,6 +67,7 @@ pub(crate) mod test_util;
 pub(crate) mod treadmill;
 
 pub(crate) mod critical_bit;
+pub(crate) mod public_bit;
 
 // These modules are private. They are only used by other util modules.
 

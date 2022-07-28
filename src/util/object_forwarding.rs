@@ -87,6 +87,9 @@ pub fn forward_object<VM: VMBinding>(
     if crate::util::critical_bit::is_alloced_in_critical_section(object) {
         crate::util::critical_bit::set_critical_bit(new_object);
     }
+    if crate::util::public_bit::is_public(object) {
+        crate::util::public_bit::set_public_bit(new_object);
+    }
 
     if let Some(shift) = forwarding_bits_offset_in_forwarding_pointer::<VM>() {
         store_metadata::<VM>(

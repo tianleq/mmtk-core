@@ -70,7 +70,7 @@ pub fn is_alloced_in_critical_section_object(address: Address) -> bool {
 ///
 /// This is unsafe: check the comment on `side_metadata::load`
 ///
-pub unsafe fn is_alloced_object_unsafe(address: Address) -> bool {
+pub unsafe fn is_alloced_in_critical_section_object_unsafe(address: Address) -> bool {
     side_metadata::load(&CRITICAL_SIDE_METADATA_SPEC, address) == 1
 }
 

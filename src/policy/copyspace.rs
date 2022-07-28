@@ -296,6 +296,7 @@ impl<VM: VMBinding> CopySpace<VM> {
         let local_specs = extract_side_metadata(&[
             *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC,
             *VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC,
+            *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
         ]);
         let common = CommonSpace::new(
             SpaceOptions {

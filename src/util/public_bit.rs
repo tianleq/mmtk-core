@@ -4,12 +4,12 @@ use crate::util::Address;
 use crate::util::ObjectReference;
 use atomic::Ordering;
 
-/// An alloc-bit is required per min-object-size aligned address , rather than per object, and can only exist as side metadata.
+/// An public-bit is required per min-object-size aligned address , rather than per object, and can only exist as side metadata.
 pub(crate) const PUBLIC_SIDE_METADATA_SPEC: SideMetadataSpec =
     crate::util::metadata::side_metadata::spec_defs::PUBLIC_BIT;
 
 pub fn set_public_bit(object: ObjectReference) {
-    debug_assert!(!is_public(object), "{:x}: alloc bit already set", object);
+    // debug_assert!(!is_public(object), "{:x}: public bit already set", object);
     side_metadata::store_atomic(
         &PUBLIC_SIDE_METADATA_SPEC,
         object.to_address(),
@@ -21,14 +21,14 @@ pub fn set_public_bit(object: ObjectReference) {
 pub fn unset_addr_public_bit(address: Address) {
     debug_assert!(
         is_public_object(address),
-        "{:x}: alloc bit not set",
+        "{:x}: public bit not set",
         address
     );
     side_metadata::store_atomic(&PUBLIC_SIDE_METADATA_SPEC, address, 0, Ordering::SeqCst);
 }
 
 pub fn unset_public_bit(object: ObjectReference) {
-    debug_assert!(is_public(object), "{:x}: alloc bit not set", object);
+    debug_assert!(is_public(object), "{:x}: public bit not set", object);
     side_metadata::store_atomic(
         &PUBLIC_SIDE_METADATA_SPEC,
         object.to_address(),
@@ -42,7 +42,7 @@ pub fn unset_public_bit(object: ObjectReference) {
 /// This is unsafe: check the comment on `side_metadata::store`
 ///
 pub unsafe fn unset_public_bit_unsafe(object: ObjectReference) {
-    debug_assert!(is_public(object), "{:x}: alloc bit not set", object);
+    debug_assert!(is_public(object), "{:x}: public bit not set", object);
     side_metadata::store(&PUBLIC_SIDE_METADATA_SPEC, object.to_address(), 0);
 }
 

@@ -179,6 +179,7 @@ impl SideMetadataContext {
         let mut ret = vec![
             crate::util::critical_bit::CRITICAL_SIDE_METADATA_SPEC,
             crate::util::public_bit::PUBLIC_SIDE_METADATA_SPEC,
+            crate::util::mark_bit::GLOBAL_MARK_SIDE_METADATA_SPEC,
         ];
         ret.extend_from_slice(specs);
         ret
@@ -191,6 +192,7 @@ impl SideMetadataContext {
             ALLOC_SIDE_METADATA_SPEC,
             crate::util::critical_bit::CRITICAL_SIDE_METADATA_SPEC,
             crate::util::public_bit::PUBLIC_SIDE_METADATA_SPEC,
+            crate::util::mark_bit::GLOBAL_MARK_SIDE_METADATA_SPEC,
         ]);
         ret.extend_from_slice(specs);
         ret

@@ -7,6 +7,7 @@ use crate::scheduler::WorkBucketStage;
 use crate::util::metadata::load_metadata;
 use crate::util::metadata::{compare_exchange_metadata, MetadataSpec};
 use crate::util::*;
+use crate::vm::ActivePlan;
 use crate::vm::VMBinding;
 use crate::MMTK;
 
@@ -144,60 +145,37 @@ impl<VM: VMBinding> ObjectOwnerBarrier<VM> {
         Self { mmtk, meta }
     }
 
-    /// Attepmt to atomically log an object.
-    /// Returns true if the object is not logged previously.
-    #[inline(always)]
-    fn log_object(&self, object: ObjectReference) -> bool {
-        loop {
-            let old_value = load_metadata::<VM>(&self.meta, object, None, Some(Ordering::SeqCst));
-            if old_value == 0 {
-                return false;
-            }
-            if compare_exchange_metadata::<VM>(
-                &self.meta,
-                object,
-                1,
-                0,
-                None,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
-                return true;
-            }
-        }
-    }
-
     fn trace_non_local_object(&mut self, object: ObjectReference, value: ObjectReference) {
         use crate::util::public_bit::is_public;
         // If the objecct is unlogged, log it and do the transitive closure(first time come across the object)
-        if self.log_object(object) {
-            // if the new value is public, then it must have been reached before and transitive closure
-            // is done
-            if value.is_null() || is_public(value) {
-                return;
-            }
-            let owner = Self::get_header_object_owner(object);
-            let new_owner = Self::get_header_object_owner(value);
-            // here request id is embedded in owner, so even objects within the same thread might be public
-            // once it is attached to an object allocated in a different request
-            if owner != new_owner || is_public(object) {
-                let mut closure = BlockingObjectClosure::<VM>::new();
-                crate::util::public_bit::set_public_bit(value);
-                VM::VMScanning::scan_object(
-                    VMWorkerThread(VMThread::UNINITIALIZED),
-                    value,
-                    &mut closure,
-                );
-                closure.do_closure();
-                // self.trace_non_local_object(obj);
-            }
+        // if the new value is public, then it must have been reached before and transitive closure
+        // is done
+        if value.is_null() {
+            return;
+        }
+        let owner = Self::get_header_object_owner(object);
+        let new_owner = Self::get_header_object_owner(value);
+        // here request id is embedded in owner, so even objects within the same thread might be public
+        // once it is attached to an object allocated in a different request
+        if owner != new_owner || is_public(object) {
+            // println!("---- print thread stack begin ----");
+            // self.print_mutator_stack_trace();
+            // println!("---- print thread stack end ----");
+            let mut closure = BlockingObjectClosure::<VM>::new();
+            crate::util::public_bit::set_public_bit(value);
+            // println!("{:?} is public", value);
+            VM::VMScanning::scan_object(
+                VMWorkerThread(VMThread::UNINITIALIZED),
+                value,
+                &mut closure,
+            );
+            closure.do_closure();
+            // self.trace_non_local_object(obj);
         }
     }
 
-    fn print_mutator_stack_trace(&self, obj: ObjectReference) {
-        if self.log_object(obj) {
-            // VM::VMActivePlan::print_thread_stack();
-        }
+    fn print_mutator_stack_trace(&self) {
+        VM::VMActivePlan::print_thread_stack();
     }
 
     #[inline(always)]
@@ -225,7 +203,6 @@ impl<VM: VMBinding> Barrier for ObjectOwnerBarrier<VM> {
         match target {
             WriteTarget::Object(obj) => {
                 self.trace_non_local_object(obj, new_val);
-                // self.print_mutator_stack_trace(obj);
             }
             _ => unreachable!(),
         }
@@ -234,6 +211,7 @@ impl<VM: VMBinding> Barrier for ObjectOwnerBarrier<VM> {
 
 pub struct BlockingObjectClosure<VM: crate::vm::VMBinding> {
     edge_buffer: std::collections::VecDeque<Address>,
+    // mark: std::collections::HashSet<ObjectReference>,
     phantom: std::marker::PhantomData<VM>,
 }
 
@@ -241,53 +219,33 @@ impl<VM: crate::vm::VMBinding> BlockingObjectClosure<VM> {
     pub fn new() -> Self {
         BlockingObjectClosure {
             edge_buffer: std::collections::VecDeque::new(),
+            // mark: std::collections::HashSet::new(),
             phantom: std::marker::PhantomData,
         }
-    }
-
-    fn test_and_mark(object: ObjectReference) -> bool {
-        const GC_MARK_BIT_MASK: usize = 1;
-
-        loop {
-            let old_value = crate::util::metadata::load_metadata::<VM>(
-                &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
-                object,
-                None,
-                Some(Ordering::SeqCst),
-            );
-            let mark_bit = old_value & GC_MARK_BIT_MASK;
-            if mark_bit != 0 {
-                return false;
-            }
-            if crate::util::metadata::compare_exchange_metadata::<VM>(
-                &VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
-                object,
-                old_value,
-                1,
-                None,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
-                break;
-            }
-        }
-        true
     }
 
     pub fn do_closure(&mut self) {
         while !self.edge_buffer.is_empty() {
             let slot = self.edge_buffer.pop_front().unwrap();
             let object = unsafe { slot.load::<ObjectReference>() };
-            if Self::test_and_mark(object) {
-                // set the public bit on the object
+            if object.is_null() {
+                continue;
+            }
+            if !crate::util::public_bit::is_public(object) {
+                // if !self.mark.contains(&object) {
+                // set mark bit and public bit on the object
                 crate::util::public_bit::set_public_bit(object);
+                // crate::util::mark_bit::set_global_mark_bit(object);
+                // println!("{:?} is public", object);
                 VM::VMScanning::scan_object(
                     crate::util::VMWorkerThread(crate::util::VMThread::UNINITIALIZED),
                     object,
                     self,
                 );
+                // self.mark.insert(object);
             }
         }
+        // self.mark.clear();
     }
 }
 
@@ -297,7 +255,7 @@ impl<VM: crate::vm::VMBinding> crate::vm::EdgeVisitor for BlockingObjectClosure<
     }
 
     fn visit_edge_with_source(&mut self, _source: ObjectReference, _edge: Address) {
-        unimplemented!()
+        self.edge_buffer.push_back(_edge);
     }
 }
 

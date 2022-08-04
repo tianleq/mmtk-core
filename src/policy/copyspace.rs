@@ -196,33 +196,6 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for CopySpace<
             assert!(self.is_from_space());
             assert!(!self.in_space(result));
             non_local.insert(result);
-            if crate::util::critical_bit::is_alloced_in_critical_section(result)
-                && source_owner != object_owner
-            {
-                //     VM::VMObjectModel::dump_object(result);
-                //     println!("");
-                // let obj_cstr = VM::VMObjectModel::dump_object_string(result);
-                // let src_cstr = VM::VMObjectModel::dump_object_string(source);
-                // let v = obj_cstr.to_str();
-                // match v {
-                //     Ok(s) => {
-                //         writeln!(
-                //             &mut public_objects_file,
-                //             "t: {} {} --> t: {} {}",
-                //             source_owner,
-                //             src_cstr.to_string_lossy().to_string(),
-                //             object_owner,
-                //             s
-                //         )
-                //         .unwrap();
-                //     }
-                //     Err(_) => {
-                //         VM::VMObjectModel::dump_object(result);
-                //         public_objects_file.write_all(obj_cstr.to_bytes()).unwrap();
-                //         public_objects_file.write("\n".as_bytes()).unwrap();
-                //     }
-                // }
-            }
         }
         let tmp = Self::get_header_object_owner(result);
         assert!(tmp == Self::get_header_object_owner(object));

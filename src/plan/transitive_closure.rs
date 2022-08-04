@@ -99,3 +99,61 @@ impl<'a, E: ProcessEdgesWork> Drop for ObjectsClosure<'a, E> {
         self.flush();
     }
 }
+pub struct ThreadlocalObjectClosure<VM: crate::vm::VMBinding> {
+    edge_buffer: std::collections::VecDeque<Address>,
+    // mark: std::collections::HashSet<ObjectReference>,
+    phantom: std::marker::PhantomData<VM>,
+}
+
+impl<VM: crate::vm::VMBinding> ThreadlocalObjectClosure<VM> {
+    pub fn new(roots: Vec<Address>) -> Self {
+        ThreadlocalObjectClosure {
+            edge_buffer: std::collections::VecDeque::from(roots),
+            // mark: std::collections::HashSet::new(),
+            phantom: std::marker::PhantomData,
+        }
+    }
+
+    pub fn do_closure(&mut self) -> usize {
+        use crate::vm::Scanning;
+        let mut count = 0;
+        while !self.edge_buffer.is_empty() {
+            let slot = self.edge_buffer.pop_front().unwrap();
+            let object = unsafe { slot.load::<ObjectReference>() };
+            if object.is_null() {
+                continue;
+            }
+            if !crate::util::mark_bit::is_global_mark_set(object) {
+                // set mark bit and public bit on the object
+                crate::util::mark_bit::set_global_mark_bit(object);
+                VM::VMScanning::scan_object(
+                    crate::util::VMWorkerThread(crate::util::VMThread::UNINITIALIZED),
+                    object,
+                    self,
+                );
+                count += 1;
+            }
+        }
+        count
+    }
+}
+
+impl<VM: crate::vm::VMBinding> crate::vm::EdgeVisitor for ThreadlocalObjectClosure<VM> {
+    fn visit_edge(&mut self, edge: Address) {
+        self.edge_buffer.push_back(edge);
+    }
+
+    fn visit_edge_with_source(&mut self, _source: ObjectReference, _edge: Address) {
+        self.edge_buffer.push_back(_edge);
+    }
+}
+
+impl<VM: crate::vm::VMBinding> Drop for ThreadlocalObjectClosure<VM> {
+    #[inline(always)]
+    fn drop(&mut self) {
+        assert!(
+            self.edge_buffer.is_empty(),
+            "There are edges left over. Closure is not done correctly."
+        );
+    }
+}

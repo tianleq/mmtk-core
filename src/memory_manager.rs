@@ -558,3 +558,13 @@ pub fn critical_section_finish<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
         .fetch_sub(1, Ordering::SeqCst);
     // println!("{}", active_critical_section_count);
 }
+
+pub fn mmtk_threadlocal_closure<VM: VMBinding>(
+    _mmtk: &MMTK<VM>,
+    mutator: &mut Mutator<VM>,
+    slots: Vec<Address>,
+) {
+    let mut closure = crate::plan::ThreadlocalObjectClosure::<VM>::new(slots);
+    let result = closure.do_closure();
+    mutator.cirtical_section_object_counter += result as u32;
+}

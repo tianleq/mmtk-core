@@ -39,7 +39,7 @@ mod tracelocal;
 pub use tracelocal::TraceLocal;
 
 mod transitive_closure;
-pub use transitive_closure::{ObjectsClosure, TransitiveClosure};
+pub use transitive_closure::{ObjectsClosure, ThreadlocalObjectClosure, TransitiveClosure};
 
 mod generational;
 mod immix;

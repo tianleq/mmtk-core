@@ -1,6 +1,6 @@
 //! Read/Write barrier implementations.
 
-use atomic::Ordering;
+use std::sync::atomic::AtomicUsize;
 
 use crate::scheduler::gc_work::*;
 use crate::scheduler::WorkBucketStage;
@@ -10,6 +10,7 @@ use crate::util::*;
 use crate::vm::ActivePlan;
 use crate::vm::VMBinding;
 use crate::MMTK;
+use atomic::Ordering;
 
 use crate::vm::ObjectModel;
 use crate::vm::Scanning;
@@ -137,12 +138,17 @@ pub struct ObjectOwnerBarrier<VM: VMBinding> {
     /// The metadata used for log bit. Though this allows taking an arbitrary metadata spec,
     /// for this field, 0 means logged, and 1 means unlogged (the same as the vm::object_model::VMGlobalLogBitSpec).
     meta: MetadataSpec,
+    public_counter: AtomicUsize,
 }
 
 impl<VM: VMBinding> ObjectOwnerBarrier<VM> {
     #[allow(unused)]
     pub fn new(mmtk: &'static MMTK<VM>, meta: MetadataSpec) -> Self {
-        Self { mmtk, meta }
+        Self {
+            mmtk,
+            meta,
+            public_counter: AtomicUsize::new(0),
+        }
     }
 
     fn trace_non_local_object(&mut self, object: ObjectReference, value: ObjectReference) {
@@ -169,7 +175,8 @@ impl<VM: VMBinding> ObjectOwnerBarrier<VM> {
                 value,
                 &mut closure,
             );
-            closure.do_closure();
+            let v = closure.do_closure();
+            self.public_counter.fetch_add(v + 1, Ordering::SeqCst);
             // self.trace_non_local_object(obj);
         }
     }
@@ -209,7 +216,7 @@ impl<VM: VMBinding> Barrier for ObjectOwnerBarrier<VM> {
     }
 }
 
-pub struct BlockingObjectClosure<VM: crate::vm::VMBinding> {
+struct BlockingObjectClosure<VM: crate::vm::VMBinding> {
     edge_buffer: std::collections::VecDeque<Address>,
     // mark: std::collections::HashSet<ObjectReference>,
     phantom: std::marker::PhantomData<VM>,
@@ -224,7 +231,8 @@ impl<VM: crate::vm::VMBinding> BlockingObjectClosure<VM> {
         }
     }
 
-    pub fn do_closure(&mut self) {
+    pub fn do_closure(&mut self) -> usize {
+        let mut count = 0;
         while !self.edge_buffer.is_empty() {
             let slot = self.edge_buffer.pop_front().unwrap();
             let object = unsafe { slot.load::<ObjectReference>() };
@@ -243,8 +251,10 @@ impl<VM: crate::vm::VMBinding> BlockingObjectClosure<VM> {
                     self,
                 );
                 // self.mark.insert(object);
+                count += 1;
             }
         }
+        count
         // self.mark.clear();
     }
 }

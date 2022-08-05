@@ -565,6 +565,5 @@ pub fn mmtk_threadlocal_closure<VM: VMBinding>(
     slots: Vec<Address>,
 ) {
     let mut closure = crate::plan::ThreadlocalObjectClosure::<VM>::new(slots);
-    let result = closure.do_closure();
-    mutator.cirtical_section_object_counter += result as u32;
+    closure.do_closure(mutator);
 }

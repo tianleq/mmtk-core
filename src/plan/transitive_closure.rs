@@ -114,9 +114,10 @@ impl<VM: crate::vm::VMBinding> ThreadlocalObjectClosure<VM> {
         }
     }
 
-    pub fn do_closure(&mut self) -> usize {
+    pub fn do_closure(&mut self, mutator: &mut crate::Mutator<VM>) {
+        use crate::vm::ActivePlan;
         use crate::vm::Scanning;
-        let mut count = 0;
+        const OWNER_MASK: usize = 0x00000000FFFFFFFF;
         while !self.edge_buffer.is_empty() {
             let slot = self.edge_buffer.pop_front().unwrap();
             let object = unsafe { slot.load::<ObjectReference>() };
@@ -124,17 +125,41 @@ impl<VM: crate::vm::VMBinding> ThreadlocalObjectClosure<VM> {
                 continue;
             }
             if !crate::util::mark_bit::is_global_mark_set(object) {
-                // set mark bit and public bit on the object
+                let owner = Self::get_header_object_owner(object);
+                let request_id = mutator.request_id;
+                let mutator_id = VM::VMActivePlan::mutator_id(mutator.mutator_tls);
+                let pattern = (request_id as usize) << 32 | (mutator_id & OWNER_MASK);
+                // set mark bit on the object
                 crate::util::mark_bit::set_global_mark_bit(object);
+                // object is allocated in the request just finished
+                if owner == pattern {
+                    mutator.critical_section_live_object_counter += 1;
+                    if !crate::util::public_bit::is_public(object) {
+                        mutator.critical_section_local_live_object_counter += 1;
+                    }
+                }
+
                 VM::VMScanning::scan_object(
                     crate::util::VMWorkerThread(crate::util::VMThread::UNINITIALIZED),
                     object,
                     self,
                 );
-                count += 1;
             }
         }
-        count
+    }
+
+    #[inline(always)]
+    fn header_object_owner_address(object: ObjectReference) -> Address {
+        use crate::vm::ObjectModel;
+        const GC_EXTRA_HEADER_BYTES: usize = 8;
+        <VM as crate::vm::VMBinding>::VMObjectModel::object_start_ref(object)
+            - GC_EXTRA_HEADER_BYTES
+    }
+
+    /// Get header forwarding pointer for an object
+    #[inline(always)]
+    fn get_header_object_owner(object: ObjectReference) -> usize {
+        unsafe { Self::header_object_owner_address(object).load::<usize>() }
     }
 }
 

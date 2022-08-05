@@ -66,6 +66,8 @@ pub struct Mutator<VM: VMBinding> {
     pub request_id: u32,
     pub cirtical_section_object_counter: u32,
     pub critical_section_memory_footprint: usize,
+    pub critical_section_live_object_counter: u32,
+    pub critical_section_local_live_object_counter: u32,
 }
 
 impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {

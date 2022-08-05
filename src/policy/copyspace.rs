@@ -332,6 +332,7 @@ impl<VM: VMBinding> CopySpace<VM> {
             #[cfg(feature = "global_alloc_bit")]
             self.reset_alloc_bit();
             self.reset_critical_bit();
+            self.reset_public_bit();
             self.pr.reset();
         }
         self.common.metadata.reset();
@@ -372,6 +373,19 @@ impl<VM: VMBinding> CopySpace<VM> {
         let current_chunk = self.pr.get_current_chunk();
         if self.common.contiguous {
             crate::util::critical_bit::bzero_critical_bit(
+                self.common.start,
+                current_chunk + crate::util::heap::layout::vm_layout_constants::BYTES_IN_CHUNK
+                    - self.common.start,
+            );
+        } else {
+            unimplemented!();
+        }
+    }
+
+    unsafe fn reset_public_bit(&self) {
+        let current_chunk = self.pr.get_current_chunk();
+        if self.common.contiguous {
+            crate::util::public_bit::bzero_public_bit(
                 self.common.start,
                 current_chunk + crate::util::heap::layout::vm_layout_constants::BYTES_IN_CHUNK
                     - self.common.start,

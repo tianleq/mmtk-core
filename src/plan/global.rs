@@ -324,6 +324,8 @@ pub trait Plan: 'static + Sync + Downcast {
             object
         );
     }
+
+    fn reset_metadata(&self) {}
 }
 
 impl_downcast!(Plan assoc VM);

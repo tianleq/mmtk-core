@@ -567,3 +567,7 @@ pub fn mmtk_threadlocal_closure<VM: VMBinding>(
     let mut closure = crate::plan::ThreadlocalObjectClosure::<VM>::new(slots);
     closure.do_closure(mutator);
 }
+
+pub fn mmtk_post_threadlocal_closure<VM: VMBinding>(mmtk: &MMTK<VM>) {
+    mmtk.get_plan().reset_metadata();
+}

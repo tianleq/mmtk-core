@@ -131,6 +131,7 @@ impl<VM: crate::vm::VMBinding> ThreadlocalObjectClosure<VM> {
                 let pattern = (request_id as usize) << 32 | (mutator_id & OWNER_MASK);
                 // set mark bit on the object
                 crate::util::mark_bit::set_global_mark_bit(object);
+                // self.mark.insert(object);
                 // object is allocated in the request just finished
                 if owner == pattern {
                     mutator.critical_section_live_object_counter += 1;

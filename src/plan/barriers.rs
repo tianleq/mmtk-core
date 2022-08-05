@@ -40,6 +40,10 @@ pub trait Barrier: 'static + Send {
     fn flush(&mut self);
     fn post_write_barrier(&mut self, target: WriteTarget);
     fn pre_write_barrier(&mut self, _target: WriteTarget, new_val: ObjectReference);
+    fn statistics(&self) -> usize {
+        0
+    }
+    fn reset_statistics(&mut self) {}
 }
 
 pub struct NoBarrier;
@@ -213,6 +217,14 @@ impl<VM: VMBinding> Barrier for ObjectOwnerBarrier<VM> {
             }
             _ => unreachable!(),
         }
+    }
+
+    fn statistics(&self) -> usize {
+        self.public_counter.load(Ordering::SeqCst)
+    }
+
+    fn reset_statistics(&mut self) {
+        self.public_counter.store(0, Ordering::SeqCst);
     }
 }
 

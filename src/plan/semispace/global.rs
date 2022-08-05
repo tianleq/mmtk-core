@@ -20,7 +20,7 @@ use crate::util::metadata::side_metadata::{SideMetadataContext, SideMetadataSani
 use crate::util::opaque_pointer::VMWorkerThread;
 use crate::util::options::UnsafeOptionsWrapper;
 use crate::BarrierSelector;
-use crate::{plan::global::BasePlan, vm::ObjectModel, vm::VMBinding};
+use crate::{plan::global::BasePlan, vm::VMBinding};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -254,6 +254,13 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
 
     fn common(&self) -> &CommonPlan<VM> {
         &self.common
+    }
+
+    fn reset_metadata(&self) {
+        unsafe {
+            self.fromspace().reset_global_mark_bit();
+            self.tospace().reset_global_mark_bit();
+        }
     }
 }
 

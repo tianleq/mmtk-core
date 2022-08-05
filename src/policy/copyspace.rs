@@ -395,6 +395,19 @@ impl<VM: VMBinding> CopySpace<VM> {
         }
     }
 
+    pub unsafe fn reset_global_mark_bit(&self) {
+        let current_chunk = self.pr.get_current_chunk();
+        if self.common.contiguous {
+            crate::util::mark_bit::bzero_mark_bit(
+                self.common.start,
+                current_chunk + crate::util::heap::layout::vm_layout_constants::BYTES_IN_CHUNK
+                    - self.common.start,
+            );
+        } else {
+            unimplemented!();
+        }
+    }
+
     #[cfg(feature = "global_alloc_bit")]
     unsafe fn reset_alloc_bit(&self) {
         let current_chunk = self.pr.get_current_chunk();

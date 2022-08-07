@@ -127,6 +127,10 @@ impl<VM: crate::vm::VMBinding> ThreadlocalObjectClosure<VM> {
             if !crate::util::mark_bit::is_global_mark_set(object) {
                 let owner = Self::get_header_object_owner(object);
                 let request_id = mutator.request_id;
+                assert!(
+                    request_id != 0,
+                    "request id is 0 (0 is reserved for non-critical)"
+                );
                 let mutator_id = VM::VMActivePlan::mutator_id(mutator.mutator_tls);
                 let pattern = (request_id as usize) << 32 | (mutator_id & OWNER_MASK);
                 // set mark bit on the object

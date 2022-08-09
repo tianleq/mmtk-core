@@ -64,10 +64,18 @@ pub struct Mutator<VM: VMBinding> {
     pub config: MutatorConfig<VM>,
     pub critical_section_active: bool,
     pub request_id: u32,
-    pub cirtical_section_object_counter: u32,
-    pub critical_section_memory_footprint: usize,
-    pub critical_section_live_object_counter: u32,
+    pub cirtical_section_total_object_counter: u32,
+    pub critical_section_total_object_bytes: usize,
+    pub critical_section_total_local_object_counter: u32,
+    pub critical_section_total_local_object_bytes: usize,
     pub critical_section_local_live_object_counter: u32,
+    pub critical_section_local_live_object_bytes: usize,
+    pub critical_section_local_live_private_object_counter: u32,
+    pub critical_section_local_live_private_object_bytes: usize,
+    pub critical_section_write_barrier_counter: u32,
+    pub critical_section_write_barrier_slowpath_counter: u32,
+    pub critical_section_write_barrier_public_counter: u32,
+    pub critical_section_write_barrier_public_bytes: usize,
 }
 
 impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
@@ -117,12 +125,13 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         if self.critical_section_active {
             crate::util::critical_bit::set_critical_bit(refer);
 
-            self.critical_section_memory_footprint += _bytes;
-            self.cirtical_section_object_counter += 1;
+            self.critical_section_total_object_bytes += _bytes;
+            self.cirtical_section_total_object_counter += 1;
 
             object_owner = (mutator.request_id as usize) << 32 | (owner & OWNER_MASK);
         } else {
             object_owner = owner & OWNER_MASK;
+            crate::util::public_bit::set_public_bit(refer);
         }
 
         space.set_object_owner(refer, object_owner);

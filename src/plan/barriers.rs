@@ -1,7 +1,4 @@
 //! Read/Write barrier implementations.
-
-use std::sync::atomic::AtomicUsize;
-
 use crate::scheduler::gc_work::*;
 use crate::scheduler::WorkBucketStage;
 use crate::util::metadata::load_metadata;
@@ -40,8 +37,8 @@ pub trait Barrier: 'static + Send {
     fn flush(&mut self);
     fn post_write_barrier(&mut self, target: WriteTarget);
     fn pre_write_barrier(&mut self, _target: WriteTarget, new_val: ObjectReference);
-    fn statistics(&self) -> usize {
-        0
+    fn statistics(&self) -> (u32, usize, u32, u32) {
+        (0, 0, 0, 0)
     }
     fn reset_statistics(&mut self) {}
 }
@@ -142,7 +139,10 @@ pub struct ObjectOwnerBarrier<VM: VMBinding> {
     /// The metadata used for log bit. Though this allows taking an arbitrary metadata spec,
     /// for this field, 0 means logged, and 1 means unlogged (the same as the vm::object_model::VMGlobalLogBitSpec).
     meta: MetadataSpec,
-    public_counter: AtomicUsize,
+    public_object_counter: u32,
+    public_object_bytes: usize,
+    write_barrier_counter: u32,
+    write_barrier_slowpath_counter: u32,
 }
 
 impl<VM: VMBinding> ObjectOwnerBarrier<VM> {
@@ -151,16 +151,19 @@ impl<VM: VMBinding> ObjectOwnerBarrier<VM> {
         Self {
             mmtk,
             meta,
-            public_counter: AtomicUsize::new(0),
+            public_object_counter: 0,
+            public_object_bytes: 0,
+            write_barrier_counter: 0,
+            write_barrier_slowpath_counter: 0,
         }
     }
 
     fn trace_non_local_object(&mut self, object: ObjectReference, value: ObjectReference) {
         use crate::util::public_bit::is_public;
-        // If the objecct is unlogged, log it and do the transitive closure(first time come across the object)
         // if the new value is public, then it must have been reached before and transitive closure
         // is done
-        if value.is_null() {
+        self.write_barrier_counter += 1;
+        if value.is_null() || is_public(value) {
             return;
         }
         let owner = Self::get_header_object_owner(object);
@@ -173,14 +176,16 @@ impl<VM: VMBinding> ObjectOwnerBarrier<VM> {
             // println!("---- print thread stack end ----");
             let mut closure = BlockingObjectClosure::<VM>::new();
             crate::util::public_bit::set_public_bit(value);
-            // println!("{:?} is public", value);
+
             VM::VMScanning::scan_object(
                 VMWorkerThread(VMThread::UNINITIALIZED),
                 value,
                 &mut closure,
             );
             let v = closure.do_closure();
-            self.public_counter.fetch_add(v + 1, Ordering::SeqCst);
+            self.public_object_counter += v.0 + 1;
+            self.public_object_bytes += v.1 + VM::VMObjectModel::get_current_size(object);
+            self.write_barrier_slowpath_counter += 1;
             // self.trace_non_local_object(obj);
         }
     }
@@ -219,12 +224,20 @@ impl<VM: VMBinding> Barrier for ObjectOwnerBarrier<VM> {
         }
     }
 
-    fn statistics(&self) -> usize {
-        self.public_counter.load(Ordering::SeqCst)
+    fn statistics(&self) -> (u32, usize, u32, u32) {
+        (
+            self.public_object_counter,
+            self.public_object_bytes,
+            self.write_barrier_counter,
+            self.write_barrier_slowpath_counter,
+        )
     }
 
     fn reset_statistics(&mut self) {
-        self.public_counter.store(0, Ordering::SeqCst);
+        self.public_object_counter = 0;
+        self.public_object_bytes = 0;
+        self.write_barrier_counter = 0;
+        self.write_barrier_slowpath_counter = 0;
     }
 }
 
@@ -243,8 +256,9 @@ impl<VM: crate::vm::VMBinding> BlockingObjectClosure<VM> {
         }
     }
 
-    pub fn do_closure(&mut self) -> usize {
+    pub fn do_closure(&mut self) -> (u32, usize) {
         let mut count = 0;
+        let mut bytes: usize = 0;
         while !self.edge_buffer.is_empty() {
             let slot = self.edge_buffer.pop_front().unwrap();
             let object = unsafe { slot.load::<ObjectReference>() };
@@ -252,8 +266,13 @@ impl<VM: crate::vm::VMBinding> BlockingObjectClosure<VM> {
                 continue;
             }
             if !crate::util::public_bit::is_public(object) {
+                assert!(
+                    ObjectOwnerBarrier::<VM>::get_header_object_owner(object) & 0x00000000FFFFFFFF
+                        != 0,
+                    "objects outside request scope is visited."
+                );
                 // if !self.mark.contains(&object) {
-                // set mark bit and public bit on the object
+                // set public bit on the object
                 crate::util::public_bit::set_public_bit(object);
                 // crate::util::mark_bit::set_global_mark_bit(object);
                 // println!("{:?} is public", object);
@@ -263,10 +282,11 @@ impl<VM: crate::vm::VMBinding> BlockingObjectClosure<VM> {
                     self,
                 );
                 // self.mark.insert(object);
+                bytes += VM::VMObjectModel::get_current_size(object);
                 count += 1;
             }
         }
-        count
+        (count, bytes)
         // self.mark.clear();
     }
 }

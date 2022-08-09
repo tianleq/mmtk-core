@@ -116,7 +116,9 @@ impl<VM: crate::vm::VMBinding> ThreadlocalObjectClosure<VM> {
 
     pub fn do_closure(&mut self, mutator: &mut crate::Mutator<VM>) {
         use crate::vm::ActivePlan;
+        use crate::vm::ObjectModel;
         use crate::vm::Scanning;
+
         const OWNER_MASK: usize = 0x00000000FFFFFFFF;
         while !self.edge_buffer.is_empty() {
             let slot = self.edge_buffer.pop_front().unwrap();
@@ -136,11 +138,17 @@ impl<VM: crate::vm::VMBinding> ThreadlocalObjectClosure<VM> {
                 // set mark bit on the object
                 crate::util::mark_bit::set_global_mark_bit(object);
                 // self.mark.insert(object);
+                mutator.critical_section_total_local_object_counter += 1;
+                let object_size = VM::VMObjectModel::get_current_size(object);
+                mutator.critical_section_total_local_object_bytes += object_size;
+
                 // object is allocated in the request just finished
                 if owner == pattern {
-                    mutator.critical_section_live_object_counter += 1;
+                    mutator.critical_section_local_live_object_counter += 1;
+                    mutator.critical_section_local_live_object_bytes += object_size;
                     if !crate::util::public_bit::is_public(object) {
-                        mutator.critical_section_local_live_object_counter += 1;
+                        mutator.critical_section_local_live_private_object_counter += 1;
+                        mutator.critical_section_local_live_private_object_bytes += object_size;
                     }
                 }
 

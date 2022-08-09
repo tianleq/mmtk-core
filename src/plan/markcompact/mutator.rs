@@ -50,10 +50,18 @@ pub fn create_markcompact_mutator<VM: VMBinding>(
         plan,
         critical_section_active: false,
         request_id: 0,
-        cirtical_section_object_counter: 0,
-        critical_section_memory_footprint: 0,
-        critical_section_live_object_counter: 0,
+        cirtical_section_total_object_counter: 0,
+        critical_section_total_object_bytes: 0,
+        critical_section_total_local_object_counter: 0,
+        critical_section_total_local_object_bytes: 0,
+        critical_section_local_live_object_bytes: 0,
         critical_section_local_live_object_counter: 0,
+        critical_section_local_live_private_object_counter: 0,
+        critical_section_local_live_private_object_bytes: 0,
+        critical_section_write_barrier_counter: 0,
+        critical_section_write_barrier_slowpath_counter: 0,
+        critical_section_write_barrier_public_counter: 0,
+        critical_section_write_barrier_public_bytes: 0,
     }
 }
 

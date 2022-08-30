@@ -64,7 +64,7 @@ pub struct Mutator<VM: VMBinding> {
     pub config: MutatorConfig<VM>,
     pub critical_section_active: bool,
     pub request_id: u32,
-    pub cirtical_section_total_object_counter: u32,
+    pub critical_section_total_object_counter: u32,
     pub critical_section_total_object_bytes: usize,
     pub critical_section_total_local_object_counter: u32,
     pub critical_section_total_local_object_bytes: usize,
@@ -76,6 +76,7 @@ pub struct Mutator<VM: VMBinding> {
     pub critical_section_write_barrier_slowpath_counter: u32,
     pub critical_section_write_barrier_public_counter: u32,
     pub critical_section_write_barrier_public_bytes: usize,
+    pub access_non_local_object_counter: u32
 }
 
 impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
@@ -117,8 +118,8 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
 
         // set object owner
         const OWNER_MASK: usize = 0x00000000FFFFFFFF;
-        let owner = VM::VMActivePlan::mutator_id(self.mutator_tls);
-        debug_assert!(owner == (owner & OWNER_MASK));
+        let mutator_id = VM::VMActivePlan::mutator_id(self.mutator_tls);
+        debug_assert!(mutator_id == (mutator_id & OWNER_MASK));
         let mutator = VM::VMActivePlan::mutator(self.mutator_tls);
         let object_owner;
 
@@ -126,12 +127,12 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
             crate::util::critical_bit::set_critical_bit(refer);
 
             self.critical_section_total_object_bytes += _bytes;
-            self.cirtical_section_total_object_counter += 1;
+            self.critical_section_total_object_counter += 1;
 
-            object_owner = (mutator.request_id as usize) << 32 | (owner & OWNER_MASK);
+            object_owner = (mutator.request_id as usize) << 32 | (mutator_id & OWNER_MASK);
         } else {
-            object_owner = owner & OWNER_MASK;
-            crate::util::public_bit::set_public_bit(refer);
+            object_owner = mutator_id & OWNER_MASK;
+            // crate::util::public_bit::set_public_bit(refer, mutator_id, object_owner);
         }
 
         space.set_object_owner(refer, object_owner);
@@ -143,6 +144,14 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
 
     fn barrier(&mut self) -> &mut dyn Barrier {
         &mut *self.barrier
+    }
+
+    fn record_access_non_local_object(&mut self, object: ObjectReference) {
+        use crate::util::public_bit::is_public;
+        if is_public(object) {
+            self.access_non_local_object_counter += 1;
+        }
+        
     }
 }
 
@@ -179,6 +188,8 @@ pub trait MutatorContext<VM: VMBinding>: Send + 'static {
         self.barrier()
             .pre_write_barrier(WriteTarget::Object(obj), new_val);
     }
+
+    fn record_access_non_local_object(&mut self, obj: ObjectReference);
 }
 
 /// This is used for plans to indicate the number of allocators reserved for the plan.

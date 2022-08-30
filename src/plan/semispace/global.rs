@@ -259,7 +259,7 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
     fn reset_metadata(&self) {
         unsafe {
             self.fromspace().reset_global_mark_bit();
-            self.tospace().reset_global_mark_bit();
+            // self.tospace().reset_global_mark_bit();
         }
     }
 }

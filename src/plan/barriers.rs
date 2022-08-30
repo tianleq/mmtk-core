@@ -40,7 +40,8 @@ pub trait Barrier: 'static + Send {
     fn statistics(&self) -> (u32, usize, u32, u32) {
         (0, 0, 0, 0)
     }
-    fn reset_statistics(&mut self) {}
+    fn reset_statistics(&mut self, mutator_id: usize) {}
+    fn post_read_barrier(&mut self, object: ObjectReference) {}
 }
 
 pub struct NoBarrier;
@@ -139,22 +140,26 @@ pub struct ObjectOwnerBarrier<VM: VMBinding> {
     /// The metadata used for log bit. Though this allows taking an arbitrary metadata spec,
     /// for this field, 0 means logged, and 1 means unlogged (the same as the vm::object_model::VMGlobalLogBitSpec).
     meta: MetadataSpec,
+    mutator_id: usize,
     public_object_counter: u32,
     public_object_bytes: usize,
     write_barrier_counter: u32,
     write_barrier_slowpath_counter: u32,
+    public_objects_accessed: std::collections::HashSet<ObjectReference>,
 }
 
 impl<VM: VMBinding> ObjectOwnerBarrier<VM> {
     #[allow(unused)]
-    pub fn new(mmtk: &'static MMTK<VM>, meta: MetadataSpec) -> Self {
+    pub fn new(mmtk: &'static MMTK<VM>, meta: MetadataSpec, mutator_id: usize) -> Self {
         Self {
             mmtk,
             meta,
+            mutator_id,
             public_object_counter: 0,
             public_object_bytes: 0,
             write_barrier_counter: 0,
             write_barrier_slowpath_counter: 0,
+            public_objects_accessed: std::collections::HashSet::new(),
         }
     }
 
@@ -166,25 +171,43 @@ impl<VM: VMBinding> ObjectOwnerBarrier<VM> {
         if value.is_null() || is_public(value) {
             return;
         }
+        const OWNER_MASK: usize = 0x00000000FFFFFFFF;
+        const REQUEST_MASK: usize = 0xFFFFFFFF00000000;
         let owner = Self::get_header_object_owner(object);
         let new_owner = Self::get_header_object_owner(value);
+        if self.mutator_id != 0 && new_owner & OWNER_MASK != self.mutator_id {
+            // self.print_mutator_stack_trace();
+            // println!("****");
+            // VM::VMObjectModel::dump_object(object);
+            println!("****");
+            VM::VMObjectModel::dump_object(value);
+            println!(
+                "target: {:x}, value: {:x}, mutator: {}, target owner: {}, value owner: {}",
+                object,
+                value,
+                self.mutator_id,
+                owner & OWNER_MASK,
+                new_owner & OWNER_MASK
+            );
+            assert!(false);
+        }
         // here request id is embedded in owner, so even objects within the same thread might be public
         // once it is attached to an object allocated in a different request
-        if owner != new_owner || is_public(object) {
+        if owner != new_owner || is_public(object) || (REQUEST_MASK & owner) == 0 {
             // println!("---- print thread stack begin ----");
             // self.print_mutator_stack_trace();
             // println!("---- print thread stack end ----");
             let mut closure = BlockingObjectClosure::<VM>::new();
-            crate::util::public_bit::set_public_bit(value);
+            crate::util::public_bit::set_public_bit(value, self.mutator_id, new_owner, false);
 
             VM::VMScanning::scan_object(
                 VMWorkerThread(VMThread::UNINITIALIZED),
                 value,
                 &mut closure,
             );
-            let v = closure.do_closure();
+            let v = closure.do_closure(self.mutator_id);
             self.public_object_counter += v.0 + 1;
-            self.public_object_bytes += v.1 + VM::VMObjectModel::get_current_size(object);
+            self.public_object_bytes += v.1 + VM::VMObjectModel::get_current_size(value);
             self.write_barrier_slowpath_counter += 1;
             // self.trace_non_local_object(obj);
         }
@@ -205,6 +228,11 @@ impl<VM: VMBinding> ObjectOwnerBarrier<VM> {
     #[inline(always)]
     fn get_header_object_owner(object: ObjectReference) -> usize {
         unsafe { Self::header_object_owner_address(object).load::<usize>() }
+    }
+
+    #[inline(always)]
+    fn record_access_non_local_object(&mut self, object: ObjectReference) {
+        self.public_objects_accessed.insert(object);
     }
 }
 
@@ -233,11 +261,21 @@ impl<VM: VMBinding> Barrier for ObjectOwnerBarrier<VM> {
         )
     }
 
-    fn reset_statistics(&mut self) {
+    fn reset_statistics(&mut self, mutator_id: usize) {
         self.public_object_counter = 0;
         self.public_object_bytes = 0;
         self.write_barrier_counter = 0;
         self.write_barrier_slowpath_counter = 0;
+        assert!(
+            self.mutator_id == 0 || self.mutator_id == mutator_id,
+            "mutator id invalid"
+        );
+        self.mutator_id = mutator_id;
+        self.public_objects_accessed.clear();
+    }
+
+    fn post_read_barrier(&mut self, object: ObjectReference) {
+        self.record_access_non_local_object(object);
     }
 }
 
@@ -256,7 +294,7 @@ impl<VM: crate::vm::VMBinding> BlockingObjectClosure<VM> {
         }
     }
 
-    pub fn do_closure(&mut self) -> (u32, usize) {
+    pub fn do_closure(&mut self, mutator_id: usize) -> (u32, usize) {
         let mut count = 0;
         let mut bytes: usize = 0;
         while !self.edge_buffer.is_empty() {
@@ -266,14 +304,19 @@ impl<VM: crate::vm::VMBinding> BlockingObjectClosure<VM> {
                 continue;
             }
             if !crate::util::public_bit::is_public(object) {
+                let pattern = ObjectOwnerBarrier::<VM>::get_header_object_owner(object);
                 assert!(
-                    ObjectOwnerBarrier::<VM>::get_header_object_owner(object) & 0x00000000FFFFFFFF
-                        != 0,
+                    pattern & 0xFFFFFFFF00000000 != 0,
                     "objects outside request scope is visited."
                 );
                 // if !self.mark.contains(&object) {
                 // set public bit on the object
-                crate::util::public_bit::set_public_bit(object);
+                crate::util::public_bit::set_public_bit(
+                    object,
+                    mutator_id,
+                    ObjectOwnerBarrier::<VM>::get_header_object_owner(object),
+                    false,
+                );
                 // crate::util::mark_bit::set_global_mark_bit(object);
                 // println!("{:?} is public", object);
                 VM::VMScanning::scan_object(

@@ -114,7 +114,11 @@ impl<VM: crate::vm::VMBinding> ThreadlocalObjectClosure<VM> {
         }
     }
 
-    pub fn do_closure(&mut self, mutator: &mut crate::Mutator<VM>) {
+    pub fn do_closure(
+        &mut self,
+        mutator: &mut crate::Mutator<VM>,
+        visited: &mut std::collections::HashSet<ObjectReference>,
+    ) {
         use crate::vm::ActivePlan;
         use crate::vm::ObjectModel;
         use crate::vm::Scanning;
@@ -126,7 +130,8 @@ impl<VM: crate::vm::VMBinding> ThreadlocalObjectClosure<VM> {
             if object.is_null() {
                 continue;
             }
-            if !crate::util::mark_bit::is_global_mark_set(object) {
+            // if !crate::util::mark_bit::is_global_mark_set(object) {
+            if !visited.contains(&object) {
                 let owner = Self::get_header_object_owner(object);
                 let request_id = mutator.request_id;
                 assert!(
@@ -136,7 +141,8 @@ impl<VM: crate::vm::VMBinding> ThreadlocalObjectClosure<VM> {
                 let mutator_id = VM::VMActivePlan::mutator_id(mutator.mutator_tls);
                 let pattern = (request_id as usize) << 32 | (mutator_id & OWNER_MASK);
                 // set mark bit on the object
-                crate::util::mark_bit::set_global_mark_bit(object);
+                // crate::util::mark_bit::set_global_mark_bit(object);
+                visited.insert(object);
                 // self.mark.insert(object);
                 mutator.critical_section_total_local_object_counter += 1;
                 let object_size = VM::VMObjectModel::get_current_size(object);

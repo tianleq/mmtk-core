@@ -58,7 +58,7 @@ pub fn create_ms_mutator<VM: VMBinding>(
         plan,
         critical_section_active: false,
         request_id: 0,
-        cirtical_section_total_object_counter: 0,
+        critical_section_total_object_counter: 0,
         critical_section_total_object_bytes: 0,
         critical_section_total_local_object_counter: 0,
         critical_section_total_local_object_bytes: 0,
@@ -70,5 +70,6 @@ pub fn create_ms_mutator<VM: VMBinding>(
         critical_section_write_barrier_slowpath_counter: 0,
         critical_section_write_barrier_public_counter: 0,
         critical_section_write_barrier_public_bytes: 0,
+        access_non_local_object_counter: 0,
     }
 }

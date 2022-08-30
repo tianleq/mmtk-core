@@ -8,8 +8,17 @@ use atomic::Ordering;
 pub(crate) const PUBLIC_SIDE_METADATA_SPEC: SideMetadataSpec =
     crate::util::metadata::side_metadata::spec_defs::PUBLIC_BIT;
 
-pub fn set_public_bit(object: ObjectReference) {
-    assert!(!is_public(object), "{:x}: public bit already set", object);
+pub fn set_public_bit(object: ObjectReference, mutator_id: usize, owner: usize, force: bool) {
+    if !force {
+        assert!(
+            !is_public(object),
+            "{:x}: public bit already set (mutator_id:{}, owner: {})",
+            object,
+            mutator_id,
+            owner
+        );
+    }
+
     side_metadata::store_atomic(
         &PUBLIC_SIDE_METADATA_SPEC,
         object.to_address(),

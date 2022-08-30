@@ -563,11 +563,16 @@ pub fn mmtk_threadlocal_closure<VM: VMBinding>(
     _mmtk: &MMTK<VM>,
     mutator: &mut Mutator<VM>,
     slots: Vec<Address>,
+    visited: &mut std::collections::HashSet<ObjectReference>,
 ) {
     let mut closure = crate::plan::ThreadlocalObjectClosure::<VM>::new(slots);
-    closure.do_closure(mutator);
+    closure.do_closure(mutator, visited);
 }
 
-pub fn mmtk_post_threadlocal_closure<VM: VMBinding>(mmtk: &MMTK<VM>) {
-    mmtk.get_plan().reset_metadata();
+// pub fn mmtk_post_threadlocal_closure<VM: VMBinding>(mmtk: &MMTK<VM>) {
+//     mmtk.get_plan().reset_metadata();
+// }
+
+pub fn mmtk_set_public_bit(object: ObjectReference, mutator_id: usize, owner: usize, force: bool) {
+    crate::util::public_bit::set_public_bit(object, mutator_id, owner, force);
 }

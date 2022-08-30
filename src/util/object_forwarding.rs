@@ -88,7 +88,7 @@ pub fn forward_object<VM: VMBinding>(
         crate::util::critical_bit::set_critical_bit(new_object);
     }
     if crate::util::public_bit::is_public(object) {
-        crate::util::public_bit::set_public_bit(new_object);
+        crate::util::public_bit::set_public_bit(new_object, 0, 0, false);
     }
 
     if let Some(shift) = forwarding_bits_offset_in_forwarding_pointer::<VM>() {

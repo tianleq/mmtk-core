@@ -23,6 +23,7 @@ pub trait PolicyTraceObject<VM: VMBinding> {
     fn trace_object<Q: ObjectQueue, const KIND: TraceKind>(
         &self,
         queue: &mut Q,
+        source: ObjectReference,
         object: ObjectReference,
         copy: Option<CopySemantics>,
         worker: &mut GCWorker<VM>,

@@ -22,13 +22,22 @@ impl<VM: VMBinding> ProcessEdgesWork for GenNurseryProcessEdges<VM> {
     type VM = VM;
     type ScanObjectsWorkType = ScanObjects<Self>;
 
-    fn new(edges: Vec<EdgeOf<Self>>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
-        let base = ProcessEdgesBase::new(edges, roots, mmtk);
+    fn new(
+        sources: Vec<ObjectReference>,
+        edges: Vec<EdgeOf<Self>>,
+        roots: bool,
+        mmtk: &'static MMTK<VM>,
+    ) -> Self {
+        let base = ProcessEdgesBase::new(sources, edges, roots, mmtk);
         let gen = base.plan().generational();
         Self { gen, base }
     }
     #[inline]
-    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+    fn trace_object(
+        &mut self,
+        source: ObjectReference,
+        object: ObjectReference,
+    ) -> ObjectReference {
         if object.is_null() {
             return object;
         }
@@ -38,9 +47,9 @@ impl<VM: VMBinding> ProcessEdgesWork for GenNurseryProcessEdges<VM> {
             .trace_object_nursery(&mut self.base.nodes, object, worker)
     }
     #[inline]
-    fn process_edge(&mut self, slot: EdgeOf<Self>) {
+    fn process_edge(&mut self, source: ObjectReference, slot: EdgeOf<Self>) {
         let object = slot.load();
-        let new_object = self.trace_object(object);
+        let new_object = self.trace_object(source, object);
         debug_assert!(!self.gen.nursery.in_space(new_object));
         slot.store(new_object);
     }
@@ -138,7 +147,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessRegionModBuf<E> {
                 }
             }
             // Forward entries
-            GCWork::do_work(&mut E::new(edges, false, mmtk), worker, mmtk)
+            GCWork::do_work(&mut E::new(vec![], edges, false, mmtk), worker, mmtk)
         }
     }
 }

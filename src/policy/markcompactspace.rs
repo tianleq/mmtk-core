@@ -27,7 +27,7 @@ const GC_MARK_BIT_MASK: u8 = 1;
 /// For each MarkCompact object, we need one extra word for storing forwarding pointer (Lisp-2 implementation).
 /// Note that considering the object alignment, we may end up allocating/reserving more than one word per object.
 /// See [`MarkCompactSpace::HEADER_RESERVED_IN_BYTES`].
-pub const GC_EXTRA_HEADER_WORD: usize = 1;
+pub const GC_EXTRA_HEADER_WORD: usize = 2;
 const GC_EXTRA_HEADER_BYTES: usize = GC_EXTRA_HEADER_WORD << LOG_BYTES_IN_WORD;
 
 impl<VM: VMBinding> SFT for MarkCompactSpace<VM> {
@@ -108,6 +108,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for MarkCompac
     fn trace_object<Q: ObjectQueue, const KIND: crate::policy::gc_work::TraceKind>(
         &self,
         queue: &mut Q,
+        source: ObjectReference,
         object: ObjectReference,
         _copy: Option<CopySemantics>,
         _worker: &mut GCWorker<VM>,

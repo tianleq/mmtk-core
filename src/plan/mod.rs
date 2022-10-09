@@ -36,7 +36,10 @@ pub use plan_constraints::PlanConstraints;
 pub use plan_constraints::DEFAULT_PLAN_CONSTRAINTS;
 
 mod tracing;
-pub use tracing::{ObjectQueue, ObjectsClosure, VectorObjectQueue, VectorQueue};
+pub use tracing::{
+    BlockingObjectClosure, ObjectQueue, ObjectsClosure, ThreadlocalObjectClosure,
+    VectorObjectQueue, VectorQueue,
+};
 
 mod generational;
 mod immix;

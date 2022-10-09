@@ -17,11 +17,11 @@ use crate::util::heap::VMRequest;
 use crate::util::metadata::side_metadata::{SideMetadataContext, SideMetadataSanity};
 use crate::util::opaque_pointer::VMWorkerThread;
 use crate::util::options::Options;
+use crate::BarrierSelector;
 use crate::{plan::global::BasePlan, vm::VMBinding};
+use mmtk_macros::PlanTraceObject;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-
-use mmtk_macros::PlanTraceObject;
 
 use enum_map::EnumMap;
 
@@ -41,8 +41,10 @@ pub const SS_CONSTRAINTS: PlanConstraints = PlanConstraints {
     gc_header_bits: 2,
     gc_header_words: 0,
     num_specialized_scans: 1,
-    max_non_los_default_alloc_bytes:
-        crate::plan::plan_constraints::MAX_NON_LOS_ALLOC_BYTES_COPYING_PLAN,
+    // max_non_los_default_alloc_bytes:
+    //     crate::plan::plan_constraints::MAX_NON_LOS_ALLOC_BYTES_COPYING_PLAN,
+    barrier: BarrierSelector::ObjectOwnerBarrier,
+    needs_log_bit: false,
     ..PlanConstraints::default()
 };
 

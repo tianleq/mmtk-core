@@ -39,9 +39,7 @@ pub fn create_mutator<VM: VMBinding>(
 ) -> Box<Mutator<VM>> {
     Box::new(match *mmtk.options.plan {
         PlanSelector::NoGC => crate::plan::nogc::mutator::create_nogc_mutator(tls, &*mmtk.plan),
-        PlanSelector::SemiSpace => {
-            crate::plan::semispace::mutator::create_ss_mutator(tls, &*mmtk.plan)
-        }
+        PlanSelector::SemiSpace => crate::plan::semispace::mutator::create_ss_mutator(tls, mmtk),
         PlanSelector::GenCopy => {
             crate::plan::generational::copying::mutator::create_gencopy_mutator(tls, mmtk)
         }
@@ -1016,11 +1014,13 @@ pub trait PlanTraceObject<VM: VMBinding> {
     ///
     /// Arguments:
     /// * `trace`: the current transitive closure
+    /// * 'source': the source object
     /// * `object`: the object to trace. This is a non-nullable object reference.
     /// * `worker`: the GC worker that is tracing this object.
     fn trace_object<Q: ObjectQueue, const KIND: TraceKind>(
         &self,
         queue: &mut Q,
+        source: ObjectReference,
         object: ObjectReference,
         worker: &mut GCWorker<VM>,
     ) -> ObjectReference;

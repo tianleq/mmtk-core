@@ -8,12 +8,17 @@ use crate::vm::VMBinding;
 pub trait EdgeVisitor<ES: Edge> {
     /// Call this function for each edge.
     fn visit_edge(&mut self, edge: ES);
+    fn visit_edge_with_source(&mut self, source: ObjectReference, edge: ES);
 }
 
 /// This lets us use closures as EdgeVisitor.
 impl<ES: Edge, F: FnMut(ES)> EdgeVisitor<ES> for F {
     fn visit_edge(&mut self, edge: ES) {
         self(edge)
+    }
+
+    fn visit_edge_with_source(&mut self, source: ObjectReference, edge: ES) {
+        unimplemented!()
     }
 }
 
@@ -55,7 +60,7 @@ pub trait RootsWorkFactory<ES: Edge>: Clone + Send + 'static {
     ///
     /// Arguments:
     /// * `edges`: A vector of edges.
-    fn create_process_edge_roots_work(&mut self, edges: Vec<ES>);
+    fn create_process_edge_roots_work(&mut self, sources: Vec<ObjectReference>, edges: Vec<ES>);
 
     /// Create work packets to handle nodes pointed by root edges.
     ///
@@ -68,7 +73,11 @@ pub trait RootsWorkFactory<ES: Edge>: Clone + Send + 'static {
     ///
     /// Arguments:
     /// * `nodes`: A vector of references to objects pointed by root edges.
-    fn create_process_node_roots_work(&mut self, nodes: Vec<ObjectReference>);
+    fn create_process_node_roots_work(
+        &mut self,
+        sources: Vec<ObjectReference>,
+        nodes: Vec<ObjectReference>,
+    );
 }
 
 /// VM-specific methods for scanning roots/objects.

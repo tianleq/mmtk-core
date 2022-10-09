@@ -21,7 +21,7 @@ impl MockScanning {
     }
 
     fn mock_scan_roots(&self, mut factory: impl mmtk::vm::RootsWorkFactory<Address>) {
-        factory.create_process_edge_roots_work(self.roots.clone());
+        factory.create_process_edge_roots_work(vec![], self.roots.clone());
     }
 }
 
@@ -42,7 +42,11 @@ struct MockFactory {
 }
 
 impl RootsWorkFactory<Address> for MockFactory {
-    fn create_process_edge_roots_work(&mut self, edges: Vec<Address>) {
+    fn create_process_edge_roots_work(
+        &mut self,
+        _sources: Vec<ObjectReference>,
+        edges: Vec<Address>,
+    ) {
         assert_eq!(edges, EDGES);
         match self.round {
             1 => {
@@ -66,7 +70,11 @@ impl RootsWorkFactory<Address> for MockFactory {
         }
     }
 
-    fn create_process_node_roots_work(&mut self, _nodes: Vec<ObjectReference>) {
+    fn create_process_node_roots_work(
+        &mut self,
+        _sources: Vec<ObjectReference>,
+        _nodes: Vec<ObjectReference>,
+    ) {
         unimplemented!();
     }
 }

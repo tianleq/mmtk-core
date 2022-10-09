@@ -1,9 +1,12 @@
 //! Read/Write barrier implementations.
 
+use crate::plan::BlockingObjectClosure;
+use crate::util::public_bit::is_public;
 use crate::vm::edge_shape::{Edge, MemorySlice};
 use crate::vm::ObjectModel;
 use crate::{
     util::{metadata::MetadataSpec, *},
+    vm::Scanning,
     vm::VMBinding,
 };
 use atomic::Ordering;
@@ -19,6 +22,7 @@ use downcast_rs::Downcast;
 pub enum BarrierSelector {
     NoBarrier,
     ObjectBarrier,
+    ObjectOwnerBarrier,
 }
 
 impl BarrierSelector {
@@ -82,6 +86,10 @@ pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
     ) {
     }
 
+    /// Object reference read slow-path call.
+    /// This can be called either before or after the store, depend on the concrete barrier implementation.
+    fn object_reference_read_slow(&mut self, _target: ObjectReference) {}
+
     /// Subsuming barrier for array copy
     fn memory_region_copy(&mut self, src: VM::VMMemorySlice, dst: VM::VMMemorySlice) {
         self.memory_region_copy_pre(src.clone(), dst.clone());
@@ -94,6 +102,11 @@ pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
 
     /// Full post-barrier for array copy
     fn memory_region_copy_post(&mut self, _src: VM::VMMemorySlice, _dst: VM::VMMemorySlice) {}
+
+    fn statistics(&self) -> (u32, usize, u32, u32) {
+        (0, 0, 0, 0)
+    }
+    fn reset_statistics(&mut self, _mutator_id: usize) {}
 }
 
 impl_downcast!(Barrier<VM> where VM: VMBinding);
@@ -130,12 +143,19 @@ pub trait BarrierSemantics: 'static + Send {
         target: ObjectReference,
     );
 
+    /// Slow-path call for object field write operations.
+    fn object_reference_read_slow(&mut self, _target: ObjectReference) {}
+
     /// Slow-path call for mempry slice copy operations. For example, array-copy operations.
     fn memory_region_copy_slow(
         &mut self,
         src: <Self::VM as VMBinding>::VMMemorySlice,
         dst: <Self::VM as VMBinding>::VMMemorySlice,
     );
+    fn statistics(&self) -> (u32, usize, u32, u32) {
+        (0, 0, 0, 0)
+    }
+    fn reset_statistics(&mut self, _mutator_id: usize) {}
 }
 
 /// Generic object barrier with a type argument defining it's slow-path behaviour.
@@ -219,5 +239,204 @@ impl<S: BarrierSemantics> Barrier<S::VM> for ObjectBarrier<S> {
         dst: <S::VM as VMBinding>::VMMemorySlice,
     ) {
         self.semantics.memory_region_copy_slow(src, dst);
+    }
+
+    #[inline]
+    fn statistics(&self) -> (u32, usize, u32, u32) {
+        self.semantics.statistics()
+    }
+    #[inline]
+    fn reset_statistics(&mut self, mutator_id: usize) {
+        self.semantics.reset_statistics(mutator_id);
+    }
+}
+
+pub struct ObjectOwnerBarrier<S: BarrierSemantics> {
+    semantics: S,
+}
+
+impl<S: BarrierSemantics> ObjectOwnerBarrier<S> {
+    pub fn new(semantics: S) -> Self {
+        Self { semantics }
+    }
+}
+
+impl<S: BarrierSemantics> Barrier<S::VM> for ObjectOwnerBarrier<S> {
+    fn flush(&mut self) {
+        self.semantics.flush();
+    }
+
+    #[inline(always)]
+    fn object_reference_write_post(
+        &mut self,
+        _src: ObjectReference,
+        _slot: <S::VM as VMBinding>::VMEdge,
+        _target: ObjectReference,
+    ) {
+    }
+
+    #[inline(always)]
+    fn object_reference_write_slow(
+        &mut self,
+        src: ObjectReference,
+        slot: <S::VM as VMBinding>::VMEdge,
+        target: ObjectReference,
+    ) {
+        self.semantics
+            .object_reference_write_slow(src, slot, target);
+    }
+
+    #[inline(always)]
+    fn object_reference_read_slow(&mut self, target: ObjectReference) {
+        self.semantics.object_reference_read_slow(target);
+    }
+
+    #[inline(always)]
+    fn memory_region_copy_post(
+        &mut self,
+        src: <S::VM as VMBinding>::VMMemorySlice,
+        dst: <S::VM as VMBinding>::VMMemorySlice,
+    ) {
+        self.semantics.memory_region_copy_slow(src, dst);
+    }
+
+    #[inline]
+    fn statistics(&self) -> (u32, usize, u32, u32) {
+        self.semantics.statistics()
+    }
+    #[inline]
+    fn reset_statistics(&mut self, mutator_id: usize) {
+        self.semantics.reset_statistics(mutator_id);
+    }
+}
+
+pub struct ObjectOwnerBarrierSemantics<VM: VMBinding> {
+    mmtk: &'static crate::MMTK<VM>,
+    mutator_id: usize,
+    public_object_counter: u32,
+    public_object_bytes: usize,
+    write_barrier_counter: u32,
+    write_barrier_slowpath_counter: u32,
+    // public_objects_accessed: std::collections::HashSet<ObjectReference>,
+}
+
+impl<VM: VMBinding> ObjectOwnerBarrierSemantics<VM> {
+    pub fn new(mmtk: &'static crate::MMTK<VM>) -> Self {
+        Self {
+            mmtk,
+            mutator_id: 0,
+            public_object_counter: 0,
+            public_object_bytes: 0,
+            write_barrier_counter: 0,
+            write_barrier_slowpath_counter: 0,
+        }
+    }
+
+    fn trace_non_local_object(&mut self, object: ObjectReference, value: ObjectReference) {
+        self.write_barrier_counter += 1;
+        if value.is_null() || is_public(value) {
+            return;
+        }
+        const OWNER_MASK: usize = 0x00000000FFFFFFFF;
+        const REQUEST_MASK: usize = 0xFFFFFFFF00000000;
+        let owner = Self::get_header_object_owner(object);
+        let new_owner = Self::get_header_object_owner(value);
+        if self.mutator_id != 0 && new_owner & OWNER_MASK != self.mutator_id {
+            // self.print_mutator_stack_trace();
+            // println!("****");
+            // VM::VMObjectModel::dump_object(object);
+            // println!("****");
+            // VM::VMObjectModel::dump_object(value);
+            // println!(
+            //     "target: {:x}, value: {:x}, mutator: {}, target owner: {}, value owner: {}",
+            //     object,
+            //     value,
+            //     self.mutator_id,
+            //     owner & OWNER_MASK,
+            //     new_owner & OWNER_MASK
+            // );
+            assert!(false);
+        }
+        // here request id is embedded in owner, so even objects within the same thread might be public
+        // once it is attached to an object allocated in a different request
+        if owner != new_owner || is_public(object) || (REQUEST_MASK & owner) == 0 {
+            // println!("---- print thread stack begin ----");
+            // self.print_mutator_stack_trace();
+            // println!("---- print thread stack end ----");
+            let mut closure = BlockingObjectClosure::<VM>::new();
+            crate::util::public_bit::set_public_bit(value, self.mutator_id, new_owner, false);
+
+            VM::VMScanning::scan_object(
+                VMWorkerThread(VMThread::UNINITIALIZED),
+                value,
+                &mut closure,
+            );
+            let v = closure.do_closure(self.mutator_id);
+            self.public_object_counter += v.0 + 1;
+            self.public_object_bytes += v.1 + VM::VMObjectModel::get_current_size(value);
+            self.write_barrier_slowpath_counter += 1;
+            // self.trace_non_local_object(obj);
+            // println!(
+            //     "{}, {}",
+            //     self.public_object_counter, self.write_barrier_slowpath_counter
+            // );
+        }
+    }
+    #[inline(always)]
+    fn header_object_owner_address(object: ObjectReference) -> Address {
+        const GC_EXTRA_HEADER_OFFSET: usize = 8;
+        <VM as crate::vm::VMBinding>::VMObjectModel::object_start_ref(object)
+            - GC_EXTRA_HEADER_OFFSET
+    }
+
+    /// Get header forwarding pointer for an object
+    #[inline(always)]
+    fn get_header_object_owner(object: ObjectReference) -> usize {
+        unsafe { Self::header_object_owner_address(object).load::<usize>() }
+    }
+}
+
+impl<VM: VMBinding> BarrierSemantics for ObjectOwnerBarrierSemantics<VM> {
+    type VM = VM;
+
+    #[cold]
+    fn flush(&mut self) {}
+
+    fn object_reference_write_slow(
+        &mut self,
+        src: ObjectReference,
+        _slot: VM::VMEdge,
+        target: ObjectReference,
+    ) {
+        self.trace_non_local_object(src, target)
+    }
+
+    fn memory_region_copy_slow(&mut self, _src: VM::VMMemorySlice, dst: VM::VMMemorySlice) {}
+
+    #[inline]
+    fn statistics(&self) -> (u32, usize, u32, u32) {
+        (
+            self.public_object_counter,
+            self.public_object_bytes,
+            self.write_barrier_counter,
+            self.write_barrier_slowpath_counter,
+        )
+    }
+
+    #[inline]
+    fn reset_statistics(&mut self, mutator_id: usize) {
+        self.public_object_counter = 0;
+        self.public_object_bytes = 0;
+        self.write_barrier_counter = 0;
+        self.write_barrier_slowpath_counter = 0;
+        assert!(
+            self.mutator_id == 0 || self.mutator_id == mutator_id,
+            "mutator id invalid"
+        );
+        self.mutator_id = mutator_id;
+    }
+
+    fn object_reference_read_slow(&mut self, _target: ObjectReference) {
+        // todo!()
     }
 }

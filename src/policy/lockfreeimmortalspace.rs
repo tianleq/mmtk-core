@@ -135,6 +135,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LockFreeIm
     fn trace_object<Q: ObjectQueue, const KIND: crate::policy::gc_work::TraceKind>(
         &self,
         _queue: &mut Q,
+        _sources: ObjectReference,
         _object: ObjectReference,
         _copy: Option<CopySemantics>,
         _worker: &mut GCWorker<VM>,

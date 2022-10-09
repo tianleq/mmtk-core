@@ -7,6 +7,7 @@ use crate::policy::space::Space;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
 use crate::util::{Address, ObjectReference};
 use crate::util::{VMMutatorThread, VMWorkerThread};
+use crate::vm::ActivePlan;
 use crate::vm::VMBinding;
 
 use enum_map::EnumMap;
@@ -62,6 +63,21 @@ pub struct Mutator<VM: VMBinding> {
     pub mutator_tls: VMMutatorThread,
     pub plan: &'static dyn Plan<VM = VM>,
     pub config: MutatorConfig<VM>,
+    pub critical_section_active: bool,
+    pub request_id: u32,
+    pub critical_section_total_object_counter: u32,
+    pub critical_section_total_object_bytes: usize,
+    pub critical_section_total_local_object_counter: u32,
+    pub critical_section_total_local_object_bytes: usize,
+    pub critical_section_local_live_object_counter: u32,
+    pub critical_section_local_live_object_bytes: usize,
+    pub critical_section_local_live_private_object_counter: u32,
+    pub critical_section_local_live_private_object_bytes: usize,
+    pub critical_section_write_barrier_counter: u32,
+    pub critical_section_write_barrier_slowpath_counter: u32,
+    pub critical_section_write_barrier_public_counter: u32,
+    pub critical_section_write_barrier_public_bytes: usize,
+    pub access_non_local_object_counter: u32,
 }
 
 impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
@@ -94,12 +110,32 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         _bytes: usize,
         allocator: AllocationSemantics,
     ) {
-        unsafe {
+        let space = unsafe {
             self.allocators
                 .get_allocator_mut(self.config.allocator_mapping[allocator])
         }
-        .get_space()
-        .initialize_object_metadata(refer, true)
+        .get_space();
+        space.initialize_object_metadata(refer, true);
+        // set object owner
+        const OWNER_MASK: usize = 0x00000000FFFFFFFF;
+        let mutator_id = VM::VMActivePlan::mutator_id(self.mutator_tls);
+        debug_assert!(mutator_id == (mutator_id & OWNER_MASK));
+        let mutator = VM::VMActivePlan::mutator(self.mutator_tls);
+        let object_owner;
+
+        if self.critical_section_active {
+            crate::util::critical_bit::set_critical_bit(refer);
+
+            self.critical_section_total_object_bytes += _bytes;
+            self.critical_section_total_object_counter += 1;
+
+            object_owner = (mutator.request_id as usize) << 32 | (mutator_id & OWNER_MASK);
+        } else {
+            object_owner = mutator_id & OWNER_MASK;
+            // crate::util::public_bit::set_public_bit(refer, mutator_id, object_owner);
+        }
+
+        space.set_object_owner(refer, object_owner);
     }
 
     fn get_tls(&self) -> VMMutatorThread {

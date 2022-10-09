@@ -119,6 +119,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LargeObjec
     fn trace_object<Q: ObjectQueue, const KIND: crate::policy::gc_work::TraceKind>(
         &self,
         queue: &mut Q,
+        _source: ObjectReference,
         object: ObjectReference,
         _copy: Option<CopySemantics>,
         _worker: &mut GCWorker<VM>,
@@ -235,6 +236,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                 // println!("- cn {}", cell);
                 #[cfg(feature = "global_alloc_bit")]
                 crate::util::alloc_bit::unset_addr_alloc_bit(cell);
+                crate::util::critical_bit::unset_addr_critical_bit(cell);
                 self.pr.release_pages(get_super_page(cell));
             }
         } else {
@@ -242,6 +244,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                 // println!("- ts {}", cell);
                 #[cfg(feature = "global_alloc_bit")]
                 crate::util::alloc_bit::unset_addr_alloc_bit(cell);
+                crate::util::critical_bit::unset_addr_critical_bit(cell);
                 self.pr.release_pages(get_super_page(cell));
             }
         }

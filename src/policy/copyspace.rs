@@ -22,6 +22,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 const META_DATA_PAGES_PER_REGION: usize = CARD_META_PAGES_PER_REGION;
 
+pub const GC_EXTRA_HEADER_WORD: usize = 2;
+const GC_EXTRA_HEADER_BYTES: usize =
+    GC_EXTRA_HEADER_WORD << crate::util::constants::LOG_BYTES_IN_WORD;
+
+const ALLOCATION_SITE_OFFSET: usize = GC_EXTRA_HEADER_BYTES;
+const OWNER_OFFSET: usize = 8;
+
 /// This type implements a simple copying space.
 pub struct CopySpace<VM: VMBinding> {
     common: CommonSpace<VM>,
@@ -75,6 +82,11 @@ impl<VM: VMBinding> SFT for CopySpace<VM> {
         let worker = worker.into_mut::<VM>();
         self.trace_object(queue, object, self.common.copy, worker)
     }
+
+    #[inline(always)]
+    fn set_object_owner(&self, object: ObjectReference, object_owner: usize) {
+        Self::store_header_object_owner(object, object_owner);
+    }
 }
 
 impl<VM: VMBinding> Space<VM> for CopySpace<VM> {
@@ -112,6 +124,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for CopySpace<
     fn trace_object<Q: ObjectQueue, const KIND: crate::policy::gc_work::TraceKind>(
         &self,
         queue: &mut Q,
+        _source: ObjectReference,
         object: ObjectReference,
         copy: Option<CopySemantics>,
         worker: &mut GCWorker<VM>,
@@ -126,6 +139,51 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for CopySpace<
 }
 
 impl<VM: VMBinding> CopySpace<VM> {
+    /// We need one extra header word for each object. Considering the alignment requirement, this is
+    /// the actual bytes we need to reserve for each allocation.
+    pub const HEADER_RESERVED_IN_BYTES: usize = if VM::MAX_ALIGNMENT > GC_EXTRA_HEADER_BYTES {
+        VM::MAX_ALIGNMENT
+    } else {
+        GC_EXTRA_HEADER_BYTES
+    }
+    .next_power_of_two();
+
+    // The following are a few functions for manipulating header forwarding poiner.
+    // Basically for each allocation request, we allocate extra bytes of [`HEADER_RESERVED_IN_BYTES`].
+    // From the allocation result we get (e.g. `alloc_res`), `alloc_res + HEADER_RESERVED_IN_BYTES` is the cell
+    // address we return to the binding. It ensures we have at least one word (`GC_EXTRA_HEADER_WORD`) before
+    // the cell address, and ensures the cell address is properly aligned.
+    // From the cell address, `cell - GC_EXTRA_HEADER_WORD` is where we store the header forwarding pointer.
+
+    /// Get the address for header forwarding pointer
+    #[inline(always)]
+    fn header_object_owner_address(object: ObjectReference) -> Address {
+        VM::VMObjectModel::object_start_ref(object) - OWNER_OFFSET
+    }
+
+    /// Get header forwarding pointer for an object
+    #[inline(always)]
+    pub fn get_header_object_owner(object: ObjectReference) -> usize {
+        unsafe { Self::header_object_owner_address(object).load::<usize>() }
+    }
+
+    /// Store header forwarding pointer for an object
+    #[inline(always)]
+    fn store_header_object_owner(object: ObjectReference, object_owner: usize) {
+        unsafe {
+            Self::header_object_owner_address(object).store::<usize>(object_owner);
+        }
+    }
+
+    // Clear header forwarding pointer for an object
+    #[inline(always)]
+    fn clear_header_object_owner(object: ObjectReference) {
+        crate::util::memory::zero(
+            Self::header_object_owner_address(object),
+            GC_EXTRA_HEADER_BYTES,
+        );
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: &'static str,
@@ -191,6 +249,8 @@ impl<VM: VMBinding> CopySpace<VM> {
         unsafe {
             #[cfg(feature = "global_alloc_bit")]
             self.reset_alloc_bit();
+            self.reset_critical_bit();
+            self.reset_public_bit();
             self.pr.reset();
         }
         self.common.metadata.reset();
@@ -208,6 +268,32 @@ impl<VM: VMBinding> CopySpace<VM> {
                     current_chunk + BYTES_IN_CHUNK - self.common.start,
                 );
             }
+        } else {
+            unimplemented!();
+        }
+    }
+
+    unsafe fn reset_critical_bit(&self) {
+        let current_chunk = self.pr.get_current_chunk();
+        if self.common.contiguous {
+            crate::util::critical_bit::bzero_critical_bit(
+                self.common.start,
+                current_chunk + crate::util::heap::layout::vm_layout_constants::BYTES_IN_CHUNK
+                    - self.common.start,
+            );
+        } else {
+            unimplemented!();
+        }
+    }
+
+    unsafe fn reset_public_bit(&self) {
+        let current_chunk = self.pr.get_current_chunk();
+        if self.common.contiguous {
+            crate::util::public_bit::bzero_public_bit(
+                self.common.start,
+                current_chunk + crate::util::heap::layout::vm_layout_constants::BYTES_IN_CHUNK
+                    - self.common.start,
+            );
         } else {
             unimplemented!();
         }
@@ -260,6 +346,8 @@ impl<VM: VMBinding> CopySpace<VM> {
                 semantics.unwrap(),
                 worker.get_copy_context_mut(),
             );
+            let object_owner = Self::get_header_object_owner(object);
+            Self::store_header_object_owner(new_object, object_owner);
             trace!("Forwarding pointer");
             queue.enqueue(new_object);
             trace!("Copied [{:?} -> {:?}]", object, new_object);
@@ -304,12 +392,12 @@ impl<VM: VMBinding> CopySpace<VM> {
 
 use crate::plan::Plan;
 use crate::util::alloc::Allocator;
-use crate::util::alloc::BumpAllocator;
+use crate::util::alloc::MarkCompactAllocator;
 use crate::util::opaque_pointer::VMWorkerThread;
 
 /// Copy allocator for CopySpace
 pub struct CopySpaceCopyContext<VM: VMBinding> {
-    copy_allocator: BumpAllocator<VM>,
+    copy_allocator: MarkCompactAllocator<VM>,
 }
 
 impl<VM: VMBinding> PolicyCopyContext for CopySpaceCopyContext<VM> {
@@ -338,7 +426,7 @@ impl<VM: VMBinding> CopySpaceCopyContext<VM> {
         tospace: &'static CopySpace<VM>,
     ) -> Self {
         CopySpaceCopyContext {
-            copy_allocator: BumpAllocator::new(tls.0, tospace, plan),
+            copy_allocator: MarkCompactAllocator::new(tls.0, tospace, plan),
         }
     }
 }

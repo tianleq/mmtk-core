@@ -330,6 +330,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanVMSpecificRoots<E> {
 }
 
 pub struct ProcessEdgesBase<VM: VMBinding> {
+    pub sources: Vec<ObjectReference>,
     pub edges: Vec<VM::VMEdge>,
     pub nodes: VectorObjectQueue,
     mmtk: &'static MMTK<VM>,
@@ -344,7 +345,12 @@ unsafe impl<VM: VMBinding> Send for ProcessEdgesBase<VM> {}
 impl<VM: VMBinding> ProcessEdgesBase<VM> {
     // Requires an MMTk reference. Each plan-specific type that uses ProcessEdgesBase can get a static plan reference
     // at creation. This avoids overhead for dynamic dispatch or downcasting plan for each object traced.
-    pub fn new(edges: Vec<VM::VMEdge>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+    pub fn new(
+        sources: Vec<ObjectReference>,
+        edges: Vec<VM::VMEdge>,
+        roots: bool,
+        mmtk: &'static MMTK<VM>,
+    ) -> Self {
         #[cfg(feature = "extreme_assertions")]
         if crate::util::edge_logger::should_check_duplicate_edges(&*mmtk.plan) {
             for edge in &edges {
@@ -353,6 +359,7 @@ impl<VM: VMBinding> ProcessEdgesBase<VM> {
             }
         }
         Self {
+            sources,
             edges,
             nodes: VectorObjectQueue::new(),
             mmtk,
@@ -405,13 +412,19 @@ pub trait ProcessEdgesWork:
     const OVERWRITE_REFERENCE: bool = true;
     const SCAN_OBJECTS_IMMEDIATELY: bool = true;
 
-    fn new(edges: Vec<EdgeOf<Self>>, roots: bool, mmtk: &'static MMTK<Self::VM>) -> Self;
+    fn new(
+        sources: Vec<ObjectReference>,
+        edges: Vec<EdgeOf<Self>>,
+        roots: bool,
+        mmtk: &'static MMTK<Self::VM>,
+    ) -> Self;
 
     /// Trace an MMTk object. The implementation should forward this call to the policy-specific
     /// `trace_object()` methods, depending on which space this object is in.
     /// If the object is not in any MMTk space, the implementation should forward the call to
     /// `ActivePlan::vm_trace_object()` to let the binding handle the tracing.
-    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference;
+    fn trace_object(&mut self, source: ObjectReference, object: ObjectReference)
+        -> ObjectReference;
 
     #[cfg(feature = "sanity")]
     fn cache_roots_for_sanity_gc(&mut self) {
@@ -460,9 +473,9 @@ pub trait ProcessEdgesWork:
     }
 
     #[inline]
-    fn process_edge(&mut self, slot: EdgeOf<Self>) {
+    fn process_edge(&mut self, source: ObjectReference, slot: EdgeOf<Self>) {
         let object = slot.load();
-        let new_object = self.trace_object(object);
+        let new_object = self.trace_object(source, object);
         if Self::OVERWRITE_REFERENCE {
             slot.store(new_object);
         }
@@ -470,8 +483,19 @@ pub trait ProcessEdgesWork:
 
     #[inline]
     fn process_edges(&mut self) {
+        if !self.sources.is_empty() {
+            assert!(
+                self.sources.len() == self.edges.len(),
+                "sources and edges do not match"
+            );
+        }
+
         for i in 0..self.edges.len() {
-            self.process_edge(self.edges[i])
+            if self.sources.is_empty() {
+                self.process_edge(self.edges[i].load(), self.edges[i])
+            } else {
+                self.process_edge(self.sources[i], self.edges[i])
+            }
         }
     }
 }
@@ -508,13 +532,22 @@ impl<VM: VMBinding> ProcessEdgesWork for SFTProcessEdges<VM> {
     type VM = VM;
     type ScanObjectsWorkType = ScanObjects<Self>;
 
-    fn new(edges: Vec<EdgeOf<Self>>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
-        let base = ProcessEdgesBase::new(edges, roots, mmtk);
+    fn new(
+        sources: Vec<ObjectReference>,
+        edges: Vec<EdgeOf<Self>>,
+        roots: bool,
+        mmtk: &'static MMTK<VM>,
+    ) -> Self {
+        let base = ProcessEdgesBase::new(sources, edges, roots, mmtk);
         Self { base }
     }
 
     #[inline]
-    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+    fn trace_object(
+        &mut self,
+        source: ObjectReference,
+        object: ObjectReference,
+    ) -> ObjectReference {
         use crate::policy::space::*;
 
         if object.is_null() {
@@ -550,15 +583,23 @@ impl<E: ProcessEdgesWork> Clone for ProcessEdgesWorkRootsWorkFactory<E> {
 }
 
 impl<E: ProcessEdgesWork> RootsWorkFactory<EdgeOf<E>> for ProcessEdgesWorkRootsWorkFactory<E> {
-    fn create_process_edge_roots_work(&mut self, edges: Vec<EdgeOf<E>>) {
+    fn create_process_edge_roots_work(
+        &mut self,
+        sources: Vec<ObjectReference>,
+        edges: Vec<EdgeOf<E>>,
+    ) {
         crate::memory_manager::add_work_packet(
             self.mmtk,
             WorkBucketStage::Closure,
-            E::new(edges, true, self.mmtk),
+            E::new(sources, edges, true, self.mmtk),
         );
     }
 
-    fn create_process_node_roots_work(&mut self, nodes: Vec<ObjectReference>) {
+    fn create_process_node_roots_work(
+        &mut self,
+        sources: Vec<ObjectReference>,
+        nodes: Vec<ObjectReference>,
+    ) {
         // Note: Node roots cannot be moved.  Currently, this implies that the plan must never
         // move objects.  However, in the future, if we start to support object pinning, then
         // moving plans that support object pinning (such as Immix) can still use node roots.
@@ -569,7 +610,7 @@ impl<E: ProcessEdgesWork> RootsWorkFactory<EdgeOf<E>> for ProcessEdgesWorkRootsW
         );
 
         // We want to use E::create_scan_work.
-        let process_edges_work = E::new(vec![], true, self.mmtk);
+        let process_edges_work = E::new(vec![], vec![], true, self.mmtk);
         let work = process_edges_work.create_scan_work(nodes, true);
         crate::memory_manager::add_work_packet(self.mmtk, WorkBucketStage::Closure, work);
     }
@@ -632,10 +673,10 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
         // objects which are traced for the first time.
         let scanned_root_objects = self.roots().then(|| {
             // We create an instance of E to use its `trace_object` method and its object queue.
-            let mut process_edges_work = Self::E::new(vec![], false, mmtk);
+            let mut process_edges_work = Self::E::new(vec![], vec![], false, mmtk);
 
             for object in buffer.iter().copied() {
-                let new_object = process_edges_work.trace_object(object);
+                let new_object = process_edges_work.trace_object(object, object);
                 debug_assert_eq!(
                     object, new_object,
                     "Object moved while tracing root unmovable root object: {} -> {}",
@@ -676,8 +717,8 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
         // If any object does not support edge-enqueuing, we process them now.
         if !scan_later.is_empty() {
             // We create an instance of E to use its `trace_object` method and its object queue.
-            let mut process_edges_work = Self::E::new(vec![], false, mmtk);
-            let mut closure = |object| process_edges_work.trace_object(object);
+            let mut process_edges_work = Self::E::new(vec![], vec![], false, mmtk);
+            let mut closure = |object| process_edges_work.trace_object(object, object);
 
             // Scan objects and trace their edges at the same time.
             for object in scan_later.iter().copied() {
@@ -784,8 +825,13 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
     type VM = VM;
     type ScanObjectsWorkType = PlanScanObjects<Self, P>;
 
-    fn new(edges: Vec<EdgeOf<Self>>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
-        let base = ProcessEdgesBase::new(edges, roots, mmtk);
+    fn new(
+        sources: Vec<ObjectReference>,
+        edges: Vec<EdgeOf<Self>>,
+        roots: bool,
+        mmtk: &'static MMTK<VM>,
+    ) -> Self {
+        let base = ProcessEdgesBase::new(sources, edges, roots, mmtk);
         let plan = base.plan().downcast_ref::<P>().unwrap();
         Self { plan, base }
     }
@@ -800,20 +846,28 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
     }
 
     #[inline(always)]
-    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+    fn trace_object(
+        &mut self,
+        source: ObjectReference,
+        object: ObjectReference,
+    ) -> ObjectReference {
         if object.is_null() {
             return object;
         }
         // We cannot borrow `self` twice in a call, so we extract `worker` as a local variable.
         let worker = self.worker();
-        self.plan
-            .trace_object::<VectorObjectQueue, KIND>(&mut self.base.nodes, object, worker)
+        self.plan.trace_object::<VectorObjectQueue, KIND>(
+            &mut self.base.nodes,
+            source,
+            object,
+            worker,
+        )
     }
 
     #[inline]
-    fn process_edge(&mut self, slot: EdgeOf<Self>) {
+    fn process_edge(&mut self, source: ObjectReference, slot: EdgeOf<Self>) {
         let object = slot.load();
-        let new_object = self.trace_object(object);
+        let new_object = self.trace_object(source, object);
         if P::may_move_objects::<KIND>() {
             slot.store(new_object);
         }

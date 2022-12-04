@@ -1,13 +1,19 @@
 //! Read/Write barrier implementations.
 
+use std::marker::PhantomData;
+
+use crate::util::public_bit::{is_public, set_public_bit};
 use crate::vm::edge_shape::{Edge, MemorySlice};
 use crate::vm::ObjectModel;
 use crate::{
     util::{metadata::MetadataSpec, *},
     vm::VMBinding,
+    vm::Scanning;
 };
 use atomic::Ordering;
 use downcast_rs::Downcast;
+
+use super::tracing::PublicObjectMarkingClosure;
 
 /// BarrierSelector describes which barrier to use.
 ///
@@ -219,5 +225,76 @@ impl<S: BarrierSemantics> Barrier<S::VM> for ObjectBarrier<S> {
         dst: <S::VM as VMBinding>::VMMemorySlice,
     ) {
         self.semantics.memory_region_copy_slow(src, dst);
+    }
+}
+
+pub struct PublicObjectMarkingBarrier<S: BarrierSemantics> {
+    semantics: S,
+}
+
+impl<S: BarrierSemantics> PublicObjectMarkingBarrier<S> {
+    pub fn new(semantics: S) -> Self {
+        Self { semantics }
+    }
+}
+
+impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
+    #[inline(always)]
+    fn object_reference_write_pre(
+        &mut self,
+        src: ObjectReference,
+        slot: <S::VM as VMBinding>::VMEdge,
+        target: ObjectReference,
+    ) {
+        // only a store to a public object may require a trace
+        if is_public(src) {
+            self.object_reference_write_slow(src, slot, target);
+        }
+    }
+
+    #[inline(always)]
+    fn object_reference_write_slow(
+        &mut self,
+        src: ObjectReference,
+        slot: <S::VM as VMBinding>::VMEdge,
+        target: ObjectReference,
+    ) {
+        // trace only when it is a store from private to public
+        if !is_public(target) {
+            self.semantics
+                .object_reference_write_slow(src, slot, target);
+        }
+    }
+
+    #[inline(always)]
+    fn memory_region_copy_post(
+        &mut self,
+        src: <S::VM as VMBinding>::VMMemorySlice,
+        dst: <S::VM as VMBinding>::VMMemorySlice,
+    ) {
+        self.semantics.memory_region_copy_slow(src, dst);
+    }
+}
+
+pub struct PublicObjectMarkingBarrierSemantics<VM: VMBinding> {
+    _request_active: bool,
+    phantom: PhantomData<VM>,
+    // public_objects_accessed: std::collections::HashSet<ObjectReference>,
+}
+
+impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
+    pub fn new() -> Self {
+        Self {
+            _request_active: false,
+            phantom: PhantomData,
+        }
+    }
+
+    fn trace_public_object(&mut self, object: ObjectReference, value: ObjectReference) {
+        let mut closure = PublicObjectMarkingClosure::<VM>::new();
+        set_public_bit(value, false);
+        // println!("public allocation site: {} ", allocation_site);
+        VM::VMScanning::scan_object(VMWorkerThread(VMThread::UNINITIALIZED), value, &mut closure);
+        closure.do_closure();
     }
 }

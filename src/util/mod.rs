@@ -66,6 +66,8 @@ pub(crate) mod test_util;
 /// A treadmill implementation.
 pub(crate) mod treadmill;
 
+pub(crate) mod public_bit;
+
 // These modules are private. They are only used by other util modules.
 
 /// A very simple, generic malloc-free allocator

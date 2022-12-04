@@ -4,7 +4,9 @@
 use crate::scheduler::gc_work::{EdgeOf, ProcessEdgesWork};
 use crate::scheduler::{GCWorker, WorkBucketStage};
 use crate::util::ObjectReference;
+use crate::vm::edge_shape::Edge;
 use crate::vm::EdgeVisitor;
+use crate::vm::Scanning;
 
 /// This trait represents an object queue to enqueue objects during tracing.
 pub trait ObjectQueue {
@@ -113,5 +115,52 @@ impl<'a, E: ProcessEdgesWork> Drop for ObjectsClosure<'a, E> {
     #[inline(always)]
     fn drop(&mut self) {
         self.flush();
+    }
+}
+
+pub struct PublicObjectMarkingClosure<VM: crate::vm::VMBinding> {
+    edge_buffer: std::collections::VecDeque<VM::VMEdge>,
+}
+
+impl<VM: crate::vm::VMBinding> PublicObjectMarkingClosure<VM> {
+    pub fn new() -> Self {
+        PublicObjectMarkingClosure {
+            edge_buffer: std::collections::VecDeque::new(),
+        }
+    }
+
+    pub fn do_closure(&mut self) {
+        while !self.edge_buffer.is_empty() {
+            let slot = self.edge_buffer.pop_front().unwrap();
+            let object = slot.load();
+            if object.is_null() {
+                continue;
+            }
+            if !crate::util::public_bit::is_public(object) {
+                // set public bit on the object
+                crate::util::public_bit::set_public_bit(object, false);
+                VM::VMScanning::scan_object(
+                    crate::util::VMWorkerThread(crate::util::VMThread::UNINITIALIZED),
+                    object,
+                    self,
+                );
+            }
+        }
+    }
+}
+
+impl<VM: crate::vm::VMBinding> EdgeVisitor<VM::VMEdge> for PublicObjectMarkingClosure<VM> {
+    fn visit_edge(&mut self, edge: VM::VMEdge) {
+        self.edge_buffer.push_back(edge);
+    }
+}
+
+impl<VM: crate::vm::VMBinding> Drop for PublicObjectMarkingClosure<VM> {
+    #[inline(always)]
+    fn drop(&mut self) {
+        assert!(
+            self.edge_buffer.is_empty(),
+            "There are edges left over. Closure is not done correctly."
+        );
     }
 }

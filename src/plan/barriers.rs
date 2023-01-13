@@ -7,8 +7,8 @@ use crate::vm::edge_shape::{Edge, MemorySlice};
 use crate::vm::ObjectModel;
 use crate::{
     util::{metadata::MetadataSpec, *},
+    vm::Scanning,
     vm::VMBinding,
-    vm::Scanning;
 };
 use atomic::Ordering;
 use downcast_rs::Downcast;
@@ -25,6 +25,7 @@ use super::tracing::PublicObjectMarkingClosure;
 pub enum BarrierSelector {
     NoBarrier,
     ObjectBarrier,
+    PublicObjectMarkingBarrier,
 }
 
 impl BarrierSelector {
@@ -246,8 +247,8 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
         slot: <S::VM as VMBinding>::VMEdge,
         target: ObjectReference,
     ) {
-        // only a store to a public object may require a trace
-        if is_public(src) {
+        // only store private to a public object
+        if is_public(src) && !is_public(target) {
             self.object_reference_write_slow(src, slot, target);
         }
     }
@@ -259,11 +260,8 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
         slot: <S::VM as VMBinding>::VMEdge,
         target: ObjectReference,
     ) {
-        // trace only when it is a store from private to public
-        if !is_public(target) {
-            self.semantics
-                .object_reference_write_slow(src, slot, target);
-        }
+        self.semantics
+            .object_reference_write_slow(src, slot, target);
     }
 
     #[inline(always)]
@@ -279,7 +277,6 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
 pub struct PublicObjectMarkingBarrierSemantics<VM: VMBinding> {
     _request_active: bool,
     phantom: PhantomData<VM>,
-    // public_objects_accessed: std::collections::HashSet<ObjectReference>,
 }
 
 impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
@@ -297,4 +294,21 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
         VM::VMScanning::scan_object(VMWorkerThread(VMThread::UNINITIALIZED), value, &mut closure);
         closure.do_closure();
     }
+}
+
+impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM> {
+    type VM = VM;
+
+    fn object_reference_write_slow(
+        &mut self,
+        src: ObjectReference,
+        _slot: VM::VMEdge,
+        target: ObjectReference,
+    ) {
+        self.trace_public_object(src, target)
+    }
+
+    fn flush(&mut self) {}
+
+    fn memory_region_copy_slow(&mut self, _src: VM::VMMemorySlice, _dst: VM::VMMemorySlice) {}
 }

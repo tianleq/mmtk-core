@@ -1,4 +1,5 @@
 use super::Immix;
+use crate::plan::barriers::{PublicObjectMarkingBarrier, PublicObjectMarkingBarrierSemantics};
 use crate::plan::mutator_context::create_allocator_mapping;
 use crate::plan::mutator_context::create_space_mapping;
 use crate::plan::mutator_context::Mutator;
@@ -68,7 +69,9 @@ pub fn create_immix_mutator<VM: VMBinding>(
 
     Mutator {
         allocators: Allocators::<VM>::new(mutator_tls, plan, &config.space_mapping),
-        barrier: Box::new(NoBarrier),
+        barrier: Box::new(PublicObjectMarkingBarrier::new(
+            PublicObjectMarkingBarrierSemantics::new(),
+        )),
         mutator_tls,
         config,
         plan,

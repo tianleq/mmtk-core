@@ -1,3 +1,5 @@
+use atomic_traits::fetch::Add;
+
 #[cfg(target_pointer_width = "32")]
 use crate::util::heap::layout::vm_layout_constants::BYTES_IN_CHUNK;
 use crate::util::heap::layout::vm_layout_constants::LOG_ADDRESS_SPACE;
@@ -31,6 +33,7 @@ pub(crate) const GLOBAL_SIDE_METADATA_BASE_OFFSET: SideMetadataOffset =
 
 // Base address of alloc bit, public to VM bindings which may need to use this.
 pub const ALLOC_SIDE_METADATA_ADDR: Address = crate::util::alloc_bit::ALLOC_SIDE_METADATA_ADDR;
+pub const PUBLIC_SIDE_METADATA_ADDR: Address = crate::util::public_bit::PUBLIC_SIDE_METADATA_ADDR;
 
 /// This constant represents the worst-case ratio of source data size to global side metadata.
 /// A value of 2 means the space required for global side metadata must be less than 1/4th of the source data.

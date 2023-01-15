@@ -484,7 +484,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             } else {
                 #[cfg(feature = "global_alloc_bit")]
                 crate::util::alloc_bit::unset_alloc_bit(object);
-                ForwardingWord::forward_object::<VM>(object, semantics, copy_context)
+                let new_object =
+                    ForwardingWord::forward_object::<VM>(object, semantics, copy_context);
+                if crate::util::public_bit::is_public(object) {
+                    crate::util::public_bit::set_public_bit(new_object, false);
+                    crate::util::public_bit::unset_public_bit(object);
+                }
+
+                new_object
             };
             debug_assert_eq!(
                 Block::containing::<VM>(new_object).get_state(),

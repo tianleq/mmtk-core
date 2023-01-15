@@ -17,6 +17,20 @@ pub fn set_public_bit(object: ObjectReference, force: bool) {
     PUBLIC_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_address(), 1, Ordering::SeqCst);
 }
 
+pub fn unset_addr_public_bit(address: Address) {
+    debug_assert!(
+        is_public_object(address),
+        "{:x}: alloc bit not set",
+        address
+    );
+    PUBLIC_SIDE_METADATA_SPEC.store_atomic::<u8>(address, 0, Ordering::SeqCst);
+}
+
+pub fn unset_public_bit(object: ObjectReference) {
+    debug_assert!(is_public(object), "{:x}: alloc bit not set", object);
+    PUBLIC_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_address(), 0, Ordering::SeqCst);
+}
+
 pub fn is_public(object: ObjectReference) -> bool {
     is_public_object(object.to_address())
 }

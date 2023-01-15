@@ -1,5 +1,3 @@
-use atomic_traits::fetch::Add;
-
 #[cfg(target_pointer_width = "32")]
 use crate::util::heap::layout::vm_layout_constants::BYTES_IN_CHUNK;
 use crate::util::heap::layout::vm_layout_constants::LOG_ADDRESS_SPACE;

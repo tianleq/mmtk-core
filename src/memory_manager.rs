@@ -851,3 +851,7 @@ pub fn add_work_packets<VM: VMBinding>(
 pub fn on_closure_end<VM: VMBinding>(mmtk: &'static MMTK<VM>, f: Box<dyn Send + Fn() -> bool>) {
     mmtk.scheduler.on_closure_end(f)
 }
+
+pub fn mmtk_set_public_bit(object: ObjectReference, force: bool) {
+    crate::util::public_bit::set_public_bit(object, force);
+}

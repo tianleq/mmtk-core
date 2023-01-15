@@ -260,6 +260,8 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
         slot: <S::VM as VMBinding>::VMEdge,
         target: ObjectReference,
     ) {
+        debug_assert!(is_public(src), "src object is not public");
+        debug_assert!(!is_public(target), "target object is not private");
         self.semantics
             .object_reference_write_slow(src, slot, target);
     }
@@ -276,21 +278,20 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
 
 pub struct PublicObjectMarkingBarrierSemantics<VM: VMBinding> {
     _request_active: bool,
-    phantom: PhantomData<VM>,
+    _phantom: PhantomData<VM>,
 }
 
 impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
     pub fn new() -> Self {
         Self {
             _request_active: false,
-            phantom: PhantomData,
+            _phantom: PhantomData,
         }
     }
 
-    fn trace_public_object(&mut self, object: ObjectReference, value: ObjectReference) {
+    fn trace_public_object(&mut self, _src: ObjectReference, value: ObjectReference) {
         let mut closure = PublicObjectMarkingClosure::<VM>::new();
         set_public_bit(value, false);
-        // println!("public allocation site: {} ", allocation_site);
         VM::VMScanning::scan_object(VMWorkerThread(VMThread::UNINITIALIZED), value, &mut closure);
         closure.do_closure();
     }

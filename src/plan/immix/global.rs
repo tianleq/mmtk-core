@@ -1,5 +1,6 @@
 use super::gc_work::ImmixGCWorkContext;
 use super::mutator::ALLOCATOR_MAPPING;
+use crate::plan::barriers::BarrierSelector;
 use crate::plan::global::BasePlan;
 use crate::plan::global::CommonPlan;
 use crate::plan::global::GcStatus;
@@ -44,6 +45,7 @@ pub const IMMIX_CONSTRAINTS: PlanConstraints = PlanConstraints {
     num_specialized_scans: 1,
     /// Max immix object size is half of a block.
     max_non_los_default_alloc_bytes: crate::policy::immix::MAX_IMMIX_OBJECT_SIZE,
+    barrier: BarrierSelector::PublicObjectMarkingBarrier,
     ..PlanConstraints::default()
 };
 

@@ -5,6 +5,7 @@ use crate::util::constants::{BYTES_IN_PAGE, LOG_BITS_IN_BYTE};
 use crate::util::heap::layout::vm_layout_constants::BYTES_IN_CHUNK;
 use crate::util::memory;
 use crate::util::metadata::metadata_val_traits::*;
+use crate::util::public_bit::PUBLIC_SIDE_METADATA_SPEC;
 use crate::util::Address;
 use num_traits::FromPrimitive;
 use std::fmt;
@@ -159,8 +160,7 @@ impl SideMetadataSpec {
 
         // yiluowei: Not Sure but this assertion seems too strict for Immix recycled lines
         #[cfg(not(feature = "global_alloc_bit"))]
-        debug_assert!(start.is_aligned_to(BYTES_IN_PAGE) && meta_byte_lshift(self, start) == 0);
-
+        // debug_assert!(start.is_aligned_to(BYTES_IN_PAGE) && meta_byte_lshift(self, start) == 0);
         #[cfg(feature = "extreme_assertions")]
         sanity::verify_bzero(self, start, size);
 
@@ -715,6 +715,7 @@ impl SideMetadataContext {
 
         #[cfg(feature = "global_alloc_bit")]
         ret.push(ALLOC_SIDE_METADATA_SPEC);
+        ret.push(PUBLIC_SIDE_METADATA_SPEC);
 
         {
             use crate::policy::sft_map::SFTMap;

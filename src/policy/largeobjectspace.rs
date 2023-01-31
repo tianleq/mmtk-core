@@ -236,6 +236,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                 // println!("- cn {}", cell);
                 #[cfg(feature = "global_alloc_bit")]
                 crate::util::alloc_bit::unset_addr_alloc_bit(cell);
+                crate::util::public_bit::unset_addr_public_bit(cell);
                 self.pr.release_pages(get_super_page(cell));
             }
         } else {
@@ -243,6 +244,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                 // println!("- ts {}", cell);
                 #[cfg(feature = "global_alloc_bit")]
                 crate::util::alloc_bit::unset_addr_alloc_bit(cell);
+                crate::util::public_bit::unset_addr_public_bit(cell);
                 self.pr.release_pages(get_super_page(cell));
             }
         }

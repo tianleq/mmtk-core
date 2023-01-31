@@ -83,10 +83,20 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
             );
             if size > Line::BYTES {
                 // Size larger than a line: do large allocation
-                self.overflow_alloc(size, align, offset)
+                let rtn = self.overflow_alloc(size, align, offset);
+                debug_assert!(
+                    !crate::util::public_bit::is_public_object(rtn),
+                    "public bit is not cleared properly"
+                );
+                rtn
             } else {
                 // Size smaller than a line: fit into holes
-                self.alloc_slow_hot(size, align, offset)
+                let rtn = self.alloc_slow_hot(size, align, offset);
+                debug_assert!(
+                    !crate::util::public_bit::is_public_object(rtn),
+                    "public bit is not cleared properly"
+                );
+                rtn
             }
         } else {
             // Simple bump allocation.
@@ -99,6 +109,10 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
                 result,
                 self.cursor,
                 self.limit
+            );
+            debug_assert!(
+                !crate::util::public_bit::is_public_object(result),
+                "public bit is not cleared properly"
             );
             result
         }
@@ -205,6 +219,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             self.request_for_large = true;
             let rtn = self.alloc_slow_inline(size, align, offset);
             self.request_for_large = false;
+
             rtn
         } else {
             fill_alignment_gap::<VM>(self.large_cursor, start);

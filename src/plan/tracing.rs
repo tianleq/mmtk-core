@@ -118,13 +118,13 @@ impl<'a, E: ProcessEdgesWork> Drop for ObjectsClosure<'a, E> {
     }
 }
 
-pub struct PublicObjectMarkingClosure<VM: crate::vm::VMBinding> {
+pub struct MarkingObjectPublicClosure<VM: crate::vm::VMBinding> {
     edge_buffer: std::collections::VecDeque<VM::VMEdge>,
 }
 
-impl<VM: crate::vm::VMBinding> PublicObjectMarkingClosure<VM> {
+impl<VM: crate::vm::VMBinding> MarkingObjectPublicClosure<VM> {
     pub fn new() -> Self {
-        PublicObjectMarkingClosure {
+        MarkingObjectPublicClosure {
             edge_buffer: std::collections::VecDeque::new(),
         }
     }
@@ -149,13 +149,13 @@ impl<VM: crate::vm::VMBinding> PublicObjectMarkingClosure<VM> {
     }
 }
 
-impl<VM: crate::vm::VMBinding> EdgeVisitor<VM::VMEdge> for PublicObjectMarkingClosure<VM> {
+impl<VM: crate::vm::VMBinding> EdgeVisitor<VM::VMEdge> for MarkingObjectPublicClosure<VM> {
     fn visit_edge(&mut self, edge: VM::VMEdge) {
         self.edge_buffer.push_back(edge);
     }
 }
 
-impl<VM: crate::vm::VMBinding> Drop for PublicObjectMarkingClosure<VM> {
+impl<VM: crate::vm::VMBinding> Drop for MarkingObjectPublicClosure<VM> {
     #[inline(always)]
     fn drop(&mut self) {
         assert!(

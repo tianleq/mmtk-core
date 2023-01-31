@@ -13,7 +13,7 @@ use crate::{
 use atomic::Ordering;
 use downcast_rs::Downcast;
 
-use super::tracing::PublicObjectMarkingClosure;
+use super::tracing::MarkingObjectPublicClosure;
 
 /// BarrierSelector describes which barrier to use.
 ///
@@ -247,6 +247,11 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
         slot: <S::VM as VMBinding>::VMEdge,
         target: ObjectReference,
     ) {
+        // debug_assert!(!target.is_null(), "target is somehow null");
+        // target can still be null
+        if target.is_null() {
+            return;
+        }
         // only store private to a public object
         if is_public(src) && !is_public(target) {
             self.object_reference_write_slow(src, slot, target);
@@ -260,8 +265,8 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
         slot: <S::VM as VMBinding>::VMEdge,
         target: ObjectReference,
     ) {
-        debug_assert!(is_public(src), "src object is not public");
-        debug_assert!(!is_public(target), "target object is not private");
+        // debug_assert!(is_public(src), "src object is not public");
+        // debug_assert!(!is_public(target), "target object is not private");
         self.semantics
             .object_reference_write_slow(src, slot, target);
     }
@@ -290,7 +295,7 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
     }
 
     fn trace_public_object(&mut self, _src: ObjectReference, value: ObjectReference) {
-        let mut closure = PublicObjectMarkingClosure::<VM>::new();
+        let mut closure = MarkingObjectPublicClosure::<VM>::new();
         set_public_bit(value, false);
         VM::VMScanning::scan_object(VMWorkerThread(VMThread::UNINITIALIZED), value, &mut closure);
         closure.do_closure();

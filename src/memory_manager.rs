@@ -25,6 +25,7 @@ use crate::util::opaque_pointer::*;
 use crate::util::{Address, ObjectReference};
 use crate::vm::edge_shape::MemorySlice;
 use crate::vm::ReferenceGlue;
+use crate::vm::Scanning;
 use crate::vm::VMBinding;
 use std::sync::atomic::Ordering;
 
@@ -854,4 +855,26 @@ pub fn on_closure_end<VM: VMBinding>(mmtk: &'static MMTK<VM>, f: Box<dyn Send + 
 
 pub fn mmtk_set_public_bit(object: ObjectReference, force: bool) {
     crate::util::public_bit::set_public_bit(object, force);
+}
+
+pub fn mmtk_publish_object<VM: VMBinding>(object: ObjectReference) {
+    if object.is_null() || crate::util::public_bit::is_public(object) {
+        return;
+    };
+    let mut closure = crate::plan::MarkingObjectPublicClosure::<VM>::new();
+    crate::util::public_bit::set_public_bit(object, false);
+    VM::VMScanning::scan_object(
+        VMWorkerThread(VMThread::UNINITIALIZED),
+        object,
+        &mut closure,
+    );
+    closure.do_closure();
+}
+
+pub fn mmtk_is_object_published<VM: VMBinding>(object: ObjectReference) -> bool {
+    if object.is_null() {
+        false
+    } else {
+        crate::util::public_bit::is_public(object)
+    }
 }

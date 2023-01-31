@@ -18,11 +18,12 @@ pub fn set_public_bit(object: ObjectReference, force: bool) {
 }
 
 pub fn unset_addr_public_bit(address: Address) {
-    debug_assert!(
-        is_public_object(address),
-        "{:x}: alloc bit not set",
-        address
-    );
+    // This assertion is too strict, dead objects are likely not to be public
+    // debug_assert!(
+    //     is_public_object(address),
+    //     "{:x}: alloc bit not set",
+    //     address
+    // );
     PUBLIC_SIDE_METADATA_SPEC.store_atomic::<u8>(address, 0, Ordering::SeqCst);
 }
 

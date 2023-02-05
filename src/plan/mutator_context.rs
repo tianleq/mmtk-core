@@ -7,6 +7,7 @@ use crate::policy::space::Space;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
 use crate::util::{Address, ObjectReference};
 use crate::util::{VMMutatorThread, VMWorkerThread};
+use crate::vm::ActivePlan;
 use crate::vm::VMBinding;
 
 use enum_map::EnumMap;
@@ -71,6 +72,7 @@ pub struct Mutator<VM: VMBinding> {
     pub mutator_tls: VMMutatorThread,
     pub plan: &'static dyn Plan<VM = VM>,
     pub config: MutatorConfig<VM>,
+    pub mutator_id: usize,
 }
 
 impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
@@ -103,12 +105,20 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         _bytes: usize,
         allocator: AllocationSemantics,
     ) {
-        unsafe {
+        let space = unsafe {
             self.allocators
                 .get_allocator_mut(self.config.allocator_mapping[allocator])
         }
-        .get_space()
-        .initialize_object_metadata(refer, true)
+        .get_space();
+        space.initialize_object_metadata(refer, true);
+
+        // set object owner
+        let mutator_id = VM::VMActivePlan::mutator_id(self.mutator_tls);
+        assert!(
+            self.mutator_id == mutator_id,
+            "mutator_id is not set correctly"
+        );
+        space.set_object_owner(refer, mutator_id);
     }
 
     fn get_tls(&self) -> VMMutatorThread {

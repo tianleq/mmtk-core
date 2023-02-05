@@ -57,5 +57,6 @@ pub fn create_pp_mutator<VM: VMBinding>(
         mutator_tls,
         config,
         plan,
+        mutator_id: 0,
     }
 }

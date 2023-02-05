@@ -1,5 +1,7 @@
 use super::SemiSpace;
-use crate::plan::barriers::NoBarrier;
+// use crate::plan::barriers::NoBarrier;
+use crate::plan::barriers::PublicObjectMarkingBarrier;
+use crate::plan::barriers::PublicObjectMarkingWithAssertBarrierSemantics;
 use crate::plan::mutator_context::Mutator;
 use crate::plan::mutator_context::MutatorConfig;
 use crate::plan::mutator_context::{
@@ -8,8 +10,10 @@ use crate::plan::mutator_context::{
 use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
-use crate::util::alloc::BumpAllocator;
+// use crate::util::alloc::BumpAllocator;
+use crate::util::alloc::MarkCompactAllocator;
 use crate::util::{VMMutatorThread, VMWorkerThread};
+use crate::vm::ActivePlan;
 use crate::vm::VMBinding;
 use enum_map::EnumMap;
 
@@ -24,7 +28,8 @@ pub fn ss_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMWork
             .allocators
             .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
     }
-    .downcast_mut::<BumpAllocator<VM>>()
+    // .downcast_mut::<BumpAllocator<VM>>()
+    .downcast_mut::<MarkCompactAllocator<VM>>()
     .unwrap();
     bump_allocator.rebind(
         mutator
@@ -43,7 +48,8 @@ const RESERVED_ALLOCATORS: ReservedAllocators = ReservedAllocators {
 lazy_static! {
     pub static ref ALLOCATOR_MAPPING: EnumMap<AllocationSemantics, AllocatorSelector> = {
         let mut map = create_allocator_mapping(RESERVED_ALLOCATORS, true);
-        map[AllocationSemantics::Default] = AllocatorSelector::BumpPointer(0);
+        // map[AllocationSemantics::Default] = AllocatorSelector::BumpPointer(0);
+        map[AllocationSemantics::Default] = AllocatorSelector::MarkCompact(0);
         map
     };
 }
@@ -57,18 +63,23 @@ pub fn create_ss_mutator<VM: VMBinding>(
         allocator_mapping: &*ALLOCATOR_MAPPING,
         space_mapping: Box::new({
             let mut vec = create_space_mapping(RESERVED_ALLOCATORS, true, plan);
-            vec.push((AllocatorSelector::BumpPointer(0), ss.tospace()));
+            // vec.push((AllocatorSelector::BumpPointer(0), ss.tospace()));
+            vec.push((AllocatorSelector::MarkCompact(0), ss.tospace()));
             vec
         }),
         prepare_func: &ss_mutator_prepare,
         release_func: &ss_mutator_release,
     };
-
+    let mutator_id = VM::VMActivePlan::mutator_id(mutator_tls);
     Mutator {
         allocators: Allocators::<VM>::new(mutator_tls, plan, &config.space_mapping),
-        barrier: Box::new(NoBarrier),
+        // barrier: Box::new(NoBarrier),
+        barrier: Box::new(PublicObjectMarkingBarrier::new(
+            PublicObjectMarkingWithAssertBarrierSemantics::new(mutator_tls),
+        )),
         mutator_tls,
         config,
         plan,
+        mutator_id,
     }
 }

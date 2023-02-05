@@ -2,11 +2,13 @@
 
 use std::marker::PhantomData;
 
+use crate::plan::tracing::MarkingObjectPublicWithAssertClosure;
 use crate::util::public_bit::{is_public, set_public_bit};
 use crate::vm::edge_shape::{Edge, MemorySlice};
 use crate::vm::ObjectModel;
 use crate::{
     util::{metadata::MetadataSpec, *},
+    vm::ActivePlan,
     vm::Scanning,
     vm::VMBinding,
 };
@@ -303,6 +305,52 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
 }
 
 impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM> {
+    type VM = VM;
+
+    fn object_reference_write_slow(
+        &mut self,
+        src: ObjectReference,
+        _slot: VM::VMEdge,
+        target: ObjectReference,
+    ) {
+        self.trace_public_object(src, target)
+    }
+
+    fn flush(&mut self) {}
+
+    fn memory_region_copy_slow(&mut self, _src: VM::VMMemorySlice, _dst: VM::VMMemorySlice) {}
+}
+
+pub struct PublicObjectMarkingWithAssertBarrierSemantics<VM: VMBinding> {
+    mutator_tls: VMMutatorThread,
+    _phantom: PhantomData<VM>,
+}
+
+impl<VM: VMBinding> PublicObjectMarkingWithAssertBarrierSemantics<VM> {
+    pub fn new(mutator_tls: VMMutatorThread) -> Self {
+        Self {
+            mutator_tls,
+            _phantom: PhantomData,
+        }
+    }
+
+    fn trace_public_object(&mut self, _src: ObjectReference, value: ObjectReference) {
+        let mutator_id = VM::VMActivePlan::mutator_id(self.mutator_tls);
+        let mut closure = MarkingObjectPublicWithAssertClosure::<VM>::new(mutator_id);
+        assert!(
+            mutator_id == crate::util::object_owner::get_header_object_owner::<VM>(value),
+            "public object {:?} escaped, mutator_id: {} <--> {}",
+            value,
+            mutator_id,
+            crate::util::object_owner::get_header_object_owner::<VM>(value)
+        );
+        set_public_bit(value, false);
+        VM::VMScanning::scan_object(VMWorkerThread(VMThread::UNINITIALIZED), value, &mut closure);
+        closure.do_closure();
+    }
+}
+
+impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingWithAssertBarrierSemantics<VM> {
     type VM = VM;
 
     fn object_reference_write_slow(

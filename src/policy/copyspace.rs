@@ -73,6 +73,10 @@ impl<VM: VMBinding> SFT for CopySpace<VM> {
         let worker = worker.into_mut::<VM>();
         self.trace_object(queue, object, self.common.copy, worker)
     }
+
+    fn set_object_owner(&self, object: ObjectReference, owner: usize) {
+        crate::util::object_owner::set_header_object_owner::<VM>(object, owner)
+    }
 }
 
 impl<VM: VMBinding> Space<VM> for CopySpace<VM> {
@@ -184,6 +188,7 @@ impl<VM: VMBinding> CopySpace<VM> {
         unsafe {
             #[cfg(feature = "global_alloc_bit")]
             self.reset_alloc_bit();
+            self.reset_public_bit();
             self.pr.reset();
         }
         self.common.metadata.reset();
@@ -201,6 +206,19 @@ impl<VM: VMBinding> CopySpace<VM> {
                     current_chunk + BYTES_IN_CHUNK - self.common.start,
                 );
             }
+        } else {
+            unimplemented!();
+        }
+    }
+
+    unsafe fn reset_public_bit(&self) {
+        let current_chunk = self.pr.get_current_chunk();
+        if self.common.contiguous {
+            crate::util::public_bit::bzero_public_bit(
+                self.common.start,
+                current_chunk + crate::util::heap::layout::vm_layout_constants::BYTES_IN_CHUNK
+                    - self.common.start,
+            );
         } else {
             unimplemented!();
         }
@@ -253,6 +271,14 @@ impl<VM: VMBinding> CopySpace<VM> {
                 semantics.unwrap(),
                 worker.get_copy_context_mut(),
             );
+            // public bit begin
+            if crate::util::public_bit::is_public(object) {
+                crate::util::public_bit::set_public_bit(new_object, false);
+            }
+            let owner = crate::util::object_owner::get_header_object_owner::<VM>(object);
+            crate::util::object_owner::set_header_object_owner::<VM>(new_object, owner);
+            // public bit end
+
             trace!("Forwarding pointer");
             queue.enqueue(new_object);
             trace!("Copied [{:?} -> {:?}]", object, new_object);
@@ -297,12 +323,13 @@ impl<VM: VMBinding> CopySpace<VM> {
 
 use crate::plan::Plan;
 use crate::util::alloc::Allocator;
-use crate::util::alloc::BumpAllocator;
+// use crate::util::alloc::BumpAllocator;
+use crate::util::alloc::MarkCompactAllocator;
 use crate::util::opaque_pointer::VMWorkerThread;
 
 /// Copy allocator for CopySpace
 pub struct CopySpaceCopyContext<VM: VMBinding> {
-    copy_allocator: BumpAllocator<VM>,
+    copy_allocator: MarkCompactAllocator<VM>,
 }
 
 impl<VM: VMBinding> PolicyCopyContext for CopySpaceCopyContext<VM> {
@@ -331,7 +358,7 @@ impl<VM: VMBinding> CopySpaceCopyContext<VM> {
         tospace: &'static CopySpace<VM>,
     ) -> Self {
         CopySpaceCopyContext {
-            copy_allocator: BumpAllocator::new(tls.0, tospace, plan),
+            copy_allocator: MarkCompactAllocator::new(tls.0, tospace, plan),
         }
     }
 }

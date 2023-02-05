@@ -9,11 +9,8 @@ pub(crate) const PUBLIC_SIDE_METADATA_SPEC: SideMetadataSpec =
 
 pub const PUBLIC_SIDE_METADATA_ADDR: Address = PUBLIC_SIDE_METADATA_SPEC.get_absolute_offset();
 
-pub fn set_public_bit(object: ObjectReference, force: bool) {
-    if !force {
-        assert!(!is_public(object), "{:x}: public bit already set", object,);
-    }
-
+pub fn set_public_bit(object: ObjectReference, _assert: bool) {
+    assert!(!is_public(object), "{:x}: public bit already set", object,);
     PUBLIC_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_address(), 1, Ordering::SeqCst);
 }
 

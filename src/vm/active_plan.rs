@@ -69,6 +69,15 @@ pub trait ActivePlan<VM: VMBinding> {
         }
     }
 
+    /// Return the mutator thread id.
+    ///
+    /// Arguments:
+    /// * `tls`: The thread to query.
+    ///
+    /// # Safety
+    /// The caller needs to make sure that the thread is a mutator thread.
+    fn mutator_id(tls: VMMutatorThread) -> usize;
+
     /// Return the total count of mutators.
     fn number_of_mutators() -> usize;
 

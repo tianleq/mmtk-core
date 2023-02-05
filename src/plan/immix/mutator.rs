@@ -72,5 +72,6 @@ pub fn create_immix_mutator<VM: VMBinding>(
         mutator_tls,
         config,
         plan,
+        mutator_id: 0,
     }
 }

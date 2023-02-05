@@ -68,6 +68,8 @@ pub(crate) mod treadmill;
 
 pub(crate) mod public_bit;
 
+pub(crate) mod object_owner;
+
 // These modules are private. They are only used by other util modules.
 
 /// A very simple, generic malloc-free allocator

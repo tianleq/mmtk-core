@@ -164,3 +164,60 @@ impl<VM: crate::vm::VMBinding> Drop for MarkingObjectPublicClosure<VM> {
         );
     }
 }
+
+pub struct MarkingObjectPublicWithAssertClosure<VM: crate::vm::VMBinding> {
+    edge_buffer: std::collections::VecDeque<VM::VMEdge>,
+    mutator_id: usize,
+}
+
+impl<VM: crate::vm::VMBinding> MarkingObjectPublicWithAssertClosure<VM> {
+    pub fn new(mutator_id: usize) -> Self {
+        MarkingObjectPublicWithAssertClosure {
+            edge_buffer: std::collections::VecDeque::new(),
+            mutator_id,
+        }
+    }
+
+    pub fn do_closure(&mut self) {
+        while !self.edge_buffer.is_empty() {
+            let slot = self.edge_buffer.pop_front().unwrap();
+            let object = slot.load();
+            if object.is_null() {
+                continue;
+            }
+            if !crate::util::public_bit::is_public(object) {
+                assert!(
+                    crate::util::object_owner::get_header_object_owner::<VM>(object)
+                        == self.mutator_id,
+                    "public object {:?} escaped",
+                    object
+                );
+                // set public bit on the object
+                crate::util::public_bit::set_public_bit(object, false);
+                VM::VMScanning::scan_object(
+                    crate::util::VMWorkerThread(crate::util::VMThread::UNINITIALIZED),
+                    object,
+                    self,
+                );
+            }
+        }
+    }
+}
+
+impl<VM: crate::vm::VMBinding> EdgeVisitor<VM::VMEdge>
+    for MarkingObjectPublicWithAssertClosure<VM>
+{
+    fn visit_edge(&mut self, edge: VM::VMEdge) {
+        self.edge_buffer.push_back(edge);
+    }
+}
+
+impl<VM: crate::vm::VMBinding> Drop for MarkingObjectPublicWithAssertClosure<VM> {
+    #[inline(always)]
+    fn drop(&mut self) {
+        assert!(
+            self.edge_buffer.is_empty(),
+            "There are edges left over. Closure is not done correctly."
+        );
+    }
+}

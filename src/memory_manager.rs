@@ -857,7 +857,7 @@ pub fn mmtk_set_public_bit(object: ObjectReference, force: bool) {
     crate::util::public_bit::set_public_bit(object, force);
 }
 
-pub fn mmtk_publish_object<VM: VMBinding>(object: ObjectReference) {
+pub fn mmtk_publish_object<VM: VMBinding>(_tls: VMMutatorThread, object: ObjectReference) {
     if object.is_null() || crate::util::public_bit::is_public(object) {
         return;
     };

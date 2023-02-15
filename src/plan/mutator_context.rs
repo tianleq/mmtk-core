@@ -72,7 +72,20 @@ pub struct Mutator<VM: VMBinding> {
     pub mutator_tls: VMMutatorThread,
     pub plan: &'static dyn Plan<VM = VM>,
     pub config: MutatorConfig<VM>,
-    pub mutator_id: usize,
+    pub native_thread_id: usize,
+    pub mutator_id: u32,
+    pub in_request: bool,
+    pub request_id: u32,
+    pub request_scope_object_size: usize,
+    pub request_scope_object_counter: u32,
+    pub request_scope_public_object_size: usize,
+    pub request_scope_public_object_counter: u32,
+    pub request_scope_live_public_object_size: usize,
+    pub request_scope_live_public_object_counter: u32,
+    pub request_scope_live_private_object_size: usize,
+    pub request_scope_live_private_object_counter: u32,
+    pub request_scope_write_barrier_counter: u32,
+    pub request_scope_write_barrier_slowpath_counter: u32,
 }
 
 impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
@@ -113,12 +126,18 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         space.initialize_object_metadata(refer, true);
 
         // set object owner
-        let mutator_id = VM::VMActivePlan::mutator_id(self.mutator_tls);
+        let mutator = VM::VMActivePlan::mutator(self.mutator_tls);
+        let native_thread_id = VM::VMActivePlan::native_thread_id(self.mutator_tls);
         assert!(
-            self.mutator_id == mutator_id,
-            "mutator_id is not set correctly"
+            self.native_thread_id == native_thread_id,
+            "native threawd id is not set correctly"
         );
-        space.set_object_owner(refer, mutator_id);
+        space.set_object_owner(refer, self.mutator_id);
+        if self.in_request {
+            space.set_object_request_id(refer, self.request_id);
+            mutator.request_scope_object_counter += 1;
+            mutator.request_scope_object_size += _bytes;
+        }
     }
 
     fn get_tls(&self) -> VMMutatorThread {

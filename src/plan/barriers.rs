@@ -4,6 +4,7 @@ use std::marker::PhantomData;
 
 use crate::plan::tracing::MarkingObjectPublicWithAssertClosure;
 use crate::util::public_bit::{is_public, set_public_bit};
+use crate::util::request_statistics::Statistics;
 use crate::vm::edge_shape::{Edge, MemorySlice};
 use crate::vm::ObjectModel;
 use crate::{
@@ -103,6 +104,14 @@ pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
 
     /// Full post-barrier for array copy
     fn memory_region_copy_post(&mut self, _src: VM::VMMemorySlice, _dst: VM::VMMemorySlice) {}
+
+    fn reset_statistics(&mut self) {}
+
+    fn update_statistics(&mut self, _s: Statistics) {}
+
+    fn report_statistics(&self) -> Statistics {
+        Statistics::new(0, 0)
+    }
 }
 
 impl_downcast!(Barrier<VM> where VM: VMBinding);
@@ -145,6 +154,16 @@ pub trait BarrierSemantics: 'static + Send {
         src: <Self::VM as VMBinding>::VMMemorySlice,
         dst: <Self::VM as VMBinding>::VMMemorySlice,
     );
+
+    fn current_mutator(&self) -> VMMutatorThread {
+        VMMutatorThread(VMThread::UNINITIALIZED)
+    }
+
+    fn report_statistics(&self) -> (u32, usize) {
+        (0, 0)
+    }
+
+    fn reset_statistics(&mut self) {}
 }
 
 /// Generic object barrier with a type argument defining it's slow-path behaviour.
@@ -233,11 +252,15 @@ impl<S: BarrierSemantics> Barrier<S::VM> for ObjectBarrier<S> {
 
 pub struct PublicObjectMarkingBarrier<S: BarrierSemantics> {
     semantics: S,
+    statistics: Statistics,
 }
 
 impl<S: BarrierSemantics> PublicObjectMarkingBarrier<S> {
     pub fn new(semantics: S) -> Self {
-        Self { semantics }
+        Self {
+            semantics,
+            statistics: Statistics::new(0, 0),
+        }
     }
 }
 
@@ -249,7 +272,10 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
         slot: <S::VM as VMBinding>::VMEdge,
         target: ObjectReference,
     ) {
-        // debug_assert!(!target.is_null(), "target is somehow null");
+        let mutator = <S::VM as VMBinding>::VMActivePlan::mutator(self.semantics.current_mutator());
+        if mutator.in_request {
+            self.statistics.write_barrier_counter += 1;
+        }
         // target can still be null
         if target.is_null() {
             return;
@@ -257,6 +283,12 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
         // only store private to a public object
         if is_public(src) && !is_public(target) {
             self.object_reference_write_slow(src, slot, target);
+            if mutator.in_request {
+                self.statistics.write_barrier_slowpath_counter += 1;
+                let (publish_counter, bytes_published) = self.semantics.report_statistics();
+                self.statistics.write_barrier_publish_counter += publish_counter;
+                self.statistics.write_barrier_publish_bytes += bytes_published;
+            }
         }
     }
 
@@ -280,6 +312,21 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
         dst: <S::VM as VMBinding>::VMMemorySlice,
     ) {
         self.semantics.memory_region_copy_slow(src, dst);
+    }
+
+    fn report_statistics(&self) -> Statistics {
+        self.statistics
+    }
+
+    fn update_statistics(&mut self, s: Statistics) {
+        self.statistics = s;
+    }
+
+    fn reset_statistics(&mut self) {
+        let mutator = <S::VM as VMBinding>::VMActivePlan::mutator(self.semantics.current_mutator());
+        let mutator_id = mutator.mutator_id;
+        let request_id = mutator.request_id;
+        self.statistics.reset(mutator_id, request_id);
     }
 }
 
@@ -324,6 +371,8 @@ impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM>
 pub struct PublicObjectMarkingWithAssertBarrierSemantics<VM: VMBinding> {
     mutator_tls: VMMutatorThread,
     _phantom: PhantomData<VM>,
+    public_object_size: usize,
+    public_object_counter: u32,
 }
 
 impl<VM: VMBinding> PublicObjectMarkingWithAssertBarrierSemantics<VM> {
@@ -331,22 +380,30 @@ impl<VM: VMBinding> PublicObjectMarkingWithAssertBarrierSemantics<VM> {
         Self {
             mutator_tls,
             _phantom: PhantomData,
+            public_object_counter: 0,
+            public_object_size: 0,
         }
     }
 
     fn trace_public_object(&mut self, _src: ObjectReference, value: ObjectReference) {
-        let mutator_id = VM::VMActivePlan::mutator_id(self.mutator_tls);
+        let mutator = VM::VMActivePlan::mutator(self.mutator_tls);
+        let mutator_id = mutator.mutator_id;
         let mut closure = MarkingObjectPublicWithAssertClosure::<VM>::new(mutator_id);
         assert!(
-            mutator_id == crate::util::object_owner::get_header_object_owner::<VM>(value),
+            mutator_id == crate::util::object_metadata::get_header_object_owner::<VM>(value),
             "public object {:?} escaped, mutator_id: {} <--> {}",
             value,
             mutator_id,
-            crate::util::object_owner::get_header_object_owner::<VM>(value)
+            crate::util::object_metadata::get_header_object_owner::<VM>(value)
         );
+
         set_public_bit(value, false);
         VM::VMScanning::scan_object(VMWorkerThread(VMThread::UNINITIALIZED), value, &mut closure);
-        closure.do_closure();
+        let (publish_counter, bytes_published) = closure.do_closure();
+        if mutator.in_request {
+            self.public_object_counter += publish_counter + 1;
+            self.public_object_size += bytes_published + VM::VMObjectModel::get_current_size(value);
+        }
     }
 }
 
@@ -365,4 +422,17 @@ impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingWithAssertBarrierSem
     fn flush(&mut self) {}
 
     fn memory_region_copy_slow(&mut self, _src: VM::VMMemorySlice, _dst: VM::VMMemorySlice) {}
+
+    fn current_mutator(&self) -> VMMutatorThread {
+        self.mutator_tls
+    }
+
+    fn report_statistics(&self) -> (u32, usize) {
+        (self.public_object_counter, self.public_object_size)
+    }
+
+    fn reset_statistics(&mut self) {
+        self.public_object_counter = 0;
+        self.public_object_size = 0;
+    }
 }

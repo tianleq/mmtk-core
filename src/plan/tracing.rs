@@ -6,6 +6,7 @@ use crate::scheduler::{GCWorker, WorkBucketStage};
 use crate::util::ObjectReference;
 use crate::vm::edge_shape::Edge;
 use crate::vm::EdgeVisitor;
+use crate::vm::ObjectModel;
 use crate::vm::Scanning;
 
 /// This trait represents an object queue to enqueue objects during tracing.
@@ -167,18 +168,20 @@ impl<VM: crate::vm::VMBinding> Drop for MarkingObjectPublicClosure<VM> {
 
 pub struct MarkingObjectPublicWithAssertClosure<VM: crate::vm::VMBinding> {
     edge_buffer: std::collections::VecDeque<VM::VMEdge>,
-    mutator_id: usize,
+    mutator_id: u32,
 }
 
 impl<VM: crate::vm::VMBinding> MarkingObjectPublicWithAssertClosure<VM> {
-    pub fn new(mutator_id: usize) -> Self {
+    pub fn new(mutator_id: u32) -> Self {
         MarkingObjectPublicWithAssertClosure {
             edge_buffer: std::collections::VecDeque::new(),
             mutator_id,
         }
     }
 
-    pub fn do_closure(&mut self) {
+    pub fn do_closure(&mut self) -> (u32, usize) {
+        let mut bytes_published = 0;
+        let mut publish_counter = 0;
         while !self.edge_buffer.is_empty() {
             let slot = self.edge_buffer.pop_front().unwrap();
             let object = slot.load();
@@ -187,11 +190,13 @@ impl<VM: crate::vm::VMBinding> MarkingObjectPublicWithAssertClosure<VM> {
             }
             if !crate::util::public_bit::is_public(object) {
                 assert!(
-                    crate::util::object_owner::get_header_object_owner::<VM>(object)
+                    crate::util::object_metadata::get_header_object_owner::<VM>(object)
                         == self.mutator_id,
                     "public object {:?} escaped",
                     object
                 );
+                publish_counter += 1;
+                bytes_published += VM::VMObjectModel::get_current_size(object);
                 // set public bit on the object
                 crate::util::public_bit::set_public_bit(object, false);
                 VM::VMScanning::scan_object(
@@ -201,6 +206,7 @@ impl<VM: crate::vm::VMBinding> MarkingObjectPublicWithAssertClosure<VM> {
                 );
             }
         }
+        (publish_counter, bytes_published)
     }
 }
 

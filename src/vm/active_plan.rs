@@ -76,7 +76,7 @@ pub trait ActivePlan<VM: VMBinding> {
     ///
     /// # Safety
     /// The caller needs to make sure that the thread is a mutator thread.
-    fn mutator_id(tls: VMMutatorThread) -> usize;
+    fn native_thread_id(tls: VMMutatorThread) -> usize;
 
     /// Return the total count of mutators.
     fn number_of_mutators() -> usize;

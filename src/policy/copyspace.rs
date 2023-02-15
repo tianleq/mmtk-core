@@ -5,7 +5,6 @@ use crate::policy::sft::SFT;
 use crate::policy::space::SpaceOptions;
 use crate::policy::space::{CommonSpace, Space};
 use crate::scheduler::GCWorker;
-use crate::util::copy::*;
 use crate::util::heap::layout::heap_layout::{Mmapper, VMMap};
 #[cfg(feature = "global_alloc_bit")]
 use crate::util::heap::layout::vm_layout_constants::BYTES_IN_CHUNK;
@@ -15,16 +14,20 @@ use crate::util::heap::{MonotonePageResource, PageResource};
 use crate::util::metadata::side_metadata::{SideMetadataContext, SideMetadataSpec};
 use crate::util::metadata::{extract_side_metadata, MetadataSpec};
 use crate::util::object_forwarding;
+use crate::util::request_statistics::Statistics;
+use crate::util::{copy::*, VMThread, MUTATOR};
 use crate::util::{Address, ObjectReference};
 use crate::vm::*;
 use libc::{mprotect, PROT_EXEC, PROT_NONE, PROT_READ, PROT_WRITE};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 /// This type implements a simple copying space.
 pub struct CopySpace<VM: VMBinding> {
     common: CommonSpace<VM>,
     pr: MonotonePageResource<VM>,
     from_space: AtomicBool,
+    statistics: Mutex<Statistics>,
 }
 
 impl<VM: VMBinding> SFT for CopySpace<VM> {
@@ -74,8 +77,12 @@ impl<VM: VMBinding> SFT for CopySpace<VM> {
         self.trace_object(queue, object, self.common.copy, worker)
     }
 
-    fn set_object_owner(&self, object: ObjectReference, owner: usize) {
-        crate::util::object_owner::set_header_object_owner::<VM>(object, owner)
+    fn set_object_owner(&self, object: ObjectReference, owner: u32) {
+        crate::util::object_metadata::set_header_object_owner::<VM>(object, owner)
+    }
+
+    fn set_object_request_id(&self, object: ObjectReference, request_id: u32) {
+        crate::util::object_metadata::set_header_request_id::<VM>(object, request_id)
     }
 }
 
@@ -168,6 +175,7 @@ impl<VM: VMBinding> CopySpace<VM> {
             },
             common,
             from_space: AtomicBool::new(from_space),
+            statistics: Mutex::new(Statistics::new(0, 0)),
         }
     }
 
@@ -193,6 +201,16 @@ impl<VM: VMBinding> CopySpace<VM> {
         }
         self.common.metadata.reset();
         self.from_space.store(false, Ordering::SeqCst);
+        // reset the stats
+        let m = MUTATOR.lock().unwrap();
+        if m.0 != VMThread::UNINITIALIZED {
+            let mutator = VM::VMActivePlan::mutator(m.clone());
+            let mut statistics = mutator.barrier.report_statistics();
+            let mut m = self.statistics.lock().unwrap();
+            statistics.merge(m.clone());
+            mutator.barrier.update_statistics(statistics);
+            m.reset(0, 0);
+        }
     }
 
     #[cfg(feature = "global_alloc_bit")]
@@ -272,11 +290,28 @@ impl<VM: VMBinding> CopySpace<VM> {
                 worker.get_copy_context_mut(),
             );
             // public bit begin
-            if crate::util::public_bit::is_public(object) {
+            let is_pubic = crate::util::public_bit::is_public(object);
+            if is_pubic {
                 crate::util::public_bit::set_public_bit(new_object, false);
             }
-            let owner = crate::util::object_owner::get_header_object_owner::<VM>(object);
-            crate::util::object_owner::set_header_object_owner::<VM>(new_object, owner);
+            let owner = crate::util::object_metadata::get_header_metadata::<VM>(object);
+            crate::util::object_metadata::set_header_metadata::<VM>(new_object, owner);
+            let m = MUTATOR.lock().unwrap();
+            if m.0 != VMThread::UNINITIALIZED {
+                // user triggers this gc so do the counting
+                let mutator = VM::VMActivePlan::mutator(m.clone());
+                let mut stat = self.statistics.lock().unwrap();
+                stat.mutator_id = mutator.mutator_id;
+                stat.request_id = mutator.request_id;
+                let size = VM::VMObjectModel::get_current_size(object);
+                if is_pubic {
+                    stat.live_public_object_counter += 1;
+                    stat.live_public_object_size += size;
+                } else {
+                    stat.live_private_object_counter += 1;
+                    stat.live_private_object_size += size;
+                }
+            }
             // public bit end
 
             trace!("Forwarding pointer");

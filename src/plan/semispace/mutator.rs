@@ -13,7 +13,6 @@ use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
 // use crate::util::alloc::BumpAllocator;
 use crate::util::alloc::MarkCompactAllocator;
 use crate::util::{VMMutatorThread, VMWorkerThread};
-use crate::vm::ActivePlan;
 use crate::vm::VMBinding;
 use enum_map::EnumMap;
 
@@ -70,7 +69,6 @@ pub fn create_ss_mutator<VM: VMBinding>(
         prepare_func: &ss_mutator_prepare,
         release_func: &ss_mutator_release,
     };
-    let mutator_id = VM::VMActivePlan::mutator_id(mutator_tls);
     Mutator {
         allocators: Allocators::<VM>::new(mutator_tls, plan, &config.space_mapping),
         // barrier: Box::new(NoBarrier),
@@ -80,6 +78,19 @@ pub fn create_ss_mutator<VM: VMBinding>(
         mutator_tls,
         config,
         plan,
-        mutator_id,
+        native_thread_id: 0,
+        mutator_id: crate::util::MUTATOR_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst),
+        in_request: false,
+        request_id: 0,
+        request_scope_object_size: 0,
+        request_scope_object_counter: 0,
+        request_scope_public_object_size: 0,
+        request_scope_public_object_counter: 0,
+        request_scope_live_public_object_size: 0,
+        request_scope_live_public_object_counter: 0,
+        request_scope_live_private_object_counter: 0,
+        request_scope_live_private_object_size: 0,
+        request_scope_write_barrier_counter: 0,
+        request_scope_write_barrier_slowpath_counter: 0,
     }
 }

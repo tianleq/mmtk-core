@@ -98,7 +98,9 @@ pub trait SFT {
         worker: GCWorkerMutRef,
     ) -> ObjectReference;
 
-    fn set_object_owner(&self, _object: ObjectReference, _object_owner: usize) {}
+    fn set_object_owner(&self, _object: ObjectReference, _object_owner: u32) {}
+
+    fn set_object_request_id(&self, _object: ObjectReference, _request_id: u32) {}
 }
 
 // Create erased VM refs for these types that will be used in `sft_trace_object()`.

@@ -48,7 +48,20 @@ pub fn create_markcompact_mutator<VM: VMBinding>(
         mutator_tls,
         config,
         plan,
-        mutator_id: 0,
+        native_thread_id: 0,
+        mutator_id: crate::util::MUTATOR_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst),
+        in_request: false,
+        request_id: 0,
+        request_scope_object_size: 0,
+        request_scope_object_counter: 0,
+        request_scope_public_object_size: 0,
+        request_scope_public_object_counter: 0,
+        request_scope_live_public_object_size: 0,
+        request_scope_live_public_object_counter: 0,
+        request_scope_live_private_object_size: 0,
+        request_scope_live_private_object_counter: 0,
+        request_scope_write_barrier_counter: 0,
+        request_scope_write_barrier_slowpath_counter: 0,
     }
 }
 

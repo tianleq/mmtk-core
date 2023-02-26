@@ -22,7 +22,7 @@ use crate::util::constants::{LOG_BYTES_IN_PAGE, MIN_OBJECT_SIZE};
 use crate::util::heap::layout::vm_layout_constants::HEAP_END;
 use crate::util::heap::layout::vm_layout_constants::HEAP_START;
 use crate::util::opaque_pointer::*;
-use crate::util::REQUEST_STATISTICS;
+// use crate::util::REQUEST_STATISTICS;
 use crate::util::{Address, ObjectReference};
 use crate::vm::edge_shape::MemorySlice;
 use crate::vm::ReferenceGlue;
@@ -855,22 +855,33 @@ pub fn on_closure_end<VM: VMBinding>(mmtk: &'static MMTK<VM>, f: Box<dyn Send + 
     mmtk.scheduler.on_closure_end(f)
 }
 
-pub fn mmtk_set_public_bit(object: ObjectReference, force: bool) {
-    crate::util::public_bit::set_public_bit(object, force);
+pub fn mmtk_set_public_bit(object: ObjectReference) {
+    crate::util::public_bit::set_public_bit(object);
 }
 
-pub fn mmtk_publish_object<VM: VMBinding>(_tls: VMMutatorThread, object: ObjectReference) {
+pub fn mmtk_publish_object<VM: VMBinding>(tls: VMMutatorThread, object: ObjectReference) {
     if object.is_null() || crate::util::public_bit::is_public(object) {
         return;
     };
-    let mut closure = crate::plan::MarkingObjectPublicClosure::<VM>::new();
-    crate::util::public_bit::set_public_bit(object, false);
+    use crate::vm::ActivePlan;
+    use crate::vm::ObjectModel;
+    let mutator = VM::VMActivePlan::mutator(tls);
+    let mut closure =
+        crate::plan::MarkingObjectPublicWithAssertClosure::<VM>::new(mutator.mutator_id);
+    crate::util::public_bit::set_public_bit(object);
     VM::VMScanning::scan_object(
         VMWorkerThread(VMThread::UNINITIALIZED),
         object,
         &mut closure,
     );
-    closure.do_closure();
+    let (publish_counter, bytes_published) = closure.do_closure();
+    if mutator.in_request {
+        mutator.request_scope_write_barrier_counter += 1;
+        mutator.request_scope_write_barrier_slowpath_counter += 1;
+        mutator.request_scope_public_object_counter += publish_counter + 1;
+        mutator.request_scope_public_object_size +=
+            bytes_published + VM::VMObjectModel::get_current_size(object);
+    }
 }
 
 pub fn mmtk_is_object_published<VM: VMBinding>(object: ObjectReference) -> bool {
@@ -895,53 +906,107 @@ pub fn mmtk_reset_request_statistics<VM: VMBinding>(tls: VMMutatorThread) {
     mutator.request_scope_public_object_size = 0;
     mutator.request_scope_write_barrier_counter = 0;
     mutator.request_scope_write_barrier_slowpath_counter = 0;
+    crate::util::REQUEST_SCOPE_SURVIVAL_STATS
+        .lock()
+        .unwrap()
+        .clear();
 }
 
 pub fn mmtk_update_request_statistics<VM: VMBinding>(tls: VMMutatorThread) {
     use crate::vm::ActivePlan;
     let mutator = VM::VMActivePlan::mutator(tls);
     let statistics = mutator.barrier.report_statistics();
-    mutator.request_scope_live_public_object_counter = statistics.live_public_object_counter;
-    mutator.request_scope_live_public_object_size = statistics.live_public_object_size;
-    mutator.request_scope_live_private_object_counter = statistics.live_private_object_counter;
-    mutator.request_scope_live_private_object_size = statistics.live_private_object_size;
+    mutator.request_scope_live_public_object_counter =
+        statistics.request_scope_live_public_object_counter;
+    mutator.request_scope_live_public_object_size =
+        statistics.request_scope_live_public_object_size;
+    mutator.request_scope_live_private_object_counter =
+        statistics.request_scope_live_private_object_counter;
+    mutator.request_scope_live_private_object_size =
+        statistics.request_scope_live_private_object_size;
     mutator.request_scope_public_object_counter = statistics.write_barrier_publish_counter;
     mutator.request_scope_public_object_size = statistics.write_barrier_publish_bytes;
     mutator.request_scope_write_barrier_counter = statistics.write_barrier_counter;
     mutator.request_scope_write_barrier_slowpath_counter =
         statistics.write_barrier_slowpath_counter;
-    REQUEST_STATISTICS
-        .lock()
-        .unwrap()
-        .insert((mutator.mutator_id, mutator.request_id), statistics);
 }
 
 pub fn mmtk_handle_user_triggered_gc<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
+    // exactly one thread can trigger collection
+    // guaranteed by the lock in OpenJDK Binding
+    crate::util::MUTATOR.lock().unwrap().0 = tls.0;
+    assert!(
+        crate::util::MUTATOR.lock().unwrap().0 != crate::util::VMThread::UNINITIALIZED,
+        "thread that triggers this gc is not set successfully"
+    );
     mmtk.plan.handle_user_collection_request(tls, true);
+    // reset the thread to NULL
+    crate::util::MUTATOR.lock().unwrap().0 = crate::util::VMThread::UNINITIALIZED;
+    assert!(
+        crate::util::MUTATOR.lock().unwrap().0 == crate::util::VMThread::UNINITIALIZED,
+        "thread that triggers this gc is not set successfully"
+    );
 }
 
 pub fn mmtk_write_request_statistics<VM: VMBinding>(tls: VMMutatorThread) {
     use crate::vm::ActivePlan;
     use std::fs::OpenOptions;
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/home/qtl/info.txt")
+    {
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/home/tianleq/info.txt")
+            .unwrap();
+        let mutator = VM::VMActivePlan::mutator(tls);
+        writeln!(
+            &mut file,
+            "mutator: {}, request: {}, bytes allocated: {}, bytes published: {}, objects published: {}, survival bytes public: {}, survival bytes private: {}, write barrier count: {}, write barrier slowpath: {}",
+            mutator.mutator_id,
+            mutator.request_id,
+            mutator.request_scope_object_size,
+            mutator.request_scope_public_object_size,
+            mutator.request_scope_public_object_counter,
+            mutator.request_scope_live_public_object_size,
+            mutator.request_scope_live_private_object_size,
+            mutator.request_scope_write_barrier_counter,
+            mutator.request_scope_write_barrier_slowpath_counter,
+
+        )
         .unwrap();
-    let mutator = VM::VMActivePlan::mutator(tls);
-    writeln!(
-        &mut file,
-        "mutator: {}, request: {}, bytes allocated: {}, bytes published: {}, 
-        survival bytes public: {}, survival bytes private: {}, write barrier count: {}, 
-        write barrier slowpath: {}",
-        mutator.mutator_id,
-        mutator.request_id,
-        mutator.request_scope_object_size,
-        mutator.request_scope_public_object_size,
-        mutator.request_scope_live_public_object_size,
-        mutator.request_scope_live_private_object_size,
-        mutator.request_scope_write_barrier_counter,
-        mutator.request_scope_write_barrier_slowpath_counter,
-    )
-    .unwrap();
+    }
+    {
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/home/tianleq/survial-info.txt")
+            .unwrap();
+        let mutator = VM::VMActivePlan::mutator(tls);
+        let mut stats = crate::util::REQUEST_SCOPE_SURVIVAL_STATS.lock().unwrap();
+        assert!(
+            stats.len() == 1,
+            "REQUEST_SCOPE_SURVIVAL_STATS size invalid! size : {}",
+            stats.len()
+        );
+
+        for (k, v) in stats.iter() {
+            assert!(
+                *k == mutator.mutator_id,
+                "REQUEST_SCOPE_SURVIVAL_STATS key invalid"
+            );
+            for (i, alive) in v.iter().enumerate() {
+                if *alive == 0 {
+                    continue;
+                }
+                writeln!(
+                    &mut file,
+                    "mutator: {}, request id: {}, request: {}, bytes alive: {},",
+                    *k, mutator.request_id, i, *alive
+                )
+                .unwrap();
+            }
+            writeln!(&mut file, "").unwrap();
+        }
+
+        stats.clear();
+    }
 }

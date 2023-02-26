@@ -576,22 +576,8 @@ impl<VM: VMBinding> BasePlan<VM> {
             info!("User triggering collection");
             self.user_triggered_collection
                 .store(true, Ordering::Relaxed);
-            // exactly one thread can trigger collection
-            // guaranteed by the lock in OpenJDK Binding
-            crate::util::MUTATOR.lock().unwrap().0 = tls.0;
-            assert!(
-                crate::util::MUTATOR.lock().unwrap().0 != crate::util::VMThread::UNINITIALIZED,
-                "thread that triggers this gc is not set successfully"
-            );
             self.gc_requester.request();
             VM::VMCollection::block_for_gc(tls);
-
-            // reset the thread to NULL
-            crate::util::MUTATOR.lock().unwrap().0 = crate::util::VMThread::UNINITIALIZED;
-            assert!(
-                crate::util::MUTATOR.lock().unwrap().0 == crate::util::VMThread::UNINITIALIZED,
-                "thread that triggers this gc is not set successfully"
-            );
         }
     }
 

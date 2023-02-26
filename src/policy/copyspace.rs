@@ -15,7 +15,7 @@ use crate::util::metadata::side_metadata::{SideMetadataContext, SideMetadataSpec
 use crate::util::metadata::{extract_side_metadata, MetadataSpec};
 use crate::util::object_forwarding;
 use crate::util::request_statistics::Statistics;
-use crate::util::{copy::*, VMThread, MUTATOR};
+use crate::util::{copy::*, VMThread, MUTATOR, REQUEST_SCOPE_SURVIVAL_STATS};
 use crate::util::{Address, ObjectReference};
 use crate::vm::*;
 use libc::{mprotect, PROT_EXEC, PROT_NONE, PROT_READ, PROT_WRITE};
@@ -28,6 +28,8 @@ pub struct CopySpace<VM: VMBinding> {
     pr: MonotonePageResource<VM>,
     from_space: AtomicBool,
     statistics: Mutex<Statistics>,
+    // from_set: Mutex<std::collections::HashSet<ObjectReference>>,
+    to_set: Mutex<std::collections::HashSet<ObjectReference>>,
 }
 
 impl<VM: VMBinding> SFT for CopySpace<VM> {
@@ -176,6 +178,8 @@ impl<VM: VMBinding> CopySpace<VM> {
             common,
             from_space: AtomicBool::new(from_space),
             statistics: Mutex::new(Statistics::new(0, 0)),
+            // from_set: Mutex::new(std::collections::HashSet::new()),
+            to_set: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -202,14 +206,31 @@ impl<VM: VMBinding> CopySpace<VM> {
         self.common.metadata.reset();
         self.from_space.store(false, Ordering::SeqCst);
         // reset the stats
-        let m = MUTATOR.lock().unwrap();
+        let mut m = MUTATOR.lock().unwrap();
         if m.0 != VMThread::UNINITIALIZED {
             let mutator = VM::VMActivePlan::mutator(m.clone());
             let mut statistics = mutator.barrier.report_statistics();
-            let mut m = self.statistics.lock().unwrap();
-            statistics.merge(m.clone());
+            let mut s = self.statistics.lock().unwrap();
+            statistics.merge(s.clone());
             mutator.barrier.update_statistics(statistics);
-            m.reset(0, 0);
+            s.reset(0, 0);
+            // clear m
+            m.0 = VMThread::UNINITIALIZED;
+
+            {
+                let mut stats = REQUEST_SCOPE_SURVIVAL_STATS.lock().unwrap();
+                let mut v = vec![0 as usize; (mutator.request_id + 1) as usize];
+                for o in self.to_set.lock().unwrap().iter() {
+                    let m_id = crate::util::object_metadata::get_header_object_owner::<VM>(*o);
+                    let r_id = crate::util::object_metadata::get_header_request_id::<VM>(*o);
+                    if m_id == mutator.mutator_id && r_id != 0 {
+                        let size = VM::VMObjectModel::get_current_size(*o);
+                        v[r_id as usize] += size;
+                    }
+                }
+                stats.insert(mutator.mutator_id, v);
+            }
+            self.to_set.lock().unwrap().clear();
         }
     }
 
@@ -289,13 +310,13 @@ impl<VM: VMBinding> CopySpace<VM> {
                 semantics.unwrap(),
                 worker.get_copy_context_mut(),
             );
-            // public bit begin
+            // ---- public bit begin ----
             let is_pubic = crate::util::public_bit::is_public(object);
             if is_pubic {
-                crate::util::public_bit::set_public_bit(new_object, false);
+                crate::util::public_bit::set_public_bit(new_object);
             }
-            let owner = crate::util::object_metadata::get_header_metadata::<VM>(object);
-            crate::util::object_metadata::set_header_metadata::<VM>(new_object, owner);
+            let metadata = crate::util::object_metadata::get_header_metadata::<VM>(object);
+            crate::util::object_metadata::set_header_metadata::<VM>(new_object, metadata);
             let m = MUTATOR.lock().unwrap();
             if m.0 != VMThread::UNINITIALIZED {
                 // user triggers this gc so do the counting
@@ -304,15 +325,23 @@ impl<VM: VMBinding> CopySpace<VM> {
                 stat.mutator_id = mutator.mutator_id;
                 stat.request_id = mutator.request_id;
                 let size = VM::VMObjectModel::get_current_size(object);
-                if is_pubic {
-                    stat.live_public_object_counter += 1;
-                    stat.live_public_object_size += size;
-                } else {
-                    stat.live_private_object_counter += 1;
-                    stat.live_private_object_size += size;
+                if crate::util::object_metadata::get_header_object_owner::<VM>(object)
+                    == mutator.mutator_id
+                    && crate::util::object_metadata::get_header_request_id::<VM>(object)
+                        == mutator.request_id
+                {
+                    if is_pubic {
+                        stat.request_scope_live_public_object_counter += 1;
+                        stat.request_scope_live_public_object_size += size;
+                    } else {
+                        stat.request_scope_live_private_object_counter += 1;
+                        stat.request_scope_live_private_object_size += size;
+                    }
                 }
+                // self.from_set.lock().unwrap().remove(&object);
+                self.to_set.lock().unwrap().insert(new_object);
             }
-            // public bit end
+            // ---- public bit end ----
 
             trace!("Forwarding pointer");
             queue.enqueue(new_object);

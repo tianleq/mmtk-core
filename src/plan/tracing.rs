@@ -139,7 +139,7 @@ impl<VM: crate::vm::VMBinding> MarkingObjectPublicClosure<VM> {
             }
             if !crate::util::public_bit::is_public(object) {
                 // set public bit on the object
-                crate::util::public_bit::set_public_bit(object, false);
+                crate::util::public_bit::set_public_bit(object);
                 VM::VMScanning::scan_object(
                     crate::util::VMWorkerThread(crate::util::VMThread::UNINITIALIZED),
                     object,
@@ -189,16 +189,20 @@ impl<VM: crate::vm::VMBinding> MarkingObjectPublicWithAssertClosure<VM> {
                 continue;
             }
             if !crate::util::public_bit::is_public(object) {
-                assert!(
-                    crate::util::object_metadata::get_header_object_owner::<VM>(object)
-                        == self.mutator_id,
-                    "public object {:?} escaped",
-                    object
-                );
+                let owner = crate::util::object_metadata::get_header_object_owner::<VM>(object);
+                let valid = owner == self.mutator_id;
+                if !valid {
+                    VM::VMObjectModel::dump_object(object);
+                    assert!(
+                        valid,
+                        "public object {:?} escaped, created by {}, accessed by {}",
+                        object, owner, self.mutator_id
+                    );
+                }
                 publish_counter += 1;
                 bytes_published += VM::VMObjectModel::get_current_size(object);
                 // set public bit on the object
-                crate::util::public_bit::set_public_bit(object, false);
+                crate::util::public_bit::set_public_bit(object);
                 VM::VMScanning::scan_object(
                     crate::util::VMWorkerThread(crate::util::VMThread::UNINITIALIZED),
                     object,

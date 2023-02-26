@@ -487,7 +487,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 let new_object =
                     ForwardingWord::forward_object::<VM>(object, semantics, copy_context);
                 if crate::util::public_bit::is_public(object) {
-                    crate::util::public_bit::set_public_bit(new_object, false);
+                    crate::util::public_bit::set_public_bit(new_object);
                     crate::util::public_bit::unset_public_bit(object);
                 }
 

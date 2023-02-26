@@ -164,6 +164,10 @@ pub trait BarrierSemantics: 'static + Send {
     }
 
     fn reset_statistics(&mut self) {}
+
+    fn is_statistics_valid(&self) -> bool {
+        true
+    }
 }
 
 /// Generic object barrier with a type argument defining it's slow-path behaviour.
@@ -272,6 +276,10 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
         slot: <S::VM as VMBinding>::VMEdge,
         target: ObjectReference,
     ) {
+        assert!(
+            self.semantics.is_statistics_valid(),
+            "request scope bytes published invalid"
+        );
         let mutator = <S::VM as VMBinding>::VMActivePlan::mutator(self.semantics.current_mutator());
         if mutator.in_request {
             self.statistics.write_barrier_counter += 1;
@@ -288,6 +296,8 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
                 let (publish_counter, bytes_published) = self.semantics.report_statistics();
                 self.statistics.write_barrier_publish_counter += publish_counter;
                 self.statistics.write_barrier_publish_bytes += bytes_published;
+                // clear the stats
+                self.semantics.reset_statistics();
             }
         }
     }
@@ -345,7 +355,7 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
 
     fn trace_public_object(&mut self, _src: ObjectReference, value: ObjectReference) {
         let mut closure = MarkingObjectPublicClosure::<VM>::new();
-        set_public_bit(value, false);
+        set_public_bit(value);
         VM::VMScanning::scan_object(VMWorkerThread(VMThread::UNINITIALIZED), value, &mut closure);
         closure.do_closure();
     }
@@ -397,7 +407,7 @@ impl<VM: VMBinding> PublicObjectMarkingWithAssertBarrierSemantics<VM> {
             crate::util::object_metadata::get_header_object_owner::<VM>(value)
         );
 
-        set_public_bit(value, false);
+        set_public_bit(value);
         VM::VMScanning::scan_object(VMWorkerThread(VMThread::UNINITIALIZED), value, &mut closure);
         let (publish_counter, bytes_published) = closure.do_closure();
         if mutator.in_request {
@@ -434,5 +444,9 @@ impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingWithAssertBarrierSem
     fn reset_statistics(&mut self) {
         self.public_object_counter = 0;
         self.public_object_size = 0;
+    }
+
+    fn is_statistics_valid(&self) -> bool {
+        self.public_object_counter == 0 && self.public_object_size == 0
     }
 }

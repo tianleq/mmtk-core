@@ -4,7 +4,7 @@ use crate::vm::VMBinding;
 
 const OBJECT_OWNER_OFFSET: usize = 4;
 const REQUEST_ID_OFFSET: usize = 8;
-const METADATA__OFFSET: usize = 8;
+const METADATA_OFFSET: usize = 8;
 pub const OBJECT_OWNER_MASK: usize = 0x00000000FFFFFFFF;
 pub const REQUEST_ID_MASK: usize = 0xFFFFFFFF00000000;
 
@@ -17,7 +17,7 @@ fn header_request_id_address<VM: VMBinding>(object: ObjectReference) -> Address 
 }
 
 fn header_metadata_address<VM: VMBinding>(object: ObjectReference) -> Address {
-    <VM as crate::vm::VMBinding>::VMObjectModel::object_start_ref(object) - METADATA__OFFSET
+    <VM as crate::vm::VMBinding>::VMObjectModel::object_start_ref(object) - METADATA_OFFSET
 }
 
 /// Get header forwarding pointer for an object

@@ -37,7 +37,8 @@ pub use plan_constraints::DEFAULT_PLAN_CONSTRAINTS;
 
 mod tracing;
 pub use tracing::{
-    MarkingObjectPublicClosure, ObjectQueue, ObjectsClosure, VectorObjectQueue, VectorQueue,
+    MarkingObjectPublicClosure, MarkingObjectPublicWithAssertClosure, ObjectQueue, ObjectsClosure,
+    VectorObjectQueue, VectorQueue,
 };
 
 mod generational;

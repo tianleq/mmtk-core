@@ -76,6 +76,7 @@ pub struct Mutator<VM: VMBinding> {
     pub mutator_id: u32,
     pub in_request: bool,
     pub request_id: u32,
+    pub global_request_id: u32,
     pub request_scope_object_size: usize,
     pub request_scope_object_counter: u32,
     pub request_scope_public_object_size: usize,
@@ -129,8 +130,10 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         let mutator = VM::VMActivePlan::mutator(self.mutator_tls);
         let native_thread_id = VM::VMActivePlan::native_thread_id(self.mutator_tls);
         assert!(
-            self.native_thread_id == native_thread_id,
-            "native threawd id is not set correctly"
+            self.native_thread_id == 0 || self.native_thread_id == native_thread_id,
+            "native thread id is not set correctly! cached: {}, native: {}",
+            self.native_thread_id,
+            native_thread_id
         );
         space.set_object_owner(refer, self.mutator_id);
         if self.in_request {

@@ -76,6 +76,7 @@ pub fn create_nogc_mutator<VM: VMBinding>(
         mutator_id: crate::util::MUTATOR_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst),
         in_request: false,
         request_id: 0,
+        global_request_id: 0,
         request_scope_object_size: 0,
         request_scope_object_counter: 0,
         request_scope_public_object_size: 0,

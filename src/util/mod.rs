@@ -88,18 +88,20 @@ pub use self::address::Address;
 pub use self::address::ObjectReference;
 pub use self::opaque_pointer::*;
 pub use self::reference_processor::ReferenceProcessor;
-use self::request_statistics::Statistics;
+// use self::request_statistics::Statistics;
 pub use self::synchronized_counter::SynchronizedCounter;
 
 use std::collections::HashMap;
+// use std::collections::HashMap;
 use std::sync::atomic::AtomicU32;
 use std::sync::Mutex;
 
 pub static MUTATOR_ID_GENERATOR: AtomicU32 = AtomicU32::new(1);
 
 lazy_static! {
-    pub static ref REQUEST_STATISTICS: Mutex<HashMap<(u32, u32), Statistics>> =
-        Mutex::new(HashMap::new());
+    // pub static ref REQUEST_STATISTICS: Mutex<HashMap<(u32, u32), Statistics>> =
+    //     Mutex::new(HashMap::new());
+    pub static ref REQUEST_SCOPE_SURVIVAL_STATS: Mutex<HashMap<u32, Vec<usize>>> = Mutex::new(HashMap::new());
     pub static ref MUTATOR: Mutex<VMMutatorThread> =
         Mutex::new(VMMutatorThread(VMThread::UNINITIALIZED));
 }

@@ -179,9 +179,7 @@ impl<VM: crate::vm::VMBinding> MarkingObjectPublicWithAssertClosure<VM> {
         }
     }
 
-    pub fn do_closure(&mut self) -> (u32, usize) {
-        let mut bytes_published = 0;
-        let mut publish_counter = 0;
+    pub fn do_closure(&mut self) {
         while !self.edge_buffer.is_empty() {
             let slot = self.edge_buffer.pop_front().unwrap();
             let object = slot.load();
@@ -199,8 +197,7 @@ impl<VM: crate::vm::VMBinding> MarkingObjectPublicWithAssertClosure<VM> {
                         object, owner, self.mutator_id
                     );
                 }
-                publish_counter += 1;
-                bytes_published += VM::VMObjectModel::get_current_size(object);
+
                 // set public bit on the object
                 crate::util::public_bit::set_public_bit(object);
                 VM::VMScanning::scan_object(
@@ -210,7 +207,6 @@ impl<VM: crate::vm::VMBinding> MarkingObjectPublicWithAssertClosure<VM> {
                 );
             }
         }
-        (publish_counter, bytes_published)
     }
 }
 

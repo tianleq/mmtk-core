@@ -28,7 +28,6 @@ use crate::vm::edge_shape::MemorySlice;
 use crate::vm::ReferenceGlue;
 use crate::vm::Scanning;
 use crate::vm::VMBinding;
-use std::io::Write;
 use std::sync::atomic::Ordering;
 
 /// Initialize an MMTk instance. A VM should call this method after creating an [MMTK](../mmtk/struct.MMTK.html)
@@ -864,7 +863,6 @@ pub fn mmtk_publish_object<VM: VMBinding>(tls: VMMutatorThread, object: ObjectRe
         return;
     };
     use crate::vm::ActivePlan;
-    use crate::vm::ObjectModel;
     let mutator = VM::VMActivePlan::mutator(tls);
     let mut closure =
         crate::plan::MarkingObjectPublicWithAssertClosure::<VM>::new(mutator.mutator_id);
@@ -874,14 +872,7 @@ pub fn mmtk_publish_object<VM: VMBinding>(tls: VMMutatorThread, object: ObjectRe
         object,
         &mut closure,
     );
-    let (publish_counter, bytes_published) = closure.do_closure();
-    if mutator.in_request {
-        mutator.request_scope_write_barrier_counter += 1;
-        mutator.request_scope_write_barrier_slowpath_counter += 1;
-        mutator.request_scope_public_object_counter += publish_counter + 1;
-        mutator.request_scope_public_object_size +=
-            bytes_published + VM::VMObjectModel::get_current_size(object);
-    }
+    closure.do_closure();
 }
 
 pub fn mmtk_is_object_published<VM: VMBinding>(object: ObjectReference) -> bool {
@@ -890,45 +881,6 @@ pub fn mmtk_is_object_published<VM: VMBinding>(object: ObjectReference) -> bool 
     } else {
         crate::util::public_bit::is_public(object)
     }
-}
-
-pub fn mmtk_reset_request_statistics<VM: VMBinding>(tls: VMMutatorThread) {
-    use crate::vm::ActivePlan;
-    let mutator = VM::VMActivePlan::mutator(tls);
-    mutator.barrier.reset_statistics();
-    mutator.request_scope_live_public_object_counter = 0;
-    mutator.request_scope_live_public_object_size = 0;
-    mutator.request_scope_live_private_object_counter = 0;
-    mutator.request_scope_live_private_object_size = 0;
-    mutator.request_scope_object_counter = 0;
-    mutator.request_scope_object_size = 0;
-    mutator.request_scope_public_object_counter = 0;
-    mutator.request_scope_public_object_size = 0;
-    mutator.request_scope_write_barrier_counter = 0;
-    mutator.request_scope_write_barrier_slowpath_counter = 0;
-    crate::util::REQUEST_SCOPE_SURVIVAL_STATS
-        .lock()
-        .unwrap()
-        .clear();
-}
-
-pub fn mmtk_update_request_statistics<VM: VMBinding>(tls: VMMutatorThread) {
-    use crate::vm::ActivePlan;
-    let mutator = VM::VMActivePlan::mutator(tls);
-    let statistics = mutator.barrier.report_statistics();
-    mutator.request_scope_live_public_object_counter =
-        statistics.request_scope_live_public_object_counter;
-    mutator.request_scope_live_public_object_size =
-        statistics.request_scope_live_public_object_size;
-    mutator.request_scope_live_private_object_counter =
-        statistics.request_scope_live_private_object_counter;
-    mutator.request_scope_live_private_object_size =
-        statistics.request_scope_live_private_object_size;
-    mutator.request_scope_public_object_counter = statistics.write_barrier_publish_counter;
-    mutator.request_scope_public_object_size = statistics.write_barrier_publish_bytes;
-    mutator.request_scope_write_barrier_counter = statistics.write_barrier_counter;
-    mutator.request_scope_write_barrier_slowpath_counter =
-        statistics.write_barrier_slowpath_counter;
 }
 
 pub fn mmtk_handle_user_triggered_gc<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
@@ -948,65 +900,15 @@ pub fn mmtk_handle_user_triggered_gc<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMuta
     );
 }
 
-pub fn mmtk_write_request_statistics<VM: VMBinding>(tls: VMMutatorThread) {
-    use crate::vm::ActivePlan;
-    use std::fs::OpenOptions;
-    {
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("/home/tianleq/info.txt")
-            .unwrap();
-        let mutator = VM::VMActivePlan::mutator(tls);
-        writeln!(
-            &mut file,
-            "mutator: {}, request: {}, bytes allocated: {}, bytes published: {}, objects published: {}, survival bytes public: {}, survival bytes private: {}, write barrier count: {}, write barrier slowpath: {}",
-            mutator.mutator_id,
-            mutator.request_id,
-            mutator.request_scope_object_size,
-            mutator.request_scope_public_object_size,
-            mutator.request_scope_public_object_counter,
-            mutator.request_scope_live_public_object_size,
-            mutator.request_scope_live_private_object_size,
-            mutator.request_scope_write_barrier_counter,
-            mutator.request_scope_write_barrier_slowpath_counter,
-
-        )
-        .unwrap();
-    }
-    {
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("/home/tianleq/survial-info.txt")
-            .unwrap();
-        let mutator = VM::VMActivePlan::mutator(tls);
-        let mut stats = crate::util::REQUEST_SCOPE_SURVIVAL_STATS.lock().unwrap();
-        assert!(
-            stats.len() == 1,
-            "REQUEST_SCOPE_SURVIVAL_STATS size invalid! size : {}",
-            stats.len()
-        );
-
-        for (k, v) in stats.iter() {
-            assert!(
-                *k == mutator.mutator_id,
-                "REQUEST_SCOPE_SURVIVAL_STATS key invalid"
-            );
-            for (i, alive) in v.iter().enumerate() {
-                if *alive == 0 {
-                    continue;
-                }
-                writeln!(
-                    &mut file,
-                    "mutator: {}, request id: {}, request: {}, bytes alive: {},",
-                    *k, mutator.request_id, i, *alive
-                )
-                .unwrap();
-            }
-            writeln!(&mut file, "").unwrap();
+pub fn mmtk_assert_object_publishedd<VM: VMBinding>(object: ObjectReference) {
+    use crate::vm::ObjectModel;
+    if object.is_null() {
+        return;
+    } else {
+        let result = crate::util::public_bit::is_public(object);
+        if !result {
+            VM::VMObjectModel::dump_object(object);
+            assert!(false, "object in nmethod is not published");
         }
-
-        stats.clear();
     }
 }

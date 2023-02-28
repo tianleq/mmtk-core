@@ -7,7 +7,6 @@ use crate::policy::space::Space;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
 use crate::util::{Address, ObjectReference};
 use crate::util::{VMMutatorThread, VMWorkerThread};
-use crate::vm::ActivePlan;
 use crate::vm::VMBinding;
 
 use enum_map::EnumMap;
@@ -127,20 +126,9 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         space.initialize_object_metadata(refer, true);
 
         // set object owner
-        let mutator = VM::VMActivePlan::mutator(self.mutator_tls);
-        let native_thread_id = VM::VMActivePlan::native_thread_id(self.mutator_tls);
-        assert!(
-            self.native_thread_id == 0 || self.native_thread_id == native_thread_id,
-            "native thread id is not set correctly! cached: {}, native: {}",
-            self.native_thread_id,
-            native_thread_id
-        );
+        // let mutator = VM::VMActivePlan::mutator(self.mutator_tls);
+        // let native_thread_id = VM::VMActivePlan::native_thread_id(self.mutator_tls);
         space.set_object_owner(refer, self.mutator_id);
-        if self.in_request {
-            space.set_object_request_id(refer, self.request_id);
-            mutator.request_scope_object_counter += 1;
-            mutator.request_scope_object_size += _bytes;
-        }
     }
 
     fn get_tls(&self) -> VMMutatorThread {

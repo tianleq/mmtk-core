@@ -75,17 +75,6 @@ pub struct Mutator<VM: VMBinding> {
     pub mutator_id: u32,
     pub in_request: bool,
     pub request_id: u32,
-    pub global_request_id: u32,
-    pub request_scope_object_size: usize,
-    pub request_scope_object_counter: u32,
-    pub request_scope_public_object_size: usize,
-    pub request_scope_public_object_counter: u32,
-    pub request_scope_live_public_object_size: usize,
-    pub request_scope_live_public_object_counter: u32,
-    pub request_scope_live_private_object_size: usize,
-    pub request_scope_live_private_object_counter: u32,
-    pub request_scope_write_barrier_counter: u32,
-    pub request_scope_write_barrier_slowpath_counter: u32,
 }
 
 impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {

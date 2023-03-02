@@ -1,6 +1,5 @@
 use super::map::Map;
 use crate::mmtk::SFT_MAP;
-use crate::policy::sft_map::SFTMap;
 use crate::util::conversions;
 use crate::util::generic_freelist::GenericFreeList;
 use crate::util::heap::freelistpageresource::CommonFreeListPageResource;
@@ -196,8 +195,10 @@ impl Map for Map32 {
         for fl in self_mut.shared_fl_map.iter() {
             if let Some(fl) = fl {
                 #[allow(clippy::cast_ref_to_mut)]
-                let fl_mut: &mut CommonFreeListPageResource =
-                    unsafe { &mut *(fl as *const _ as *mut _) };
+                let fl_mut: &mut CommonFreeListPageResource = unsafe {
+                    &mut *(*fl as *const CommonFreeListPageResource
+                        as *mut CommonFreeListPageResource)
+                };
                 fl_mut.resize_freelist(start_address);
             }
         }

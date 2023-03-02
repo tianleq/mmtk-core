@@ -41,7 +41,11 @@ pub use tracing::{
     ObjectsClosure, VectorObjectQueue, VectorQueue,
 };
 
+/// Generational plans (with a copying nursery)
 mod generational;
+/// Sticky plans (using sticky marks for generational behaviors without a copying nursery)
+mod sticky;
+
 mod immix;
 mod markcompact;
 mod marksweep;
@@ -49,13 +53,18 @@ mod nogc;
 mod pageprotect;
 mod semispace;
 
+pub(crate) use generational::global::is_nursery_gc;
+pub(crate) use generational::global::GenerationalPlan;
+
 // Expose plan constraints as public. Though a binding can get them from plan.constraints(),
 // it is possible for performance reasons that they want the constraints as constants.
 
 pub use generational::copying::GENCOPY_CONSTRAINTS;
+pub use generational::immix::GENIMMIX_CONSTRAINTS;
 pub use immix::IMMIX_CONSTRAINTS;
 pub use markcompact::MARKCOMPACT_CONSTRAINTS;
 pub use marksweep::MS_CONSTRAINTS;
 pub use nogc::NOGC_CONSTRAINTS;
 pub use pageprotect::PP_CONSTRAINTS;
 pub use semispace::SS_CONSTRAINTS;
+pub use sticky::immix::STICKY_IMMIX_CONSTRAINTS;

@@ -1,19 +1,13 @@
 use atomic::Ordering;
 
 use crate::plan::ObjectQueue;
-use crate::plan::PlanConstraints;
 use crate::plan::VectorObjectQueue;
 use crate::policy::sft::GCWorkerMutRef;
 use crate::policy::sft::SFT;
-use crate::policy::space::SpaceOptions;
 use crate::policy::space::{CommonSpace, Space};
 use crate::util::constants::BYTES_IN_PAGE;
-use crate::util::heap::layout::heap_layout::{Mmapper, VMMap};
-use crate::util::heap::HeapMeta;
-use crate::util::heap::{FreeListPageResource, PageResource, VMRequest};
+use crate::util::heap::{FreeListPageResource, PageResource};
 use crate::util::metadata;
-use crate::util::metadata::side_metadata::SideMetadataContext;
-use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::opaque_pointer::*;
 use crate::util::treadmill::TreadMill;
 use crate::util::{Address, ObjectReference};
@@ -42,6 +36,18 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
     }
     fn is_live(&self, object: ObjectReference) -> bool {
         self.test_mark_bit(object, self.mark_state)
+    }
+    #[cfg(feature = "object_pinning")]
+    fn pin_object(&self, _object: ObjectReference) -> bool {
+        false
+    }
+    #[cfg(feature = "object_pinning")]
+    fn unpin_object(&self, _object: ObjectReference) -> bool {
+        false
+    }
+    #[cfg(feature = "object_pinning")]
+    fn is_object_pinned(&self, _object: ObjectReference) -> bool {
+        true
     }
     fn is_movable(&self) -> bool {
         false
@@ -73,11 +79,13 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
         }
 
         #[cfg(feature = "global_alloc_bit")]
-        crate::util::alloc_bit::set_alloc_bit(object);
-        let cell = VM::VMObjectModel::object_start_ref(object);
-        self.treadmill.add_to_treadmill(cell, alloc);
+        crate::util::alloc_bit::set_alloc_bit::<VM>(object);
+        self.treadmill.add_to_treadmill(object, alloc);
     }
-    #[inline(always)]
+    #[cfg(feature = "is_mmtk_object")]
+    fn is_mmtk_object(&self, addr: Address) -> bool {
+        crate::util::alloc_bit::is_alloced_object::<VM>(addr).is_some()
+    }
     fn sft_trace_object(
         &self,
         queue: &mut VectorObjectQueue,
@@ -116,7 +124,6 @@ use crate::scheduler::GCWorker;
 use crate::util::copy::CopySemantics;
 
 impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LargeObjectSpace<VM> {
-    #[inline(always)]
     fn trace_object<Q: ObjectQueue, const KIND: crate::policy::gc_work::TraceKind>(
         &self,
         queue: &mut Q,
@@ -126,45 +133,24 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LargeObjec
     ) -> ObjectReference {
         self.trace_object(queue, object)
     }
-    #[inline(always)]
     fn may_move_objects<const KIND: crate::policy::gc_work::TraceKind>() -> bool {
         false
     }
 }
 
 impl<VM: VMBinding> LargeObjectSpace<VM> {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
-        name: &'static str,
-        zeroed: bool,
-        vmrequest: VMRequest,
-        global_side_metadata_specs: Vec<SideMetadataSpec>,
-        vm_map: &'static VMMap,
-        mmapper: &'static Mmapper,
-        heap: &mut HeapMeta,
-        constraints: &'static PlanConstraints,
+        args: crate::policy::space::PlanCreateSpaceArgs<VM>,
         protect_memory_on_release: bool,
     ) -> Self {
-        let common = CommonSpace::new(
-            SpaceOptions {
-                name,
-                movable: false,
-                immortal: false,
-                zeroed,
-                needs_log_bit: constraints.needs_log_bit,
-                vmrequest,
-                side_metadata_specs: SideMetadataContext {
-                    global: global_side_metadata_specs,
-                    local: metadata::extract_side_metadata(&[
-                        *VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC,
-                    ]),
-                },
-            },
-            vm_map,
-            mmapper,
-            heap,
-        );
-        let mut pr = if vmrequest.is_discontiguous() {
+        let is_discontiguous = args.vmrequest.is_discontiguous();
+        let vm_map = args.vm_map;
+        let common = CommonSpace::new(args.into_policy_args(
+            false,
+            false,
+            metadata::extract_side_metadata(&[*VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC]),
+        ));
+        let mut pr = if is_discontiguous {
             FreeListPageResource::new_discontiguous(vm_map)
         } else {
             FreeListPageResource::new_contiguous(common.start, common.extent, vm_map)
@@ -205,16 +191,21 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     ) -> ObjectReference {
         #[cfg(feature = "global_alloc_bit")]
         debug_assert!(
-            crate::util::alloc_bit::is_alloced(object),
+            crate::util::alloc_bit::is_alloced::<VM>(object),
             "{:x}: alloc bit not set",
             object
         );
         let nursery_object = self.is_in_nursery(object);
+        trace!(
+            "LOS object {} {} a nursery object",
+            object,
+            if nursery_object { "is" } else { "is not" }
+        );
         if !self.in_nursery_gc || nursery_object {
             // Note that test_and_mark() has side effects
             if self.test_and_mark(object, self.mark_state) {
-                let cell = VM::VMObjectModel::object_start_ref(object);
-                self.treadmill.copy(cell, nursery_object);
+                trace!("LOS object {} is being marked now", object);
+                self.treadmill.copy(object, nursery_object);
                 self.clear_nursery(object);
                 // We just moved the object out of the logical nursery, mark it as unlogged.
                 if nursery_object && self.common.needs_log_bit {
@@ -222,30 +213,31 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                         .mark_as_unlogged::<VM>(object, Ordering::SeqCst);
                 }
                 queue.enqueue(object);
+            } else {
+                trace!(
+                    "LOS object {} is not being marked now, it was marked before",
+                    object
+                );
             }
         }
         object
     }
 
     fn sweep_large_pages(&mut self, sweep_nursery: bool) {
-        // FIXME: borrow checker fighting
-        // didn't call self.release_multiple_pages
-        // so the compiler knows I'm borrowing two different fields
+        let sweep = |object: ObjectReference| {
+            #[cfg(feature = "global_alloc_bit")]
+            crate::util::alloc_bit::unset_alloc_bit::<VM>(object);
+            crate::util::public_bit::unset_public_bit::<VM>(object);
+            self.pr
+                .release_pages(get_super_page(object.to_object_start::<VM>()));
+        };
         if sweep_nursery {
-            for cell in self.treadmill.collect_nursery() {
-                // println!("- cn {}", cell);
-                #[cfg(feature = "global_alloc_bit")]
-                crate::util::alloc_bit::unset_addr_alloc_bit(cell);
-                crate::util::public_bit::unset_addr_public_bit(cell);
-                self.pr.release_pages(get_super_page(cell));
+            for object in self.treadmill.collect_nursery() {
+                sweep(object);
             }
         } else {
-            for cell in self.treadmill.collect() {
-                // println!("- ts {}", cell);
-                #[cfg(feature = "global_alloc_bit")]
-                crate::util::alloc_bit::unset_addr_alloc_bit(cell);
-                crate::util::public_bit::unset_addr_public_bit(cell);
-                self.pr.release_pages(get_super_page(cell));
+            for object in self.treadmill.collect() {
+                sweep(object)
             }
         }
     }

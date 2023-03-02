@@ -160,14 +160,12 @@ impl<S: BarrierSemantics> ObjectBarrier<S> {
 
     /// Attepmt to atomically log an object.
     /// Returns true if the object is not logged previously.
-    #[inline(always)]
     fn object_is_unlogged(&self, object: ObjectReference) -> bool {
         unsafe { S::UNLOG_BIT_SPEC.load::<S::VM, u8>(object, None) != 0 }
     }
 
     /// Attepmt to atomically log an object.
     /// Returns true if the object is not logged previously.
-    #[inline(always)]
     fn log_object(&self, object: ObjectReference) -> bool {
         loop {
             let old_value =
@@ -197,7 +195,6 @@ impl<S: BarrierSemantics> Barrier<S::VM> for ObjectBarrier<S> {
         self.semantics.flush();
     }
 
-    #[inline(always)]
     fn object_reference_write_post(
         &mut self,
         src: ObjectReference,
@@ -209,7 +206,6 @@ impl<S: BarrierSemantics> Barrier<S::VM> for ObjectBarrier<S> {
         }
     }
 
-    #[inline(always)]
     fn object_reference_write_slow(
         &mut self,
         src: ObjectReference,
@@ -222,7 +218,6 @@ impl<S: BarrierSemantics> Barrier<S::VM> for ObjectBarrier<S> {
         }
     }
 
-    #[inline(always)]
     fn memory_region_copy_post(
         &mut self,
         src: <S::VM as VMBinding>::VMMemorySlice,

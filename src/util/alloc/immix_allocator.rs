@@ -1,9 +1,9 @@
 use super::allocator::{align_allocation_no_fill, fill_alignment_gap};
-use super::object_ref_guard::adjust_thread_local_buffer_limit;
 use crate::plan::Plan;
 use crate::policy::immix::line::*;
 use crate::policy::immix::ImmixSpace;
 use crate::policy::space::Space;
+use crate::util::alloc::allocator::get_maximum_aligned_size;
 use crate::util::alloc::Allocator;
 use crate::util::linear_scan::Region;
 use crate::util::opaque_pointer::VMThread;
@@ -65,7 +65,6 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
         crate::policy::immix::block::Block::BYTES
     }
 
-    #[inline(always)]
     fn alloc(&mut self, size: usize, align: usize, offset: isize) -> Address {
         debug_assert!(
             size <= crate::policy::immix::MAX_IMMIX_OBJECT_SIZE,
@@ -81,7 +80,7 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
                 "{:?}: Thread local buffer used up, go to alloc slow path",
                 self.tls
             );
-            if size > Line::BYTES {
+            if get_maximum_aligned_size::<VM>(size, align) > Line::BYTES {
                 // Size larger than a line: do large allocation
                 let rtn = self.overflow_alloc(size, align, offset);
                 debug_assert!(
@@ -205,7 +204,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         }
     }
 
-    #[inline(always)]
     pub fn immix_space(&self) -> &'static ImmixSpace<VM> {
         self.space
     }
@@ -229,7 +227,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     }
 
     /// Bump allocate small objects into recyclable lines (i.e. holes).
-    #[cold]
     fn alloc_slow_hot(&mut self, size: usize, align: usize, offset: isize) -> Address {
         trace!("{:?}: alloc_slow_hot", self.tls);
         if self.acquire_recyclable_lines(size, align, offset) {
@@ -263,7 +260,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             {
                 // Find recyclable lines. Update the bump allocation cursor and limit.
                 self.cursor = start_line.start();
-                self.limit = adjust_thread_local_buffer_limit::<VM>(end_line.start());
+                self.limit = end_line.start();
                 trace!(
                     "{:?}: acquire_recyclable_lines -> {:?} [{:?}, {:?}) {:?}",
                     self.tls,
@@ -272,8 +269,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     end_line,
                     self.tls
                 );
-                #[cfg(feature = "global_alloc_bit")]
-                crate::util::alloc_bit::bzero_alloc_bit(self.cursor, self.limit - self.cursor);
                 crate::util::public_bit::bzero_public_bit(self.cursor, self.limit - self.cursor);
                 crate::util::memory::zero(self.cursor, self.limit - self.cursor);
                 debug_assert!(
@@ -322,10 +317,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 );
                 if self.request_for_large {
                     self.large_cursor = block.start();
-                    self.large_limit = adjust_thread_local_buffer_limit::<VM>(block.end());
+                    self.large_limit = block.end();
                 } else {
                     self.cursor = block.start();
-                    self.limit = adjust_thread_local_buffer_limit::<VM>(block.end());
+                    self.limit = block.end();
                 }
                 self.alloc(size, align, offset)
             }
@@ -344,7 +339,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         // size check and then return the conditions where `alloc_slow_inline()` would be called
         // in an `alloc()` call, namely when both `overflow_alloc()` and `alloc_slow_hot()` fail
         // to service the allocation request
-        if insufficient_space && size > Line::BYTES {
+        if insufficient_space && get_maximum_aligned_size::<VM>(size, align) > Line::BYTES {
             let start = align_allocation_no_fill::<VM>(self.large_cursor, align, offset);
             let end = start + size;
             end > self.large_limit

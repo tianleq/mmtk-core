@@ -102,7 +102,6 @@ impl<'a, E: ProcessEdgesWork> EdgeVisitor<EdgeOf<E>> for ObjectsClosure<'a, E> {
     fn visit_edge(&mut self, slot: EdgeOf<E>) {
         #[cfg(debug_assertions)]
         {
-            use crate::vm::edge_shape::Edge;
             trace!(
                 "(ObjectsClosure) Visit edge {:?} (pointing to {})",
                 slot,
@@ -140,9 +139,9 @@ impl<VM: crate::vm::VMBinding> MarkingObjectPublicClosure<VM> {
             if object.is_null() {
                 continue;
             }
-            if !crate::util::public_bit::is_public(object) {
+            if !crate::util::public_bit::is_public::<VM>(object) {
                 // set public bit on the object
-                crate::util::public_bit::set_public_bit(object);
+                crate::util::public_bit::set_public_bit::<VM>(object);
                 VM::VMScanning::scan_object(
                     crate::util::VMWorkerThread(crate::util::VMThread::UNINITIALIZED),
                     object,

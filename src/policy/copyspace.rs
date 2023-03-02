@@ -265,9 +265,9 @@ impl<VM: VMBinding> CopySpace<VM> {
                 worker.get_copy_context_mut(),
             );
             // ---- public bit begin ----
-            let is_pubic = crate::util::public_bit::is_public(object);
+            let is_pubic = crate::util::public_bit::is_public::<VM>(object);
             if is_pubic {
-                crate::util::public_bit::set_public_bit(new_object);
+                crate::util::public_bit::set_public_bit::<VM>(new_object);
             }
             // ---- public bit end ----
 

@@ -1,6 +1,7 @@
 use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::Address;
 use crate::util::ObjectReference;
+use crate::vm::VMBinding;
 use atomic::Ordering;
 
 /// An public-bit is required per min-object-size aligned address , rather than per object, and can only exist as side metadata.
@@ -9,28 +10,26 @@ pub(crate) const PUBLIC_SIDE_METADATA_SPEC: SideMetadataSpec =
 
 pub const PUBLIC_SIDE_METADATA_ADDR: Address = PUBLIC_SIDE_METADATA_SPEC.get_absolute_offset();
 
-pub fn set_public_bit(object: ObjectReference) {
-    assert!(!is_public(object), "{:x}: public bit already set", object,);
-    PUBLIC_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_address(), 1, Ordering::SeqCst);
+pub fn set_public_bit<VM: VMBinding>(object: ObjectReference) {
+    debug_assert!(
+        !is_public::<VM>(object),
+        "{:x}: public bit already set",
+        object,
+    );
+    PUBLIC_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_address::<VM>(), 1, Ordering::SeqCst);
 }
 
-pub fn unset_addr_public_bit(address: Address) {
-    // This assertion is too strict, dead objects are likely not to be public
-    // debug_assert!(
-    //     is_public_object(address),
-    //     "{:x}: alloc bit not set",
-    //     address
-    // );
+pub fn unset_addr_public_bit<VM: VMBinding>(address: Address) {
     PUBLIC_SIDE_METADATA_SPEC.store_atomic::<u8>(address, 0, Ordering::SeqCst);
 }
 
-pub fn unset_public_bit(object: ObjectReference) {
-    debug_assert!(is_public(object), "{:x}: alloc bit not set", object);
-    PUBLIC_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_address(), 0, Ordering::SeqCst);
+pub fn unset_public_bit<VM: VMBinding>(object: ObjectReference) {
+    debug_assert!(is_public::<VM>(object), "{:x}: alloc bit not set", object);
+    PUBLIC_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_address::<VM>(), 0, Ordering::SeqCst);
 }
 
-pub fn is_public(object: ObjectReference) -> bool {
-    is_public_object(object.to_address())
+pub fn is_public<VM: VMBinding>(object: ObjectReference) -> bool {
+    is_public_object(object.to_address::<VM>())
 }
 
 pub fn is_public_object(address: Address) -> bool {

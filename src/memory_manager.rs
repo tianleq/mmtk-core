@@ -895,22 +895,16 @@ pub fn add_work_packets<VM: VMBinding>(
     mmtk.scheduler.work_buckets[bucket].bulk_add(packets)
 }
 
-/// Add a callback to be notified after the transitive closure is finished.
-/// The callback should return true if it add more work packets to the closure bucket.
-pub fn on_closure_end<VM: VMBinding>(mmtk: &'static MMTK<VM>, f: Box<dyn Send + Fn() -> bool>) {
-    mmtk.scheduler.on_closure_end(f)
-}
-
-pub fn mmtk_set_public_bit(object: ObjectReference) {
-    crate::util::public_bit::set_public_bit(object);
+pub fn mmtk_set_public_bit<VM: VMBinding>(object: ObjectReference) {
+    crate::util::public_bit::set_public_bit::<VM>(object);
 }
 
 pub fn mmtk_publish_object<VM: VMBinding>(object: ObjectReference) {
-    if object.is_null() || crate::util::public_bit::is_public(object) {
+    if object.is_null() || crate::util::public_bit::is_public::<VM>(object) {
         return;
     };
     let mut closure = crate::plan::MarkingObjectPublicClosure::<VM>::new();
-    crate::util::public_bit::set_public_bit(object);
+    crate::util::public_bit::set_public_bit::<VM>(object);
     VM::VMScanning::scan_object(
         VMWorkerThread(VMThread::UNINITIALIZED),
         object,
@@ -923,36 +917,36 @@ pub fn mmtk_is_object_published<VM: VMBinding>(object: ObjectReference) -> bool 
     if object.is_null() {
         false
     } else {
-        crate::util::public_bit::is_public(object)
+        crate::util::public_bit::is_public::<VM>(object)
     }
 }
 
-pub fn mmtk_handle_user_triggered_gc<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
-    // exactly one thread can trigger collection
-    // guaranteed by the lock in OpenJDK Binding
-    crate::util::MUTATOR.lock().unwrap().0 = tls.0;
-    assert!(
-        crate::util::MUTATOR.lock().unwrap().0 != crate::util::VMThread::UNINITIALIZED,
-        "thread that triggers this gc is not set successfully"
-    );
-    mmtk.plan.handle_user_collection_request(tls, true);
-    // reset the thread to NULL
-    crate::util::MUTATOR.lock().unwrap().0 = crate::util::VMThread::UNINITIALIZED;
-    assert!(
-        crate::util::MUTATOR.lock().unwrap().0 == crate::util::VMThread::UNINITIALIZED,
-        "thread that triggers this gc is not set successfully"
-    );
-}
+// pub fn mmtk_handle_user_triggered_gc<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
+//     // exactly one thread can trigger collection
+//     // guaranteed by the lock in OpenJDK Binding
+//     // crate::util::MUTATOR.lock().unwrap().0 = tls.0;
+//     // assert!(
+//     //     crate::util::MUTATOR.lock().unwrap().0 != crate::util::VMThread::UNINITIALIZED,
+//     //     "thread that triggers this gc is not set successfully"
+//     // );
+//     // mmtk.plan.handle_user_collection_request(tls, true);
+//     // // reset the thread to NULL
+//     // crate::util::MUTATOR.lock().unwrap().0 = crate::util::VMThread::UNINITIALIZED;
+//     // assert!(
+//     //     crate::util::MUTATOR.lock().unwrap().0 == crate::util::VMThread::UNINITIALIZED,
+//     //     "thread that triggers this gc is not set successfully"
+//     // );
+// }
 
-pub fn mmtk_assert_object_publishedd<VM: VMBinding>(object: ObjectReference) {
-    use crate::vm::ObjectModel;
-    if object.is_null() {
-        return;
-    } else {
-        let result = crate::util::public_bit::is_public(object);
-        if !result {
-            VM::VMObjectModel::dump_object(object);
-            assert!(false, "object in nmethod is not published");
-        }
-    }
-}
+// pub fn mmtk_assert_object_publishedd<VM: VMBinding>(object: ObjectReference) {
+//     use crate::vm::ObjectModel;
+//     if object.is_null() {
+//         return;
+//     } else {
+//         let result = crate::util::public_bit::is_public::<VM>(object);
+//         if !result {
+//             VM::VMObjectModel::dump_object(object);
+//             assert!(false, "object in nmethod is not published");
+//         }
+//     }
+// }

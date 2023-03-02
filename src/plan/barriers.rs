@@ -1,19 +1,16 @@
 //! Read/Write barrier implementations.
 
-use std::marker::PhantomData;
-
-use crate::plan::tracing::MarkingObjectPublicWithAssertClosure;
 use crate::util::public_bit::{is_public, set_public_bit};
 use crate::vm::edge_shape::{Edge, MemorySlice};
 use crate::vm::ObjectModel;
 use crate::{
     util::{metadata::MetadataSpec, *},
-    vm::ActivePlan,
     vm::Scanning,
     vm::VMBinding,
 };
 use atomic::Ordering;
 use downcast_rs::Downcast;
+use std::marker::PhantomData;
 
 use super::tracing::MarkingObjectPublicClosure;
 
@@ -319,47 +316,47 @@ impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM>
     fn memory_region_copy_slow(&mut self, _src: VM::VMMemorySlice, _dst: VM::VMMemorySlice) {}
 }
 
-pub struct PublicObjectMarkingWithAssertBarrierSemantics<VM: VMBinding> {
-    mutator_tls: VMMutatorThread,
-    _phantom: PhantomData<VM>,
-}
+// pub struct PublicObjectMarkingWithAssertBarrierSemantics<VM: VMBinding> {
+//     mutator_tls: VMMutatorThread,
+//     _phantom: PhantomData<VM>,
+// }
 
-impl<VM: VMBinding> PublicObjectMarkingWithAssertBarrierSemantics<VM> {
-    pub fn new(mutator_tls: VMMutatorThread) -> Self {
-        Self {
-            mutator_tls,
-            _phantom: PhantomData,
-        }
-    }
+// impl<VM: VMBinding> PublicObjectMarkingWithAssertBarrierSemantics<VM> {
+//     pub fn new(mutator_tls: VMMutatorThread) -> Self {
+//         Self {
+//             mutator_tls,
+//             _phantom: PhantomData,
+//         }
+//     }
 
-    fn trace_public_object(&mut self, _src: ObjectReference, value: ObjectReference) {
-        let mutator = VM::VMActivePlan::mutator(self.mutator_tls);
-        let mutator_id = mutator.mutator_id;
-        let mut closure = MarkingObjectPublicWithAssertClosure::<VM>::new(mutator_id);
+//     fn trace_public_object(&mut self, _src: ObjectReference, value: ObjectReference) {
+//         let mutator = VM::VMActivePlan::mutator(self.mutator_tls);
+//         let mutator_id = mutator.mutator_id;
+//         let mut closure = MarkingObjectPublicWithAssertClosure::<VM>::new(mutator_id);
 
-        set_public_bit(value);
-        VM::VMScanning::scan_object(VMWorkerThread(VMThread::UNINITIALIZED), value, &mut closure);
-        closure.do_closure();
-    }
-}
+//         set_public_bit(value);
+//         VM::VMScanning::scan_object(VMWorkerThread(VMThread::UNINITIALIZED), value, &mut closure);
+//         closure.do_closure();
+//     }
+// }
 
-impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingWithAssertBarrierSemantics<VM> {
-    type VM = VM;
+// impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingWithAssertBarrierSemantics<VM> {
+//     type VM = VM;
 
-    fn object_reference_write_slow(
-        &mut self,
-        src: ObjectReference,
-        _slot: VM::VMEdge,
-        target: ObjectReference,
-    ) {
-        self.trace_public_object(src, target)
-    }
+//     fn object_reference_write_slow(
+//         &mut self,
+//         src: ObjectReference,
+//         _slot: VM::VMEdge,
+//         target: ObjectReference,
+//     ) {
+//         self.trace_public_object(src, target)
+//     }
 
-    fn flush(&mut self) {}
+//     fn flush(&mut self) {}
 
-    fn memory_region_copy_slow(&mut self, _src: VM::VMMemorySlice, _dst: VM::VMMemorySlice) {}
+//     fn memory_region_copy_slow(&mut self, _src: VM::VMMemorySlice, _dst: VM::VMMemorySlice) {}
 
-    fn current_mutator(&self) -> VMMutatorThread {
-        self.mutator_tls
-    }
-}
+//     fn current_mutator(&self) -> VMMutatorThread {
+//         self.mutator_tls
+//     }
+// }

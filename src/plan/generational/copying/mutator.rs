@@ -49,9 +49,5 @@ pub fn create_gencopy_mutator<VM: VMBinding>(
         mutator_tls,
         config,
         plan: gencopy,
-        native_thread_id: 0,
-        mutator_id: crate::util::MUTATOR_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst),
-        in_request: false,
-        request_id: 0,
     }
 }

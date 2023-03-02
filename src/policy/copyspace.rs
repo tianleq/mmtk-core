@@ -74,13 +74,13 @@ impl<VM: VMBinding> SFT for CopySpace<VM> {
         self.trace_object(queue, object, self.common.copy, worker)
     }
 
-    fn set_object_owner(&self, object: ObjectReference, owner: u32) {
-        crate::util::object_metadata::set_header_object_owner::<VM>(object, owner)
-    }
+    // fn set_object_owner(&self, object: ObjectReference, owner: u32) {
+    //     crate::util::object_metadata::set_header_object_owner::<VM>(object, owner)
+    // }
 
-    fn set_object_request_id(&self, object: ObjectReference, request_id: u32) {
-        crate::util::object_metadata::set_header_request_id::<VM>(object, request_id)
-    }
+    // fn set_object_request_id(&self, object: ObjectReference, request_id: u32) {
+    //     crate::util::object_metadata::set_header_request_id::<VM>(object, request_id)
+    // }
 }
 
 impl<VM: VMBinding> Space<VM> for CopySpace<VM> {
@@ -280,8 +280,6 @@ impl<VM: VMBinding> CopySpace<VM> {
             if is_pubic {
                 crate::util::public_bit::set_public_bit(new_object);
             }
-            let metadata = crate::util::object_metadata::get_header_metadata::<VM>(object);
-            crate::util::object_metadata::set_header_metadata::<VM>(new_object, metadata);
             // ---- public bit end ----
 
             trace!("Forwarding pointer");
@@ -328,13 +326,13 @@ impl<VM: VMBinding> CopySpace<VM> {
 
 use crate::plan::Plan;
 use crate::util::alloc::Allocator;
-// use crate::util::alloc::BumpAllocator;
-use crate::util::alloc::MarkCompactAllocator;
+use crate::util::alloc::BumpAllocator;
+// use crate::util::alloc::MarkCompactAllocator;
 use crate::util::opaque_pointer::VMWorkerThread;
 
 /// Copy allocator for CopySpace
 pub struct CopySpaceCopyContext<VM: VMBinding> {
-    copy_allocator: MarkCompactAllocator<VM>,
+    copy_allocator: BumpAllocator<VM>,
 }
 
 impl<VM: VMBinding> PolicyCopyContext for CopySpaceCopyContext<VM> {
@@ -363,7 +361,7 @@ impl<VM: VMBinding> CopySpaceCopyContext<VM> {
         tospace: &'static CopySpace<VM>,
     ) -> Self {
         CopySpaceCopyContext {
-            copy_allocator: MarkCompactAllocator::new(tls.0, tospace, plan),
+            copy_allocator: BumpAllocator::new(tls.0, tospace, plan),
         }
     }
 }

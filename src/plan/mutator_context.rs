@@ -71,10 +71,6 @@ pub struct Mutator<VM: VMBinding> {
     pub mutator_tls: VMMutatorThread,
     pub plan: &'static dyn Plan<VM = VM>,
     pub config: MutatorConfig<VM>,
-    pub native_thread_id: usize,
-    pub mutator_id: u32,
-    pub in_request: bool,
-    pub request_id: u32,
 }
 
 impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
@@ -113,11 +109,6 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         }
         .get_space();
         space.initialize_object_metadata(refer, true);
-
-        // set object owner
-        // let mutator = VM::VMActivePlan::mutator(self.mutator_tls);
-        // let native_thread_id = VM::VMActivePlan::native_thread_id(self.mutator_tls);
-        space.set_object_owner(refer, self.mutator_id);
     }
 
     fn get_tls(&self) -> VMMutatorThread {

@@ -22,7 +22,6 @@ use crate::util::constants::{LOG_BYTES_IN_PAGE, MIN_OBJECT_SIZE};
 use crate::util::heap::layout::vm_layout_constants::HEAP_END;
 use crate::util::heap::layout::vm_layout_constants::HEAP_START;
 use crate::util::opaque_pointer::*;
-// use crate::util::REQUEST_STATISTICS;
 use crate::util::{Address, ObjectReference};
 use crate::vm::edge_shape::MemorySlice;
 use crate::vm::ReferenceGlue;
@@ -858,14 +857,11 @@ pub fn mmtk_set_public_bit(object: ObjectReference) {
     crate::util::public_bit::set_public_bit(object);
 }
 
-pub fn mmtk_publish_object<VM: VMBinding>(tls: VMMutatorThread, object: ObjectReference) {
+pub fn mmtk_publish_object<VM: VMBinding>(object: ObjectReference) {
     if object.is_null() || crate::util::public_bit::is_public(object) {
         return;
     };
-    use crate::vm::ActivePlan;
-    let mutator = VM::VMActivePlan::mutator(tls);
-    let mut closure =
-        crate::plan::MarkingObjectPublicWithAssertClosure::<VM>::new(mutator.mutator_id);
+    let mut closure = crate::plan::MarkingObjectPublicClosure::<VM>::new();
     crate::util::public_bit::set_public_bit(object);
     VM::VMScanning::scan_object(
         VMWorkerThread(VMThread::UNINITIALIZED),

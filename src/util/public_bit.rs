@@ -24,7 +24,6 @@ pub fn unset_addr_public_bit<VM: VMBinding>(address: Address) {
 }
 
 pub fn unset_public_bit<VM: VMBinding>(object: ObjectReference) {
-    debug_assert!(is_public::<VM>(object), "{:x}: alloc bit not set", object);
     PUBLIC_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_address::<VM>(), 0, Ordering::SeqCst);
 }
 

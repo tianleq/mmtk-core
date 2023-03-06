@@ -289,7 +289,7 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
             return;
         }
         // only store private to a public object
-        if is_public(src) && !is_public(target) {
+        if is_public(src) {
             self.object_reference_write_slow(src, slot, target);
             if mutator.in_request {
                 self.statistics.write_barrier_slowpath_counter += 1;
@@ -311,8 +311,10 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
     ) {
         // debug_assert!(is_public(src), "src object is not public");
         // debug_assert!(!is_public(target), "target object is not private");
-        self.semantics
-            .object_reference_write_slow(src, slot, target);
+        if !target.is_null() && !is_public(target) {
+            self.semantics
+                .object_reference_write_slow(src, slot, target);
+        }
     }
 
     #[inline(always)]

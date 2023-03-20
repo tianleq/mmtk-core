@@ -258,7 +258,9 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
         slot: <S::VM as VMBinding>::VMEdge,
         target: ObjectReference,
     ) {
-        debug_assert!(is_public::<S::VM>(src), "barrier is broken");
+        debug_assert!(is_public::<S::VM>(src), "source check is broken");
+        debug_assert!(!target.is_null(), "target null check is broken");
+        debug_assert!(!is_public::<S::VM>(target), "target check is broken");
         if !target.is_null() && !is_public::<S::VM>(target) {
             self.semantics
                 .object_reference_write_slow(src, slot, target);

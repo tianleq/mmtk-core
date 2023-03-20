@@ -247,7 +247,9 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
     ) {
         // only trace when store private to a public object
         if is_public::<S::VM>(src) {
-            self.object_reference_write_slow(src, slot, target);
+            if !target.is_null() && !is_public::<S::VM>(target) {
+                self.object_reference_write_slow(src, slot, target);
+            }
         }
     }
 
@@ -261,10 +263,8 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
         debug_assert!(is_public::<S::VM>(src), "source check is broken");
         debug_assert!(!target.is_null(), "target null check is broken");
         debug_assert!(!is_public::<S::VM>(target), "target check is broken");
-        if !target.is_null() && !is_public::<S::VM>(target) {
-            self.semantics
-                .object_reference_write_slow(src, slot, target);
-        }
+        self.semantics
+            .object_reference_write_slow(src, slot, target);
     }
 
     #[inline(always)]

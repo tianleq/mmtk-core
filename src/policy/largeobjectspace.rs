@@ -27,6 +27,7 @@ pub struct LargeObjectSpace<VM: VMBinding> {
     pr: FreeListPageResource<VM>,
     mark_state: u8,
     in_nursery_gc: bool,
+    in_thread_local_gc: bool,
     treadmill: TreadMill,
 }
 
@@ -161,6 +162,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             common,
             mark_state: 0,
             in_nursery_gc: false,
+            in_thread_local_gc: false,
             treadmill: TreadMill::new(),
         }
     }
@@ -172,6 +174,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         }
         self.treadmill.flip(full_heap);
         self.in_nursery_gc = !full_heap;
+        self.in_thread_local_gc = false;
     }
 
     pub fn release(&mut self, full_heap: bool) {
@@ -181,6 +184,33 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             self.sweep_large_pages(false);
         }
     }
+
+    pub fn thread_local_prepare(&mut self, _tls: VMMutatorThread) {
+        self.in_thread_local_gc = true;
+        self.mark_state = MARK_BIT - self.mark_state;
+    }
+
+    pub fn thread_local_release(&mut self, _tls: VMMutatorThread) {
+        self.in_thread_local_gc = false;
+    }
+
+    fn trace_thread_local_object(
+        &self,
+        queue: &mut impl ObjectQueue,
+        object: ObjectReference,
+    ) -> ObjectReference {
+        // thread-local gc does not reclaim los
+        // but it still needs to mark and scan los objects
+        // as they may refer to immix space objects
+        if crate::util::public_bit::is_public::<VM>(object) {
+            return object;
+        }
+        if self.test_and_mark(object, self.mark_state) {
+            queue.enqueue(object);
+        }
+        object
+    }
+
     // Allow nested-if for this function to make it clear that test_and_mark() is only executed
     // for the outer condition is met.
     #[allow(clippy::collapsible_if)]
@@ -195,6 +225,10 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             "{:x}: alloc bit not set",
             object
         );
+
+        if self.in_thread_local_gc {
+            return self.trace_thread_local_object(queue, object);
+        }
         let nursery_object = self.is_in_nursery(object);
         trace!(
             "LOS object {} {} a nursery object",
@@ -322,6 +356,12 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                 break;
             }
         }
+    }
+
+    pub fn publish_object(&self, _object: ObjectReference) {
+        // thread-local gc does not reclaim los at the moment
+        // so do nothing. Once it starts reclaiming, marking
+        // is necessary
     }
 }
 

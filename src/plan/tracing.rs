@@ -7,6 +7,7 @@ use crate::util::ObjectReference;
 use crate::vm::edge_shape::Edge;
 use crate::vm::EdgeVisitor;
 use crate::vm::Scanning;
+use crate::MMTK;
 
 /// This trait represents an object queue to enqueue objects during tracing.
 pub trait ObjectQueue {
@@ -122,12 +123,14 @@ impl<'a, E: ProcessEdgesWork> Drop for ObjectsClosure<'a, E> {
 }
 
 pub struct MarkingObjectPublicClosure<VM: crate::vm::VMBinding> {
+    mmtk: &'static MMTK<VM>,
     edge_buffer: std::collections::VecDeque<VM::VMEdge>,
 }
 
 impl<VM: crate::vm::VMBinding> MarkingObjectPublicClosure<VM> {
-    pub fn new() -> Self {
+    pub fn new(mmtk: &'static MMTK<VM>) -> Self {
         MarkingObjectPublicClosure {
+            mmtk,
             edge_buffer: std::collections::VecDeque::new(),
         }
     }
@@ -142,6 +145,7 @@ impl<VM: crate::vm::VMBinding> MarkingObjectPublicClosure<VM> {
             if !crate::util::public_bit::is_public::<VM>(object) {
                 // set public bit on the object
                 crate::util::public_bit::set_public_bit::<VM>(object);
+                self.mmtk.plan.publish_object(object);
                 VM::VMScanning::scan_object(
                     crate::util::VMWorkerThread(crate::util::VMThread::UNINITIALIZED),
                     object,

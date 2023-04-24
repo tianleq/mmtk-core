@@ -10,7 +10,7 @@ use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::ImmixSpaceArgs;
-use crate::policy::immix::{TRACE_KIND_DEFRAG, TRACE_KIND_FAST};
+use crate::policy::immix::{TRACE_KIND_DEFRAG, TRACE_KIND_FAST, TRACE_THREAD_LOCAL};
 use crate::policy::space::Space;
 use crate::scheduler::*;
 use crate::util::alloc::allocators::AllocatorSelector;
@@ -18,6 +18,8 @@ use crate::util::copy::*;
 use crate::util::heap::VMRequest;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSanity;
+use crate::util::ObjectReference;
+use crate::util::VMMutatorThread;
 use crate::vm::VMBinding;
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use std::sync::atomic::AtomicBool;
@@ -53,6 +55,14 @@ impl<VM: VMBinding> Plan for Immix<VM> {
 
     fn collection_required(&self, space_full: bool, _space: Option<&dyn Space<Self::VM>>) -> bool {
         self.base().collection_required(self, space_full)
+    }
+
+    fn thread_local_collection_required(
+        &self,
+        _space_full: bool,
+        _space: Option<&dyn Space<Self::VM>>,
+    ) -> bool {
+        false
     }
 
     fn last_collection_was_exhaustive(&self) -> bool {
@@ -91,6 +101,19 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         >(self, &self.immix_space, scheduler)
     }
 
+    fn schedule_thread_local_collection(
+        &'static self,
+        tls: VMMutatorThread,
+        scheduler: &GCWorkScheduler<Self::VM>,
+    ) {
+        self.base().set_collection_kind::<Self>(self);
+        self.base().set_gc_status(GcStatus::GcPrepare);
+        Self::schedule_immix_thread_local_collection::<
+            Immix<VM>,
+            ImmixGCWorkContext<VM, TRACE_THREAD_LOCAL>,
+        >(self, tls, scheduler)
+    }
+
     fn get_allocator_mapping(&self) -> &'static EnumMap<AllocationSemantics, AllocatorSelector> {
         &ALLOCATOR_MAPPING
     }
@@ -98,6 +121,17 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     fn prepare(&mut self, tls: VMWorkerThread) {
         self.common.prepare(tls, true);
         self.immix_space.prepare(true);
+    }
+
+    fn thread_local_prepare(&mut self, tls: VMMutatorThread) {
+        self.common.thread_local_prepare(tls);
+        self.immix_space.thread_local_prepare(tls);
+    }
+
+    fn thread_local_release(&mut self, tls: VMMutatorThread) {
+        // at the moment, thread-local gc only reclaiming immix space
+        self.common.thread_local_release(tls);
+        self.immix_space.thread_local_release(tls);
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
@@ -121,6 +155,14 @@ impl<VM: VMBinding> Plan for Immix<VM> {
 
     fn common(&self) -> &CommonPlan<VM> {
         &self.common
+    }
+
+    fn publish_object(&self, object: ObjectReference) {
+        if self.immix_space.in_space(object) {
+            self.immix_space.publish_object(object);
+        } else {
+            self.common().publish_object(object);
+        }
     }
 }
 
@@ -194,5 +236,27 @@ impl<VM: VMBinding> Immix<VM> {
 
     pub(in crate::plan) fn set_last_gc_was_defrag(&self, defrag: bool, order: Ordering) {
         self.last_gc_was_defrag.store(defrag, order)
+    }
+
+    pub(crate) fn schedule_immix_thread_local_collection<
+        PlanType: Plan<VM = VM>,
+        FastContext: 'static + GCWorkContext<VM = VM, PlanType = PlanType>,
+    >(
+        plan: &'static PlanType,
+        tls: VMMutatorThread,
+        scheduler: &GCWorkScheduler<VM>,
+    ) {
+        use crate::scheduler::gc_work::*;
+        // Stop & scan mutators (mutator scanning can happen before STW)
+        scheduler.work_buckets[WorkBucketStage::Unconstrained]
+            .add(StopMutator::<FastContext::ProcessEdgesWorkType>::new(tls));
+
+        // Prepare global/collectors/mutators
+        scheduler.work_buckets[WorkBucketStage::Prepare]
+            .add(ThreadLocalPrepare::<FastContext>::new(plan, tls));
+
+        // Release global/collectors/mutators
+        scheduler.work_buckets[WorkBucketStage::Release]
+            .add(ThreadLocalRelease::<FastContext>::new(plan, tls));
     }
 }

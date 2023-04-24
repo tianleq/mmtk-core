@@ -86,14 +86,6 @@ impl<VM: VMBinding> SFT for CopySpace<VM> {
         let worker = worker.into_mut::<VM>();
         self.trace_object(queue, object, self.common.copy, worker)
     }
-
-    // fn set_object_owner(&self, object: ObjectReference, owner: u32) {
-    //     crate::util::object_metadata::set_header_object_owner::<VM>(object, owner)
-    // }
-
-    // fn set_object_request_id(&self, object: ObjectReference, request_id: u32) {
-    //     crate::util::object_metadata::set_header_request_id::<VM>(object, request_id)
-    // }
 }
 
 impl<VM: VMBinding> Space<VM> for CopySpace<VM> {

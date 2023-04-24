@@ -47,6 +47,31 @@ pub trait Collection<VM: VMBinding> {
     /// * `tls`: The current thread pointer that should be blocked. The VM can optionally check if the current thread matches `tls`.
     fn block_for_gc(tls: VMMutatorThread);
 
+    /// Stop all the mutator threads. MMTk calls this method when it requires all the mutator to yield for a GC.
+    /// This method is called by a single thread in MMTk (the GC controller).
+    /// This method should not return until all the threads are yielded.
+    /// The actual thread synchronization mechanism is up to the VM, and MMTk does not make assumptions on that.
+    ///
+    /// Arguments:
+    /// * `tls`: The thread pointer of the mutator.
+    fn stop_mutator<F>(tls: VMMutatorThread, mutator_visitor: F)
+    where
+        F: FnMut(&'static mut Mutator<VM>);
+
+    /// Block the current thread for a thread local GC. This is called when an allocation request cannot be fulfilled and a GC
+    /// is needed. MMTk calls this method to inform the VM that the current thread needs to be blocked as a GC
+    /// is going to happen. Then MMTk starts a GC.
+    ///
+    /// Arguments:
+    /// * `tls`: The current thread pointer that should be blocked. The VM can optionally check if the current thread matches `tls`.
+    fn block_for_thread_local_gc(tls: VMMutatorThread);
+
+    /// Resume the mutator triggering the local gc. When a local GC is finished, MMTk calls this method.
+    ///
+    /// Arguments:
+    /// * `tls`: The thread pointer of the mutator.
+    fn resume_from_thread_local_gc(tls: VMMutatorThread);
+
     /// Ask the VM to spawn a GC thread for MMTk. A GC thread may later call into the VM through these VM traits. Some VMs
     /// have assumptions that those calls needs to be within VM internal threads.
     /// As a result, MMTk does not spawn GC threads itself to avoid breaking this kind of assumptions.

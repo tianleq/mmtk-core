@@ -23,6 +23,21 @@ impl Collection<DummyVM> for VMCollection {
         panic!("block_for_gc is not implemented")
     }
 
+    fn stop_mutator(tls: VMMutatorThread, mut mutator_visitor: F)
+    where
+        F: FnMut(&'static mut Mutator<OpenJDK>),
+    {
+        unimplemented!()
+    }
+
+    fn block_for_thread_local_gc(_tls: VMMutatorThread) {
+        unimplemented!()
+    }
+
+    fn resume_from_thread_local_gc(tls: VMMutatorThread) {
+        unimplemented!()
+    }
+
     fn spawn_gc_thread(_tls: VMThread, _ctx: GCThreadContext<DummyVM>) {}
 
     fn prepare_mutator<T: MutatorContext<DummyVM>>(

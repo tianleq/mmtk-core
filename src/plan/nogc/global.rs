@@ -84,6 +84,8 @@ impl<VM: VMBinding> Plan for NoGC<VM> {
     ) {
         warn!("User attempted a collection request, but it is not supported in NoGC. The request is ignored.");
     }
+
+    fn publish_object(&self, _object: crate::util::ObjectReference) {}
 }
 
 impl<VM: VMBinding> NoGC<VM> {

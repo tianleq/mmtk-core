@@ -410,7 +410,7 @@ pub fn gc_poll<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
     );
 
     let plan = mmtk.get_plan();
-    if plan.should_trigger_gc_when_heap_is_full() && plan.base().gc_trigger.poll(false, None) {
+    if plan.should_trigger_gc_when_heap_is_full() && plan.base().gc_trigger.poll(false, None, tls) {
         debug!("Collection required");
         assert!(plan.is_initialized(), "GC is not allowed here: collection is not initialized (did you call initialize_collection()?).");
         VM::VMCollection::block_for_gc(tls);
@@ -899,11 +899,12 @@ pub fn mmtk_set_public_bit<VM: VMBinding>(object: ObjectReference) {
     crate::util::public_bit::set_public_bit::<VM>(object);
 }
 
-pub fn mmtk_publish_object<VM: VMBinding>(object: ObjectReference) {
+pub fn mmtk_publish_object<VM: VMBinding>(mmtk: &'static MMTK<VM>, object: ObjectReference) {
     if object.is_null() || crate::util::public_bit::is_public::<VM>(object) {
         return;
     };
-    let mut closure = crate::plan::MarkingObjectPublicClosure::<VM>::new();
+
+    let mut closure = crate::plan::MarkingObjectPublicClosure::<VM>::new(mmtk);
     crate::util::public_bit::set_public_bit::<VM>(object);
     VM::VMScanning::scan_object(
         VMWorkerThread(VMThread::UNINITIALIZED),
@@ -921,22 +922,12 @@ pub fn mmtk_is_object_published<VM: VMBinding>(object: ObjectReference) -> bool 
     }
 }
 
-// pub fn mmtk_handle_user_triggered_gc<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
-//     // exactly one thread can trigger collection
-//     // guaranteed by the lock in OpenJDK Binding
-//     // crate::util::MUTATOR.lock().unwrap().0 = tls.0;
-//     // assert!(
-//     //     crate::util::MUTATOR.lock().unwrap().0 != crate::util::VMThread::UNINITIALIZED,
-//     //     "thread that triggers this gc is not set successfully"
-//     // );
-//     // mmtk.plan.handle_user_collection_request(tls, true);
-//     // // reset the thread to NULL
-//     // crate::util::MUTATOR.lock().unwrap().0 = crate::util::VMThread::UNINITIALIZED;
-//     // assert!(
-//     //     crate::util::MUTATOR.lock().unwrap().0 == crate::util::VMThread::UNINITIALIZED,
-//     //     "thread that triggers this gc is not set successfully"
-//     // );
-// }
+pub fn mmtk_handle_user_triggered_local_gc<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
+    // exactly one thread can trigger collection
+    // guaranteed by the lock in OpenJDK Binding
+
+    mmtk.plan.handle_thread_local_collection(tls);
+}
 
 // pub fn mmtk_assert_object_publishedd<VM: VMBinding>(object: ObjectReference) {
 //     use crate::vm::ObjectModel;

@@ -133,6 +133,8 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
     fn common(&self) -> &CommonPlan<VM> {
         &self.common
     }
+
+    fn publish_object(&self, _object: crate::util::ObjectReference) {}
 }
 
 impl<VM: VMBinding> SemiSpace<VM> {

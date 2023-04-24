@@ -176,6 +176,8 @@ impl<VM: VMBinding> Plan for MarkCompact<VM> {
     fn get_collection_reserved_pages(&self) -> usize {
         0
     }
+
+    fn publish_object(&self, _object: crate::util::ObjectReference) {}
 }
 
 impl<VM: VMBinding> MarkCompact<VM> {

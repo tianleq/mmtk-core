@@ -81,6 +81,7 @@ impl<VM: VMBinding> Allocators<VM> {
 
     pub fn new(
         mutator_tls: VMMutatorThread,
+        mutator_id: u32,
         plan: &'static dyn Plan<VM = VM>,
         space_mapping: &[(AllocatorSelector, &'static dyn Space<VM>)],
     ) -> Self {
@@ -119,6 +120,7 @@ impl<VM: VMBinding> Allocators<VM> {
                 AllocatorSelector::Immix(index) => {
                     ret.immix[index as usize].write(ImmixAllocator::new(
                         mutator_tls.0,
+                        mutator_id,
                         Some(space),
                         plan,
                         false,

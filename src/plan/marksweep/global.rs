@@ -94,6 +94,8 @@ impl<VM: VMBinding> Plan for MarkSweep<VM> {
     fn constraints(&self) -> &'static PlanConstraints {
         &MS_CONSTRAINTS
     }
+
+    fn publish_object(&self, _object: crate::util::ObjectReference) {}
 }
 
 impl<VM: VMBinding> MarkSweep<VM> {

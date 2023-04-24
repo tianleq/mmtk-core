@@ -15,6 +15,7 @@ use crate::vm::*;
 #[repr(C)]
 pub struct ImmixAllocator<VM: VMBinding> {
     pub tls: VMThread,
+    pub mutator_id: u32,
     /// Bump pointer
     cursor: Address,
     /// Limit for bump pointer
@@ -185,12 +186,14 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
 impl<VM: VMBinding> ImmixAllocator<VM> {
     pub fn new(
         tls: VMThread,
+        mutator_id: u32,
         space: Option<&'static dyn Space<VM>>,
         plan: &'static dyn Plan<VM = VM>,
         copy: bool,
     ) -> Self {
         ImmixAllocator {
             tls,
+            mutator_id,
             space: space.unwrap().downcast_ref::<ImmixSpace<VM>>().unwrap(),
             plan,
             cursor: Address::ZERO,
@@ -293,7 +296,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
     /// Get a recyclable block from ImmixSpace.
     fn acquire_recyclable_block(&mut self) -> bool {
-        match self.immix_space().get_reusable_block(self.copy) {
+        match self
+            .immix_space()
+            .get_reusable_block(self.copy, self.mutator_id)
+        {
             Some(block) => {
                 trace!("{:?}: acquire_recyclable_block -> {:?}", self.tls, block);
                 // Set the hole-searching cursor to the start of this block.
@@ -315,6 +321,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     block.start(),
                     block.end()
                 );
+                block.set_owner(self.mutator_id);
                 if self.request_for_large {
                     self.large_cursor = block.start();
                     self.large_limit = block.end();

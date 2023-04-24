@@ -2,8 +2,8 @@ use atomic::Ordering;
 
 use crate::plan::Plan;
 use crate::policy::space::Space;
-use crate::util::conversions;
 use crate::util::options::{GCTriggerSelector, Options};
+use crate::util::{conversions, VMMutatorThread, VMThread};
 use crate::vm::VMBinding;
 use crate::MMTK;
 use std::mem::MaybeUninit;
@@ -50,7 +50,12 @@ impl<VM: VMBinding> GCTrigger<VM> {
     /// Arguments:
     /// * `space_full`: Space request failed, must recover pages within 'space'.
     /// * `space`: The space that triggered the poll. This could `None` if the poll is not triggered by a space.
-    pub fn poll(&self, space_full: bool, space: Option<&dyn Space<VM>>) -> bool {
+    pub fn poll(
+        &self,
+        space_full: bool,
+        space: Option<&dyn Space<VM>>,
+        tls: VMMutatorThread,
+    ) -> bool {
         let plan = unsafe { self.plan.assume_init() };
         if self.policy.is_gc_required(space_full, space, plan) {
             info!(
@@ -64,7 +69,15 @@ impl<VM: VMBinding> GCTrigger<VM> {
                 plan.get_reserved_pages(),
                 plan.get_total_pages(),
             );
-            plan.base().gc_requester.request();
+            plan.base()
+                .gc_requester
+                .request(false, VMMutatorThread(VMThread::UNINITIALIZED));
+            return true;
+        } else if self
+            .policy
+            .is_thread_local_gc_required(space_full, space, plan)
+        {
+            plan.base().gc_requester.request(true, tls);
             return true;
         }
         false
@@ -97,6 +110,13 @@ pub trait GCTriggerPolicy<VM: VMBinding>: Sync + Send {
     fn on_gc_end(&self, _mmtk: &'static MMTK<VM>) {}
     /// Is a GC required now?
     fn is_gc_required(
+        &self,
+        space_full: bool,
+        space: Option<&dyn Space<VM>>,
+        plan: &dyn Plan<VM = VM>,
+    ) -> bool;
+    /// Is a thread-local GC required now?
+    fn is_thread_local_gc_required(
         &self,
         space_full: bool,
         space: Option<&dyn Space<VM>>,
@@ -136,6 +156,15 @@ impl<VM: VMBinding> GCTriggerPolicy<VM> for FixedHeapSizeTrigger {
 
     fn can_heap_size_grow(&self) -> bool {
         false
+    }
+
+    fn is_thread_local_gc_required(
+        &self,
+        space_full: bool,
+        space: Option<&dyn Space<VM>>,
+        plan: &dyn Plan<VM = VM>,
+    ) -> bool {
+        plan.thread_local_collection_required(space_full, space)
     }
 }
 
@@ -391,6 +420,15 @@ impl<VM: VMBinding> GCTriggerPolicy<VM> for MemBalancerTrigger {
 
     fn can_heap_size_grow(&self) -> bool {
         self.current_heap_pages.load(Ordering::Relaxed) < self.max_heap_pages
+    }
+
+    fn is_thread_local_gc_required(
+        &self,
+        _space_full: bool,
+        _space: Option<&dyn Space<VM>>,
+        _plan: &dyn Plan<VM = VM>,
+    ) -> bool {
+        false
     }
 }
 impl MemBalancerTrigger {

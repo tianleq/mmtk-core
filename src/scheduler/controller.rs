@@ -7,7 +7,7 @@ use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 
 use crate::plan::gc_requester::GCRequester;
-use crate::scheduler::gc_work::{EndOfGC, ScheduleCollection};
+use crate::scheduler::gc_work::{EndOfGC, EndOfThreadLocalGC, ScheduleCollection};
 use crate::scheduler::CoordinatorMessage;
 use crate::util::VMWorkerThread;
 use crate::vm::VMBinding;
@@ -83,6 +83,9 @@ impl<VM: VMBinding> GCController<VM> {
     /// Coordinate workers to perform GC in response to a GC request.
     pub fn do_gc_until_completion(&mut self) {
         let gc_start = std::time::Instant::now();
+        let tls = self.mmtk.plan.base().gc_requester.get_tls();
+        let thread_local_gc =
+            tls != crate::util::VMMutatorThread(crate::util::VMThread::UNINITIALIZED);
         // Schedule collection.
         self.initiate_coordinator_work(&mut ScheduleCollection, true);
 
@@ -128,10 +131,20 @@ impl<VM: VMBinding> GCController<VM> {
         //       Otherwise, for generational GCs, workers will receive and process
         //       newly generated remembered-sets from those open buckets.
         //       But these remsets should be preserved until next GC.
-        let mut end_of_gc = EndOfGC {
-            elapsed: gc_start.elapsed(),
+        let (mut end_of_gc, mut end_of_thread_local_gc);
+        let work: &mut dyn CoordinatorWork<VM> = if thread_local_gc {
+            end_of_thread_local_gc = EndOfThreadLocalGC {
+                elapsed: gc_start.elapsed(),
+                tls,
+            };
+            &mut end_of_thread_local_gc
+        } else {
+            end_of_gc = EndOfGC {
+                elapsed: gc_start.elapsed(),
+            };
+            &mut end_of_gc
         };
-        self.initiate_coordinator_work(&mut end_of_gc, false);
+        self.initiate_coordinator_work(work, false);
 
         self.scheduler.debug_assert_all_buckets_deactivated();
     }

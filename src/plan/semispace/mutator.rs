@@ -1,4 +1,5 @@
 use super::SemiSpace;
+use crate::MMTK;
 // use crate::plan::barriers::NoBarrier;
 use crate::plan::barriers::PublicObjectMarkingBarrier;
 use crate::plan::barriers::PublicObjectMarkingBarrierSemantics;
@@ -8,7 +9,6 @@ use crate::plan::mutator_context::{
     create_allocator_mapping, create_space_mapping, ReservedAllocators,
 };
 use crate::plan::AllocationSemantics;
-use crate::plan::Plan;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
 use crate::util::alloc::BumpAllocator;
 use crate::util::{VMMutatorThread, VMWorkerThread};
@@ -53,8 +53,9 @@ lazy_static! {
 
 pub fn create_ss_mutator<VM: VMBinding>(
     mutator_tls: VMMutatorThread,
-    plan: &'static dyn Plan<VM = VM>,
+    mmtk: &'static MMTK<VM>,
 ) -> Mutator<VM> {
+    let plan = &*mmtk.plan;
     let ss = plan.downcast_ref::<SemiSpace<VM>>().unwrap();
     let config = MutatorConfig {
         allocator_mapping: &ALLOCATOR_MAPPING,
@@ -67,13 +68,15 @@ pub fn create_ss_mutator<VM: VMBinding>(
         release_func: &ss_mutator_release,
     };
     Mutator {
-        allocators: Allocators::<VM>::new(mutator_tls, plan, &config.space_mapping),
+        allocators: Allocators::<VM>::new(mutator_tls, 0, plan, &config.space_mapping),
         // barrier: Box::new(NoBarrier),
         barrier: Box::new(PublicObjectMarkingBarrier::new(
-            PublicObjectMarkingBarrierSemantics::new(),
+            PublicObjectMarkingBarrierSemantics::new(mmtk),
         )),
         mutator_tls,
         config,
         plan,
+        thread_local_gc_status: 0,
+        mutator_id: 0,
     }
 }

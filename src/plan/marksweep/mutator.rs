@@ -121,10 +121,12 @@ pub fn create_ms_mutator<VM: VMBinding>(
     };
 
     Mutator {
-        allocators: Allocators::<VM>::new(mutator_tls, plan, &config.space_mapping),
+        allocators: Allocators::<VM>::new(mutator_tls, 0, plan, &config.space_mapping),
         barrier: Box::new(NoBarrier),
         mutator_tls,
         config,
         plan,
+        thread_local_gc_status: 0,
+        mutator_id: 0,
     }
 }

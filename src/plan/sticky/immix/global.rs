@@ -190,6 +190,8 @@ impl<VM: VMBinding> Plan for StickyImmix<VM> {
         }
         true
     }
+
+    fn publish_object(&self, _object: crate::util::ObjectReference) {}
 }
 
 impl<VM: VMBinding> GenerationalPlan for StickyImmix<VM> {

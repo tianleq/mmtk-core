@@ -21,6 +21,9 @@ pub enum BlockState {
     Marked,
     /// the block is marked as reusable.
     Reusable { unavailable_lines: u8 },
+
+    /// the block is marked due to objects published
+    Published,
 }
 
 impl BlockState {
@@ -30,6 +33,8 @@ impl BlockState {
     const MARK_UNMARKED: u8 = u8::MAX;
     /// Private constant
     const MARK_MARKED: u8 = u8::MAX - 1;
+
+    const MARK_PUBLISHED: u8 = 1;
 }
 
 impl From<u8> for BlockState {
@@ -50,6 +55,7 @@ impl From<BlockState> for u8 {
             BlockState::Unmarked => BlockState::MARK_UNMARKED,
             BlockState::Marked => BlockState::MARK_MARKED,
             BlockState::Reusable { unavailable_lines } => unavailable_lines,
+            BlockState::Published => BlockState::MARK_PUBLISHED,
         }
     }
 }
@@ -99,6 +105,10 @@ impl Block {
     /// Block mark table (side)
     pub const MARK_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_MARK;
+
+    /// Block owner table (side)
+    pub const OWNER_TABLE: SideMetadataSpec =
+        crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_OWNER;
 
     /// Get the chunk containing the block.
     pub fn chunk(&self) -> Chunk {
@@ -200,6 +210,7 @@ impl Block {
                 BlockState::Unallocated => false,
                 BlockState::Unmarked => {
                     // Release the block if it is allocated but not marked by the current GC.
+                    self.clear_owner();
                     space.release_block(*self);
                     true
                 }
@@ -207,6 +218,7 @@ impl Block {
                     // The block is live.
                     false
                 }
+                BlockState::Published => false,
                 _ => unreachable!(),
             }
         } else {
@@ -258,6 +270,18 @@ impl Block {
                 false
             }
         }
+    }
+
+    pub fn owner(&self) -> u32 {
+        Self::OWNER_TABLE.load_atomic::<u32>(self.start(), Ordering::SeqCst)
+    }
+
+    fn clear_owner(&self) {
+        self.set_owner(0);
+    }
+
+    pub fn set_owner(&self, owner: u32) {
+        Self::OWNER_TABLE.store_atomic::<u32>(self.start(), owner, Ordering::SeqCst)
     }
 }
 

@@ -80,7 +80,11 @@ mod int_array_freelist;
 /// on demand direct from the OS (via mmap).
 mod raw_memory_freelist;
 
+use std::sync::atomic::AtomicU32;
+
 pub use self::address::Address;
 pub use self::address::ObjectReference;
 pub use self::opaque_pointer::*;
 pub use self::reference_processor::ReferenceProcessor;
+
+pub(crate) static MUTATOR_ID_GENERATOR: AtomicU32 = AtomicU32::new(1);

@@ -908,7 +908,7 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
             };
             // number of allocated blocks.
             let mut allocated_blocks = 0;
-            let blocks = if self.tls != VMMutatorThread(VMThread::UNINITIALIZED) {
+            let blocks = if self.tls == VMMutatorThread(VMThread::UNINITIALIZED) {
                 self.chunk
                     .iter_region::<Block>()
                     .filter(|block| block.get_state() != BlockState::Unallocated)

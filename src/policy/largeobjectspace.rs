@@ -19,6 +19,7 @@ const PAGE_MASK: usize = !(BYTES_IN_PAGE - 1);
 const MARK_BIT: u8 = 0b01;
 const NURSERY_BIT: u8 = 0b10;
 const LOS_BIT_MASK: u8 = 0b11;
+const LOCAL_MARK_BIT: u8 = 0b100;
 
 /// This type implements a policy for large objects. Each instance corresponds
 /// to one Treadmill space.
@@ -26,6 +27,7 @@ pub struct LargeObjectSpace<VM: VMBinding> {
     common: CommonSpace<VM>,
     pr: FreeListPageResource<VM>,
     mark_state: u8,
+    local_mark_state: u8,
     in_nursery_gc: bool,
     in_thread_local_gc: bool,
     treadmill: TreadMill,
@@ -161,6 +163,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             pr,
             common,
             mark_state: 0,
+            local_mark_state: 0,
             in_nursery_gc: false,
             in_thread_local_gc: false,
             treadmill: TreadMill::new(),
@@ -186,8 +189,10 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     }
 
     pub fn thread_local_prepare(&mut self, _tls: VMMutatorThread) {
+        debug_assert!(self.treadmill.is_from_space_empty());
         self.in_thread_local_gc = true;
-        self.mark_state = MARK_BIT - self.mark_state;
+        self.local_mark_state = MARK_BIT - self.local_mark_state;
+        self.in_nursery_gc = false;
     }
 
     pub fn thread_local_release(&mut self, _tls: VMMutatorThread) {
@@ -205,7 +210,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         if crate::util::public_bit::is_public::<VM>(object) {
             return object;
         }
-        if self.test_and_mark(object, self.mark_state) {
+        if self.test_and_mark_without_side_effect(object, self.local_mark_state) {
             queue.enqueue(object);
         }
         object
@@ -279,6 +284,35 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     /// Allocate an object
     pub fn allocate_pages(&self, tls: VMThread, pages: usize) -> Address {
         self.acquire(tls, pages)
+    }
+
+    fn test_and_mark_without_side_effect(&self, object: ObjectReference, value: u8) -> bool {
+        debug_assert!(!self.in_nursery_gc);
+        loop {
+            let old_value = VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC.load_atomic::<VM, u8>(
+                object,
+                None,
+                Ordering::SeqCst,
+            );
+            let mark_bit = old_value & LOCAL_MARK_BIT;
+            if mark_bit == (value << 2) {
+                return false;
+            }
+            if VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC
+                .compare_exchange_metadata::<VM, u8>(
+                    object,
+                    old_value,
+                    old_value & !LOCAL_MARK_BIT | (value << 2),
+                    None,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+                .is_ok()
+            {
+                break;
+            }
+        }
+        true
     }
 
     fn test_and_mark(&self, object: ObjectReference, value: u8) -> bool {

@@ -21,9 +21,6 @@ pub enum BlockState {
     Marked,
     /// the block is marked as reusable.
     Reusable { unavailable_lines: u8 },
-
-    /// the block is marked due to objects published
-    Published,
 }
 
 impl BlockState {
@@ -33,8 +30,6 @@ impl BlockState {
     const MARK_UNMARKED: u8 = u8::MAX;
     /// Private constant
     const MARK_MARKED: u8 = u8::MAX - 1;
-
-    const MARK_PUBLISHED: u8 = 1;
 }
 
 impl From<u8> for BlockState {
@@ -55,7 +50,6 @@ impl From<BlockState> for u8 {
             BlockState::Unmarked => BlockState::MARK_UNMARKED,
             BlockState::Marked => BlockState::MARK_MARKED,
             BlockState::Reusable { unavailable_lines } => unavailable_lines,
-            BlockState::Published => BlockState::MARK_PUBLISHED,
         }
     }
 }
@@ -110,6 +104,13 @@ impl Block {
     pub const OWNER_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_OWNER;
 
+    /// Block level public table (side)
+    pub const PUBLICATION_TABLE: SideMetadataSpec =
+        crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_PUBLICATION;
+
+    pub const LOCAL_MARK_TABLE: SideMetadataSpec =
+        crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_LOCAL_MARK;
+
     /// Get the chunk containing the block.
     pub fn chunk(&self) -> Chunk {
         Chunk::from_unaligned_address(self.0)
@@ -132,6 +133,30 @@ impl Block {
     pub fn set_state(&self, state: BlockState) {
         let state = u8::from(state);
         Self::MARK_TABLE.store_atomic::<u8>(self.start(), state, Ordering::SeqCst);
+    }
+
+    pub fn publish_block(&self) {
+        Self::PUBLICATION_TABLE.store_atomic::<u8>(self.start(), 1, Ordering::SeqCst);
+    }
+
+    pub fn reset_publication(&self) {
+        Self::PUBLICATION_TABLE.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
+    }
+
+    pub fn is_block_published(&self) -> bool {
+        Self::PUBLICATION_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst) == 1
+    }
+
+    pub fn set_local_unmark_bit(&self) {
+        Self::LOCAL_MARK_TABLE.store_atomic::<u8>(self.start(), 1, Ordering::SeqCst);
+    }
+
+    pub fn clear_local_unmark_bit(&self) {
+        Self::LOCAL_MARK_TABLE.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
+    }
+
+    pub fn is_local_unmark_bit_set(&self) -> bool {
+        Self::LOCAL_MARK_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst) == 1
     }
 
     // Defrag byte
@@ -199,6 +224,41 @@ impl Block {
 
     /// Sweep this block.
     /// Return true if the block is swept.
+    pub fn thread_local_sweep<VM: VMBinding>(
+        &self,
+        space: &ImmixSpace<VM>,
+        _mark_histogram: &mut Histogram,
+        _line_mark_state: Option<u8>,
+    ) -> bool {
+        if super::BLOCK_ONLY {
+            match self.get_state() {
+                BlockState::Unallocated => false,
+                BlockState::Unmarked => {
+                    if self.is_block_published() {
+                        // liveness of public block is unknown during thread-local gc
+                        // so conservatively treat it as live
+                        false
+                    } else {
+                        // Release the block if it is private and not marked by the current GC.
+                        self.clear_owner();
+                        space.release_block(*self);
+                        // self.set_local_unmark_bit();
+                        true
+                    }
+                }
+                BlockState::Marked => {
+                    // The block is live.
+                    false
+                }
+                _ => unreachable!(),
+            }
+        } else {
+            unimplemented!()
+        }
+    }
+
+    /// Sweep this block.
+    /// Return true if the block is swept.
     pub fn sweep<VM: VMBinding>(
         &self,
         space: &ImmixSpace<VM>,
@@ -211,6 +271,7 @@ impl Block {
                 BlockState::Unmarked => {
                     // Release the block if it is allocated but not marked by the current GC.
                     self.clear_owner();
+                    self.reset_publication();
                     space.release_block(*self);
                     true
                 }
@@ -218,7 +279,6 @@ impl Block {
                     // The block is live.
                     false
                 }
-                BlockState::Published => false,
                 _ => unreachable!(),
             }
         } else {

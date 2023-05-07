@@ -525,6 +525,6 @@ pub mod specs {
     define_vm_metadata_spec!(VMLocalMarkBitSpec, false, 0, LOG_MIN_OBJECT_SIZE);
     // Pinning bit: 1 bit per object, local
     define_vm_metadata_spec!(VMLocalPinningBitSpec, false, 0, LOG_MIN_OBJECT_SIZE);
-    // Mark&nursery bits for LOS: 2 bit per page, local
-    define_vm_metadata_spec!(VMLocalLOSMarkNurserySpec, false, 1, LOG_BYTES_IN_PAGE);
+    // Mark&nursery bits for LOS: 4 bit per page, local
+    define_vm_metadata_spec!(VMLocalLOSMarkNurserySpec, false, 2, LOG_BYTES_IN_PAGE);
 }

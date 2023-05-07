@@ -137,6 +137,9 @@ impl<VM: VMBinding> GCController<VM> {
                 elapsed: gc_start.elapsed(),
                 tls,
             };
+            // end_of_thread_local_gc = EndOfGC {
+            //     elapsed: gc_start.elapsed(),
+            // };
             &mut end_of_thread_local_gc
         } else {
             end_of_gc = EndOfGC {

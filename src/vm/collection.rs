@@ -54,7 +54,7 @@ pub trait Collection<VM: VMBinding> {
     ///
     /// Arguments:
     /// * `tls`: The thread pointer of the mutator.
-    fn stop_mutator<F>(tls: VMMutatorThread, mutator_visitor: F)
+    fn scan_mutator<F>(tls: VMMutatorThread, mutator_visitor: F)
     where
         F: FnMut(&'static mut Mutator<VM>);
 

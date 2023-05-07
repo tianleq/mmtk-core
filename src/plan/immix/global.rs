@@ -247,9 +247,12 @@ impl<VM: VMBinding> Immix<VM> {
         scheduler: &GCWorkScheduler<VM>,
     ) {
         use crate::scheduler::gc_work::*;
-        // Stop & scan mutators (mutator scanning can happen before STW)
+        //Scan mutator
         scheduler.work_buckets[WorkBucketStage::Unconstrained]
-            .add(StopMutator::<FastContext::ProcessEdgesWorkType>::new(tls));
+            .add(ScanMutator::<FastContext::ProcessEdgesWorkType>::new(tls));
+        // // Stop & scan mutators (mutator scanning can happen before STW)
+        // scheduler.work_buckets[WorkBucketStage::Unconstrained]
+        //     .add(StopMutators::<FastContext::ProcessEdgesWorkType>::new());
 
         // Prepare global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Prepare]

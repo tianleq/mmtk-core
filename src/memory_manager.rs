@@ -895,8 +895,10 @@ pub fn add_work_packets<VM: VMBinding>(
     mmtk.scheduler.work_buckets[bucket].bulk_add(packets)
 }
 
-pub fn mmtk_set_public_bit<VM: VMBinding>(object: ObjectReference) {
+pub fn mmtk_set_public_bit<VM: VMBinding>(mmtk: &'static MMTK<VM>, object: ObjectReference) {
+    debug_assert!(!object.is_null(), "object is null!");
     crate::util::public_bit::set_public_bit::<VM>(object);
+    mmtk.plan.publish_object(object);
 }
 
 pub fn mmtk_publish_object<VM: VMBinding>(mmtk: &'static MMTK<VM>, object: ObjectReference) {
@@ -905,7 +907,7 @@ pub fn mmtk_publish_object<VM: VMBinding>(mmtk: &'static MMTK<VM>, object: Objec
     };
 
     let mut closure = crate::plan::MarkingObjectPublicClosure::<VM>::new(mmtk);
-    crate::util::public_bit::set_public_bit::<VM>(object);
+    mmtk_set_public_bit(mmtk, object);
     VM::VMScanning::scan_object(
         VMWorkerThread(VMThread::UNINITIALIZED),
         object,
@@ -927,6 +929,10 @@ pub fn mmtk_handle_user_triggered_local_gc<VM: VMBinding>(mmtk: &MMTK<VM>, tls: 
     // guaranteed by the lock in OpenJDK Binding
 
     mmtk.plan.handle_thread_local_collection(tls);
+}
+
+pub fn mmtk_handle_user_triggered_global_gc<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
+    mmtk.plan.handle_user_collection_request(tls, true, false);
 }
 
 // pub fn mmtk_assert_object_publishedd<VM: VMBinding>(object: ObjectReference) {

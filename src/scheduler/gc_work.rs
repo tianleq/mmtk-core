@@ -246,12 +246,12 @@ impl<VM: VMBinding> GCWork<VM> for ReleaseCollector {
 /// Schedule a `ScanStackRoots`
 ///
 #[derive(Default)]
-pub struct StopMutator<ScanEdges: ProcessEdgesWork> {
+pub struct ScanMutator<ScanEdges: ProcessEdgesWork> {
     tls: VMMutatorThread,
     phantom: PhantomData<ScanEdges>,
 }
 
-impl<ScanEdges: ProcessEdgesWork> StopMutator<ScanEdges> {
+impl<ScanEdges: ProcessEdgesWork> ScanMutator<ScanEdges> {
     pub fn new(tls: VMMutatorThread) -> Self {
         Self {
             tls,
@@ -260,19 +260,19 @@ impl<ScanEdges: ProcessEdgesWork> StopMutator<ScanEdges> {
     }
 }
 
-impl<E: ProcessEdgesWork> GCWork<E::VM> for StopMutator<E> {
+impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanMutator<E> {
     fn do_work(&mut self, _worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
-        trace!("stop_mutator start");
+        trace!("scan_mutator start");
         mmtk.plan.base().prepare_for_stack_scanning();
-        <E::VM as VMBinding>::VMCollection::stop_mutator(self.tls, |mutator| {
+        <E::VM as VMBinding>::VMCollection::scan_mutator(self.tls, |mutator| {
             mmtk.scheduler.work_buckets[WorkBucketStage::Prepare].add(ScanStackRoot::<E>(mutator));
         });
-        trace!("stop_mutator end");
+        trace!("scan_mutator end");
         mmtk.scheduler.notify_mutators_paused(mmtk);
     }
 }
 
-impl<E: ProcessEdgesWork> CoordinatorWork<E::VM> for StopMutator<E> {}
+impl<E: ProcessEdgesWork> CoordinatorWork<E::VM> for ScanMutator<E> {}
 
 /// Stop all mutators
 ///
@@ -384,7 +384,7 @@ pub struct EndOfThreadLocalGC {
 impl<VM: VMBinding> GCWork<VM> for EndOfThreadLocalGC {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         info!(
-            "End of GC ({}/{} pages, took {} ms)",
+            "End of Thread local GC ({}/{} pages, took {} ms)",
             mmtk.plan.get_reserved_pages(),
             mmtk.plan.get_total_pages(),
             self.elapsed.as_millis()
@@ -412,6 +412,7 @@ impl<VM: VMBinding> GCWork<VM> for EndOfThreadLocalGC {
         mmtk.plan.base().reset_collection_trigger();
 
         <VM as VMBinding>::VMCollection::resume_from_thread_local_gc(self.tls);
+        // <VM as VMBinding>::VMCollection::resume_mutators(worker.tls);
     }
 }
 

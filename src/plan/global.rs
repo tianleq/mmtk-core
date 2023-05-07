@@ -616,6 +616,7 @@ impl<VM: VMBinding> BasePlan<VM> {
             .store(true, Ordering::Relaxed);
         self.gc_requester.request(true, tls);
         VM::VMCollection::block_for_thread_local_gc(tls);
+        // VM::VMCollection::block_for_gc(tls);
     }
 
     /// MMTK has requested stop-the-world activity (e.g., stw within a concurrent gc).

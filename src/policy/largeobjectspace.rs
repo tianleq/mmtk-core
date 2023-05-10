@@ -191,7 +191,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     pub fn thread_local_prepare(&mut self, _tls: VMMutatorThread) {
         debug_assert!(self.treadmill.is_from_space_empty());
         self.in_thread_local_gc = true;
-        self.local_mark_state = MARK_BIT - self.local_mark_state;
+        self.local_mark_state = LOCAL_MARK_BIT - self.local_mark_state;
         self.in_nursery_gc = false;
     }
 
@@ -295,14 +295,14 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                 Ordering::SeqCst,
             );
             let mark_bit = old_value & LOCAL_MARK_BIT;
-            if mark_bit == (value << 2) {
+            if mark_bit == value {
                 return false;
             }
             if VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC
                 .compare_exchange_metadata::<VM, u8>(
                     object,
                     old_value,
-                    old_value & !LOCAL_MARK_BIT | (value << 2),
+                    old_value & !LOCAL_MARK_BIT | value,
                     None,
                     Ordering::SeqCst,
                     Ordering::SeqCst,

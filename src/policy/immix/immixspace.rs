@@ -227,7 +227,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 MetadataSpec::OnSide(Block::OWNER_TABLE),
                 MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
                 MetadataSpec::OnSide(Block::MARK_TABLE),
-                MetadataSpec::OnSide(Block::LOCAL_MARK_TABLE),
+                // MetadataSpec::OnSide(Block::LOCAL_MARK_TABLE),
                 MetadataSpec::OnSide(ChunkMap::ALLOC_TABLE),
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
                 *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC,
@@ -240,7 +240,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 MetadataSpec::OnSide(Block::PUBLICATION_TABLE),
                 MetadataSpec::OnSide(Block::OWNER_TABLE),
                 MetadataSpec::OnSide(Line::MARK_TABLE),
-                MetadataSpec::OnSide(Block::LOCAL_MARK_TABLE),
+                // MetadataSpec::OnSide(Block::LOCAL_MARK_TABLE),
                 MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
                 MetadataSpec::OnSide(Block::MARK_TABLE),
                 MetadataSpec::OnSide(ChunkMap::ALLOC_TABLE),
@@ -993,12 +993,14 @@ impl<VM: VMBinding> GCWork<VM> for ThreadLocalSweepChunk<VM> {
                 .chunk
                 .iter_region::<Block>()
                 .filter(|block| block.get_state() != BlockState::Unallocated)
-                .filter(|block| block.owner() == self.mutator_id)
+                // .filter(|block| block.owner() == self.mutator_id)
                 .collect::<Vec<Block>>();
 
             // let mut thread_local_marked_block = 0;
             for block in blocks {
-                if !block.thread_local_sweep(self.space, &mut histogram, line_mark_state) {
+                if block.owner() != self.mutator_id {
+                    allocated_blocks += 1
+                } else if !block.thread_local_sweep(self.space, &mut histogram, line_mark_state) {
                     allocated_blocks += 1;
                 }
             }
@@ -1011,9 +1013,9 @@ impl<VM: VMBinding> GCWork<VM> for ThreadLocalSweepChunk<VM> {
             //     }
             // }
             // Set this chunk as free if there is not live blocks.
-            // if allocated_blocks == 0 {
-            //     self.space.chunk_map.set(self.chunk, ChunkState::Free)
-            // }
+            if allocated_blocks == 0 {
+                self.space.chunk_map.set(self.chunk, ChunkState::Free)
+            }
         }
         // self.space.defrag.add_completed_mark_histogram(histogram);
         self.epilogue.finish_one_work_packet();

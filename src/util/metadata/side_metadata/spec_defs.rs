@@ -78,7 +78,7 @@ define_side_metadata_specs!(
     // Mark blocks by immix
     IX_BLOCK_MARK   = (global: false, log_num_of_bits: 3, log_bytes_in_region: crate::policy::immix::block::Block::LOG_BYTES),
     // Mark blocks by immix
-    IX_BLOCK_LOCAL_MARK = (global: false, log_num_of_bits: 0, log_bytes_in_region: crate::policy::immix::block::Block::LOG_BYTES),
+    // IX_BLOCK_LOCAL_MARK = (global: false, log_num_of_bits: 0, log_bytes_in_region: crate::policy::immix::block::Block::LOG_BYTES),
     // Keep track of blocks' owner by immix
     IX_BLOCK_OWNER   = (global: false, log_num_of_bits: 5, log_bytes_in_region: crate::policy::immix::block::Block::LOG_BYTES),
     // Keep track of blocks' publication by immix

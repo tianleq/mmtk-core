@@ -222,58 +222,35 @@ impl Block {
         RegionIterator::<Line>::new(self.start_line(), self.end_line())
     }
 
-    /// Sweep this block.
-    /// Return true if the block is swept.
-    pub fn thread_local_sweep<VM: VMBinding>(
-        &self,
-        space: &ImmixSpace<VM>,
-        _mark_histogram: &mut Histogram,
-        _line_mark_state: Option<u8>,
-    ) -> bool {
-        if super::BLOCK_ONLY {
-            match self.get_state() {
-                BlockState::Unallocated => false,
-                BlockState::Unmarked => {
-                    if self.is_block_published() {
-                        // liveness of public block is unknown during thread-local gc
-                        // so conservatively treat it as live
-                        false
-                    } else {
-                        // Release the block if it is private and not marked by the current GC.
-                        self.clear_owner();
-                        space.release_block(*self);
-                        // self.set_local_unmark_bit();
-                        true
-                    }
-                }
-                BlockState::Marked => {
-                    // The block is live.
-                    false
-                }
-                _ => unreachable!(),
-            }
-        } else {
-            unimplemented!()
-        }
-    }
-
-    /// Sweep this block.
-    /// Return true if the block is swept.
-    pub fn sweep<VM: VMBinding>(
+    fn sweep_impl<VM: VMBinding>(
         &self,
         space: &ImmixSpace<VM>,
         mark_histogram: &mut Histogram,
         line_mark_state: Option<u8>,
+        thread_local: bool,
     ) -> bool {
         if super::BLOCK_ONLY {
             match self.get_state() {
                 BlockState::Unallocated => false,
                 BlockState::Unmarked => {
-                    // Release the block if it is allocated but not marked by the current GC.
-                    self.clear_owner();
-                    self.reset_publication();
-                    space.release_block(*self);
-                    true
+                    if thread_local {
+                        if self.is_block_published() {
+                            // liveness of public block is unknown during thread-local gc
+                            // so conservatively treat it as live
+                            false
+                        } else {
+                            // Release the block if it is private and not marked by the current GC.
+                            self.clear_owner();
+                            space.release_block(*self);
+                            true
+                        }
+                    } else {
+                        // Release the block if it is allocated but not marked by the current GC.
+                        self.clear_owner();
+                        self.reset_publication();
+                        space.release_block(*self);
+                        true
+                    }
                 }
                 BlockState::Marked => {
                     // The block is live.
@@ -308,9 +285,23 @@ impl Block {
             }
 
             if marked_lines == 0 {
-                // Release the block if non of its lines are marked.
-                space.release_block(*self);
-                true
+                if thread_local {
+                    // liveness of public block is unknown during thread-local gc
+                    // so conservatively treat it as live
+                    if self.is_block_published() {
+                        false
+                    } else {
+                        self.clear_owner();
+                        space.release_block(*self);
+                        true
+                    }
+                } else {
+                    // Release the block if non of its lines are marked.
+                    self.clear_owner();
+                    self.reset_publication();
+                    space.release_block(*self);
+                    true
+                }
             } else {
                 // There are some marked lines. Keep the block live.
                 if marked_lines != Block::LINES {
@@ -330,6 +321,28 @@ impl Block {
                 false
             }
         }
+    }
+
+    /// Sweep this block.
+    /// Return true if the block is swept.
+    pub fn thread_local_sweep<VM: VMBinding>(
+        &self,
+        space: &ImmixSpace<VM>,
+        mark_histogram: &mut Histogram,
+        line_mark_state: Option<u8>,
+    ) -> bool {
+        self.sweep_impl(space, mark_histogram, line_mark_state, true)
+    }
+
+    /// Sweep this block.
+    /// Return true if the block is swept.
+    pub fn sweep<VM: VMBinding>(
+        &self,
+        space: &ImmixSpace<VM>,
+        mark_histogram: &mut Histogram,
+        line_mark_state: Option<u8>,
+    ) -> bool {
+        self.sweep_impl(space, mark_histogram, line_mark_state, false)
     }
 
     pub fn owner(&self) -> u32 {

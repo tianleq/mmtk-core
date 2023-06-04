@@ -7,7 +7,8 @@ use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 
 use crate::plan::gc_requester::GCRequester;
-use crate::scheduler::gc_work::{EndOfGC, EndOfThreadLocalGC, ScheduleCollection};
+use crate::scheduler::gc_work::{EndOfGC, ScheduleCollection};
+use crate::scheduler::thread_local_gc_work::EndOfThreadLocalGC;
 use crate::scheduler::CoordinatorMessage;
 use crate::util::VMWorkerThread;
 use crate::vm::VMBinding;
@@ -137,9 +138,6 @@ impl<VM: VMBinding> GCController<VM> {
                 elapsed: gc_start.elapsed(),
                 tls,
             };
-            // end_of_thread_local_gc = EndOfGC {
-            //     elapsed: gc_start.elapsed(),
-            // };
             &mut end_of_thread_local_gc
         } else {
             end_of_gc = EndOfGC {

@@ -1,13 +1,18 @@
 //! This module contains code useful for tracing,
 //! i.e. visiting the reachable objects by traversing all or part of an object graph.
 
+use std::collections::VecDeque;
+
+use crate::policy::gc_work::TraceKind;
 use crate::scheduler::gc_work::{EdgeOf, ProcessEdgesWork};
 use crate::scheduler::{GCWorker, WorkBucketStage};
 use crate::util::ObjectReference;
 use crate::vm::edge_shape::Edge;
-use crate::vm::EdgeVisitor;
 use crate::vm::Scanning;
-use crate::MMTK;
+use crate::vm::{EdgeVisitor, VMBinding};
+use crate::{Mutator, Plan, MMTK};
+
+use super::PlanThreadlocalTraceObject;
 
 /// This trait represents an object queue to enqueue objects during tracing.
 pub trait ObjectQueue {
@@ -122,6 +127,76 @@ impl<'a, E: ProcessEdgesWork> Drop for ObjectsClosure<'a, E> {
     }
 }
 
+pub struct ThreadlocalObjectsClosure<
+    'a,
+    VM: VMBinding,
+    P: Plan<VM = VM> + PlanThreadlocalTraceObject<VM>,
+    const KIND: TraceKind,
+> {
+    mutator: &'a mut Mutator<VM>,
+    plan: &'static P,
+    edges: VecDeque<VM::VMEdge>,
+    nodes: VectorObjectQueue,
+}
+
+impl<
+        'a,
+        VM: VMBinding,
+        P: Plan<VM = VM> + PlanThreadlocalTraceObject<VM>,
+        const KIND: TraceKind,
+    > ThreadlocalObjectsClosure<'a, VM, P, KIND>
+{
+    pub fn new(mutator: &'a mut Mutator<VM>, plan: &'static P, edge: VM::VMEdge) -> Self {
+        ThreadlocalObjectsClosure {
+            mutator,
+            plan,
+            edges: VecDeque::from([edge]),
+            nodes: VectorObjectQueue::new(),
+        }
+    }
+
+    pub fn do_closure(&mut self) {
+        while !self.edges.is_empty() {
+            let slot = self.edges.pop_front().unwrap();
+            let object = slot.load();
+            if object.is_null() {
+                continue;
+            }
+            let new_object = self
+                .plan
+                .thread_local_trace_object::<VectorObjectQueue, KIND>(
+                    &mut self.nodes,
+                    object,
+                    self.mutator,
+                );
+            if P::thread_local_may_move_objects::<KIND>() {
+                slot.store(new_object);
+            }
+            // only scan the object if it has not been visited before
+            if !self.nodes.is_empty() {
+                VM::VMScanning::scan_object(
+                    crate::util::VMWorkerThread(crate::util::VMThread::UNINITIALIZED),
+                    object,
+                    self,
+                );
+                self.nodes.take();
+            }
+        }
+    }
+}
+
+impl<
+        'a,
+        VM: VMBinding,
+        P: Plan<VM = VM> + PlanThreadlocalTraceObject<VM>,
+        const KIND: TraceKind,
+    > EdgeVisitor<VM::VMEdge> for ThreadlocalObjectsClosure<'a, VM, P, KIND>
+{
+    fn visit_edge(&mut self, edge: VM::VMEdge) {
+        self.edges.push_back(edge);
+    }
+}
+
 pub struct MarkingObjectPublicClosure<VM: crate::vm::VMBinding> {
     mmtk: &'static MMTK<VM>,
     edge_buffer: std::collections::VecDeque<VM::VMEdge>,
@@ -230,3 +305,52 @@ impl<VM: crate::vm::VMBinding> Drop for MarkingObjectPublicClosure<VM> {
 
 //     }
 // }
+
+pub struct DebugMarkingObjectClosure<VM: crate::vm::VMBinding> {
+    mmtk: &'static MMTK<VM>,
+    edge_buffer: std::collections::VecDeque<VM::VMEdge>,
+}
+
+impl<VM: crate::vm::VMBinding> DebugMarkingObjectClosure<VM> {
+    pub fn new(mmtk: &'static MMTK<VM>) -> Self {
+        DebugMarkingObjectClosure {
+            mmtk,
+            edge_buffer: std::collections::VecDeque::new(),
+        }
+    }
+
+    pub fn do_closure(&mut self) {
+        while !self.edge_buffer.is_empty() {
+            let slot = self.edge_buffer.pop_front().unwrap();
+            let object = slot.load();
+            if object.is_null() {
+                continue;
+            }
+            if !crate::util::debug_bit::is_debug::<VM>(object) {
+                // set public bit on the object
+                crate::util::debug_bit::set_debug_bit::<VM>(object);
+                VM::VMScanning::scan_object(
+                    crate::util::VMWorkerThread(crate::util::VMThread::UNINITIALIZED),
+                    object,
+                    self,
+                );
+            }
+        }
+    }
+}
+
+impl<VM: crate::vm::VMBinding> EdgeVisitor<VM::VMEdge> for DebugMarkingObjectClosure<VM> {
+    fn visit_edge(&mut self, edge: VM::VMEdge) {
+        self.edge_buffer.push_back(edge);
+    }
+}
+
+impl<VM: crate::vm::VMBinding> Drop for DebugMarkingObjectClosure<VM> {
+    #[inline(always)]
+    fn drop(&mut self) {
+        assert!(
+            self.edge_buffer.is_empty(),
+            "There are edges left over. Closure is not done correctly."
+        );
+    }
+}

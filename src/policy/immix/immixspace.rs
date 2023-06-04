@@ -27,7 +27,8 @@ use std::sync::{atomic::AtomicU8, atomic::AtomicUsize, Arc};
 
 pub(crate) const TRACE_KIND_FAST: TraceKind = 0;
 pub(crate) const TRACE_KIND_DEFRAG: TraceKind = 1;
-pub(crate) const TRACE_THREAD_LOCAL: TraceKind = 2;
+pub(crate) const TRACE_THREAD_LOCAL_FAST: TraceKind = 2;
+pub(crate) const TRACE_THREAD_LOCAL_DEFRAG: TraceKind = 3;
 
 pub struct ImmixSpace<VM: VMBinding> {
     common: CommonSpace<VM>,
@@ -187,8 +188,26 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
             }
         } else if KIND == TRACE_KIND_FAST {
             self.trace_object_without_moving(queue, object)
-        } else if KIND == TRACE_THREAD_LOCAL {
+        } else if KIND == TRACE_THREAD_LOCAL_FAST {
             self.trace_thread_local_object_without_moving(queue, object)
+        } else if KIND == TRACE_THREAD_LOCAL_DEFRAG {
+            if Block::containing::<VM>(object).is_defrag_source() {
+                debug_assert!(self.in_defrag());
+                debug_assert!(
+                    !crate::plan::is_nursery_gc(&*worker.mmtk.plan),
+                    "Calling PolicyTraceObject on Immix in nursery GC"
+                );
+                self.trace_thread_local_object_with_opportunistic_copy(
+                    queue,
+                    object,
+                    copy.unwrap(),
+                    worker,
+                    // This should not be nursery collection. Nursery collection does not use PolicyTraceObject.
+                    false,
+                )
+            } else {
+                self.trace_thread_local_object_without_moving(queue, object)
+            }
         } else {
             unreachable!()
         }
@@ -206,8 +225,10 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
             true
         } else if KIND == TRACE_KIND_FAST {
             false
-        } else if KIND == TRACE_THREAD_LOCAL {
+        } else if KIND == TRACE_THREAD_LOCAL_FAST {
             false
+        } else if KIND == TRACE_THREAD_LOCAL_DEFRAG {
+            true
         } else {
             unreachable!()
         }
@@ -429,13 +450,23 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             unimplemented!("cyclic mark bits is not supported at the moment");
         }
 
+        // Prepare defrag info
+        if super::DEFRAG {
+            self.defrag.prepare(self);
+        }
+        // Prepare each block for GC
+        let threshold = self.defrag.defrag_spill_threshold.load(Ordering::Acquire);
         // # Safety: ImmixSpace reference is always valid within this collection cycle.
         let space = unsafe { &*(self as *const Self) };
         let work_packets = self.chunk_map.generate_tasks(|chunk| {
             Box::new(PrepareBlockState {
                 space,
                 chunk,
-                defrag_threshold: None,
+                defrag_threshold: if space.in_defrag() {
+                    Some(threshold)
+                } else {
+                    None
+                },
                 thread_local: true,
             })
         });
@@ -451,20 +482,22 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn thread_local_release(&mut self, tls: VMMutatorThread) -> bool {
-        // Clear reusable blocks list
-        // if !super::BLOCK_ONLY {
-        //     self.line_unavail_state.store(
-        //         self.line_mark_state.load(Ordering::Acquire),
-        //         Ordering::Release,
-        //     );
-        //     self.reusable_blocks.reset();
-        // }
+        let did_defrag = self.defrag.in_defrag();
+
+        if !super::BLOCK_ONLY {
+            self.line_unavail_state.store(
+                self.line_mark_state.load(Ordering::Acquire),
+                Ordering::Release,
+            );
+            // Clear reusable blocks list
+            self.reusable_blocks.reset();
+        }
         // Sweep chunks and blocks
         let work_packets = self.generate_thread_local_sweep_tasks(tls);
         self.scheduler().work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
 
         self.lines_consumed.store(0, Ordering::Relaxed);
-        false
+        did_defrag
     }
 
     fn generate_thread_local_sweep_tasks(&self, tls: VMMutatorThread) -> Vec<Box<dyn GCWork<VM>>> {
@@ -632,6 +665,32 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             return object;
         }
         object
+    }
+
+    /// Trace object and do evacuation if required.
+    #[allow(clippy::assertions_on_constants)]
+    pub fn trace_thread_local_object_with_opportunistic_copy(
+        &self,
+        queue: &mut impl ObjectQueue,
+        object: ObjectReference,
+        semantics: CopySemantics,
+        worker: &mut GCWorker<VM>,
+        nursery_collection: bool,
+    ) -> ObjectReference {
+        if crate::util::public_bit::is_public::<VM>(object) {
+            debug_assert!(
+                Block::containing::<VM>(object).is_block_published(),
+                "public block is corrupted"
+            );
+            return object;
+        }
+        self.trace_object_with_opportunistic_copy(
+            queue,
+            object,
+            semantics,
+            worker,
+            nursery_collection,
+        )
     }
 
     /// Trace object and do evacuation if required.
@@ -917,9 +976,7 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
             }
             // Clear block mark data.
             block.set_state(BlockState::Unmarked);
-            // if self.thread_local {
-            //     block.clear_local_unmark_bit();
-            // }
+
             debug_assert!(!block.get_state().is_reusable());
             debug_assert_ne!(block.get_state(), BlockState::Marked);
         }
@@ -1005,13 +1062,6 @@ impl<VM: VMBinding> GCWork<VM> for ThreadLocalSweepChunk<VM> {
                 }
             }
 
-            // // Iterate over all allocated blocks in this chunk.
-            // for block in blocks {
-            //     if !block.sweep(self.space, &mut histogram, line_mark_state) {
-            //         // Block is live. Increment the allocated block count.
-            //         allocated_blocks += 1;
-            //     }
-            // }
             // Set this chunk as free if there is not live blocks.
             if allocated_blocks == 0 {
                 self.space.chunk_map.set(self.chunk, ChunkState::Free)

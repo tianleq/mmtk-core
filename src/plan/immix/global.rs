@@ -10,8 +10,12 @@ use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::ImmixSpaceArgs;
-use crate::policy::immix::{TRACE_KIND_DEFRAG, TRACE_KIND_FAST, TRACE_THREAD_LOCAL};
+use crate::policy::immix::{
+    TRACE_KIND_DEFRAG, TRACE_KIND_FAST, TRACE_THREAD_LOCAL_DEFRAG, TRACE_THREAD_LOCAL_FAST,
+};
 use crate::policy::space::Space;
+use crate::scheduler::thread_local_gc_work::ThreadLocalPrepare;
+use crate::scheduler::thread_local_gc_work::ThreadLocalRelease;
 use crate::scheduler::*;
 use crate::util::alloc::allocators::AllocatorSelector;
 use crate::util::copy::*;
@@ -110,8 +114,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         self.base().set_gc_status(GcStatus::GcPrepare);
         Self::schedule_immix_thread_local_collection::<
             Immix<VM>,
-            ImmixGCWorkContext<VM, TRACE_THREAD_LOCAL>,
-        >(self, tls, scheduler)
+            ImmixGCWorkContext<VM, TRACE_THREAD_LOCAL_FAST>,
+            ImmixGCWorkContext<VM, TRACE_THREAD_LOCAL_DEFRAG>,
+        >(tls, self, &self.immix_space, scheduler)
     }
 
     fn get_allocator_mapping(&self) -> &'static EnumMap<AllocationSemantics, AllocatorSelector> {
@@ -241,25 +246,44 @@ impl<VM: VMBinding> Immix<VM> {
     pub(crate) fn schedule_immix_thread_local_collection<
         PlanType: Plan<VM = VM>,
         FastContext: 'static + GCWorkContext<VM = VM, PlanType = PlanType>,
+        DefragContext: 'static + GCWorkContext<VM = VM, PlanType = PlanType>,
     >(
-        plan: &'static PlanType,
         tls: VMMutatorThread,
+        plan: &'static PlanType,
+        immix_space: &ImmixSpace<VM>,
         scheduler: &GCWorkScheduler<VM>,
     ) {
         use crate::scheduler::gc_work::*;
-        //Scan mutator
-        scheduler.work_buckets[WorkBucketStage::Unconstrained]
-            .add(ScanMutator::<FastContext::ProcessEdgesWorkType>::new(tls));
-        // // Stop & scan mutators (mutator scanning can happen before STW)
-        // scheduler.work_buckets[WorkBucketStage::Unconstrained]
-        //     .add(StopMutators::<FastContext::ProcessEdgesWorkType>::new());
+        let in_defrag = immix_space.decide_whether_to_defrag(
+            plan.is_emergency_collection(),
+            false,
+            plan.base().cur_collection_attempts.load(Ordering::SeqCst),
+            plan.base().is_user_triggered_collection(),
+            *plan.base().options.full_heap_system_gc,
+        );
 
-        // Prepare global/collectors/mutators
-        scheduler.work_buckets[WorkBucketStage::Prepare]
-            .add(ThreadLocalPrepare::<FastContext>::new(plan, tls));
+        if in_defrag {
+            //Scan mutator
+            scheduler.work_buckets[WorkBucketStage::Unconstrained]
+                .add(ScanMutator::<DefragContext::ProcessEdgesWorkType>::new(tls));
+            // Prepare global/collectors/mutators
+            scheduler.work_buckets[WorkBucketStage::Prepare]
+                .add(ThreadLocalPrepare::<DefragContext>::new(plan, tls));
 
-        // Release global/collectors/mutators
-        scheduler.work_buckets[WorkBucketStage::Release]
-            .add(ThreadLocalRelease::<FastContext>::new(plan, tls));
+            // Release global/collectors/mutators
+            scheduler.work_buckets[WorkBucketStage::Release]
+                .add(ThreadLocalRelease::<DefragContext>::new(plan, tls));
+        } else {
+            //Scan mutator
+            scheduler.work_buckets[WorkBucketStage::Unconstrained]
+                .add(ScanMutator::<FastContext::ProcessEdgesWorkType>::new(tls));
+            // Prepare global/collectors/mutators
+            scheduler.work_buckets[WorkBucketStage::Prepare]
+                .add(ThreadLocalPrepare::<FastContext>::new(plan, tls));
+
+            // Release global/collectors/mutators
+            scheduler.work_buckets[WorkBucketStage::Release]
+                .add(ThreadLocalRelease::<FastContext>::new(plan, tls));
+        }
     }
 }

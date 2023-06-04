@@ -25,6 +25,7 @@ pub(crate) use global::create_plan;
 pub use global::AllocationSemantics;
 pub(crate) use global::GcStatus;
 pub use global::Plan;
+pub(crate) use global::PlanThreadlocalTraceObject;
 pub(crate) use global::PlanTraceObject;
 
 mod mutator_context;
@@ -38,7 +39,7 @@ pub use plan_constraints::DEFAULT_PLAN_CONSTRAINTS;
 mod tracing;
 pub use tracing::{
     MarkingObjectPublicClosure, /*MarkingObjectPublicWithAssertClosure, */ ObjectQueue,
-    ObjectsClosure, VectorObjectQueue, VectorQueue,
+    ObjectsClosure, ThreadlocalObjectsClosure, VectorObjectQueue, VectorQueue,
 };
 
 /// Generational plans (with a copying nursery)

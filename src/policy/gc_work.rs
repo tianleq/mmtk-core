@@ -37,3 +37,23 @@ pub trait PolicyTraceObject<VM: VMBinding> {
     /// Return whether the policy moves objects.
     fn may_move_objects<const KIND: TraceKind>() -> bool;
 }
+
+pub trait PolicyThreadlocalTraceObject<VM: VMBinding> {
+    /// Trace object in the policy. If the policy copies objects, we should
+    /// expect `copy` to be a `Some` value.
+    fn thread_local_trace_object<Q: ObjectQueue, const KIND: TraceKind>(
+        &self,
+        queue: &mut Q,
+        object: ObjectReference,
+        copy: Option<CopySemantics>,
+    ) -> ObjectReference;
+
+    /// Policy-specific post-scan-object hook.  It is called after scanning
+    /// each object in this space.
+    fn thread_local_post_scan_object(&self, _object: ObjectReference) {
+        // Do nothing.
+    }
+
+    /// Return whether the policy moves objects.
+    fn thread_local_may_move_objects<const KIND: TraceKind>() -> bool;
+}

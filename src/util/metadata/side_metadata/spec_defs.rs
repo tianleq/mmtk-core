@@ -58,6 +58,7 @@ define_side_metadata_specs!(
     ALLOC_BIT       = (global: true, log_num_of_bits: 0, log_bytes_in_region: LOG_MIN_OBJECT_SIZE as usize),
     // Mark objects that are shared across mutators
     PUBLIC_BIT      = (global: true, log_num_of_bits: 0, log_bytes_in_region: LOG_MIN_OBJECT_SIZE as usize),
+    DEBUG_BIT       = (global: true, log_num_of_bits: 0, log_bytes_in_region: LOG_MIN_OBJECT_SIZE as usize),
     // Track chunks used by (malloc) marksweep
     MS_ACTIVE_CHUNK = (global: true, log_num_of_bits: 3, log_bytes_in_region: LOG_BYTES_IN_CHUNK),
     // Track the index in SFT map for a chunk (only used for SFT sparse chunk map)

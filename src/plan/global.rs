@@ -375,6 +375,8 @@ pub trait Plan: 'static + Sync + Downcast {
     fn thread_local_prepare(&mut self, _tls: VMMutatorThread) {}
 
     fn thread_local_release(&mut self, _tls: VMMutatorThread) {}
+
+    fn do_thread_local_collection(&mut self, _tls: VMMutatorThread) {}
 }
 
 impl_downcast!(Plan assoc VM);
@@ -1160,6 +1162,34 @@ pub trait PlanTraceObject<VM: VMBinding> {
     /// Whether objects in this plan may move. If any of the spaces used by the plan may move objects, this should
     /// return true.
     fn may_move_objects<const KIND: TraceKind>() -> bool;
+}
+
+pub trait PlanThreadlocalTraceObject<VM: VMBinding> {
+    /// Trace objects in the plan. Generally one needs to figure out
+    /// which space an object resides in, and invokes the corresponding policy
+    /// trace object method.
+    ///
+    /// Arguments:
+    /// * `trace`: the current transitive closure
+    /// * `object`: the object to trace. This is a non-nullable object reference.
+    /// * `worker`: the GC worker that is tracing this object.
+    fn thread_local_trace_object<Q: ObjectQueue, const KIND: TraceKind>(
+        &self,
+        queue: &mut Q,
+        object: ObjectReference,
+        worker: &mut Mutator<VM>,
+    ) -> ObjectReference;
+
+    /// Post-scan objects in the plan. Each object is scanned by `VM::VMScanning::scan_object()`, and this function
+    /// will be called after the `VM::VMScanning::scan_object()` as a hook to invoke possible policy post scan method.
+    /// If a plan does not have any policy that needs post scan, this method can be implemented as empty.
+    /// If a plan has a policy that has some policy specific behaviors for scanning (e.g. mark lines in Immix),
+    /// this method should also invoke those policy specific methods for objects in that space.
+    fn thread_local_post_scan_object(&self, object: ObjectReference);
+
+    /// Whether objects in this plan may move. If any of the spaces used by the plan may move objects, this should
+    /// return true.
+    fn thread_local_may_move_objects<const KIND: TraceKind>() -> bool;
 }
 
 use enum_map::Enum;

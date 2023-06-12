@@ -102,6 +102,31 @@ pub fn forward_object<VM: VMBinding>(
     new_object
 }
 
+pub fn thread_local_forward_object<VM: VMBinding>(
+    object: ObjectReference,
+    semantics: CopySemantics,
+    copy_context: &mut GCWorkerCopyContext<VM>,
+) -> ObjectReference {
+    let new_object = VM::VMObjectModel::copy(object, semantics, copy_context);
+    #[cfg(feature = "vo_bit")]
+    crate::util::metadata::vo_bit::set_vo_bit::<VM>(new_object);
+    if let Some(shift) = forwarding_bits_offset_in_forwarding_pointer::<VM>() {
+        unsafe {
+            VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC.store::<VM, usize>(
+                object,
+                new_object.to_raw_address().as_usize() | ((FORWARDED as usize) << shift),
+                None,
+            )
+        }
+    } else {
+        write_forwarding_pointer::<VM>(object, new_object);
+        unsafe {
+            VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC.store::<VM, u8>(object, FORWARDED, None)
+        };
+    }
+    new_object
+}
+
 /// Return the forwarding bits for a given `ObjectReference`.
 pub fn get_forwarding_status<VM: VMBinding>(object: ObjectReference) -> u8 {
     VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC.load_atomic::<VM, u8>(

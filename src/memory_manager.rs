@@ -901,3 +901,33 @@ pub fn add_work_packets<VM: VMBinding>(
 ) {
     mmtk.scheduler.work_buckets[bucket].bulk_add(packets)
 }
+
+/// Add a work packet to the given work bucket's thread local queue. Note that this simply adds the work packet to the given
+/// work bucket, and the scheduler will decide when to execute the work packet.
+///
+/// Arguments:
+/// * `mmtk`: A reference to an MMTk instance.
+/// * `bucket`: Which work bucket to add this packet to.
+/// * `packet`: The work packet to be added.
+pub fn add_local_work_packet<VM: VMBinding, W: GCWork<VM>>(
+    mmtk: &'static MMTK<VM>,
+    bucket: WorkBucketStage,
+    packet: W,
+) {
+    mmtk.scheduler.work_buckets[bucket].add_local(packet)
+}
+
+/// Bulk add a number of work packets to the given work bucket. Note that this simply adds the work packets
+/// to the given work bucket, and the scheduler will decide when to execute the work packets.
+///
+/// Arguments:
+/// * `mmtk`: A reference to an MMTk instance.
+/// * `bucket`: Which work bucket to add these packets to.
+/// * `packet`: The work packets to be added.
+pub fn add_local_work_packets<VM: VMBinding>(
+    mmtk: &'static MMTK<VM>,
+    bucket: WorkBucketStage,
+    packets: Vec<Box<dyn GCWork<VM>>>,
+) {
+    mmtk.scheduler.work_buckets[bucket].bulk_add_local(packets)
+}

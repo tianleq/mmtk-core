@@ -239,6 +239,7 @@ pub struct GCWorker<VM: VMBinding> {
     pub shared: Arc<GCWorkerShared<VM>>,
     /// Local work packet queue.
     pub local_work_buffer: deque::Worker<Box<dyn GCWork<VM>>>,
+    pub private_local_work_buffer: Vec<Box<dyn GCWork<VM>>>,
 }
 
 unsafe impl<VM: VMBinding> Sync for GCWorkerShared<VM> {}
@@ -277,6 +278,7 @@ impl<VM: VMBinding> GCWorker<VM> {
             is_coordinator,
             shared,
             local_work_buffer,
+            private_local_work_buffer: Vec::new(),
         }
     }
 
@@ -308,6 +310,14 @@ impl<VM: VMBinding> GCWorker<VM> {
         self.local_work_buffer.push(Box::new(work));
     }
 
+    pub fn add_local_work(&mut self, bucket: WorkBucketStage, work: impl GCWork<VM>) {
+        if !self.scheduler().work_buckets[bucket].is_activated() {
+            self.scheduler.work_buckets[bucket].add_local(work);
+            return;
+        }
+        self.private_local_work_buffer.push(Box::new(work));
+    }
+
     pub fn is_coordinator(&self) -> bool {
         self.is_coordinator
     }
@@ -330,10 +340,11 @@ impl<VM: VMBinding> GCWorker<VM> {
     /// 2. Poll from the local work queue.
     /// 3. Poll from activated global work-buckets
     /// 4. Steal from other workers
-    fn poll(&self) -> Box<dyn GCWork<VM>> {
+    fn poll(&mut self) -> Box<dyn GCWork<VM>> {
         self.shared
             .designated_work
             .pop()
+            .or_else(|| self.private_local_work_buffer.pop())
             .or_else(|| self.local_work_buffer.pop())
             .unwrap_or_else(|| self.scheduler().poll(self))
     }

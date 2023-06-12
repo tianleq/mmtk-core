@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use crate::plan::gc_requester::GCRequester;
 use crate::scheduler::gc_work::{EndOfGC, ScheduleCollection};
+use crate::scheduler::single_thread_gc_work::ScheduleSingleThreadCollection;
 use crate::scheduler::{GCWork, WorkBucketStage};
 use crate::util::VMWorkerThread;
 use crate::vm::VMBinding;
@@ -48,10 +49,10 @@ impl<VM: VMBinding> GCController<VM> {
 
         loop {
             debug!("[STWController: Waiting for request...]");
-            self.requester.wait_for_request();
+            let single_thread = self.requester.wait_for_request();
             debug!("[STWController: Request recieved.]");
 
-            self.do_gc_until_completion();
+            self.do_gc_until_completion(single_thread);
             debug!("[STWController: Worker threads complete!]");
         }
     }
@@ -77,7 +78,7 @@ impl<VM: VMBinding> GCController<VM> {
     }
 
     /// Coordinate workers to perform GC in response to a GC request.
-    pub fn do_gc_until_completion(&mut self) {
+    pub fn do_gc_until_completion(&mut self, single_thread: bool) {
         let gc_start = std::time::Instant::now();
 
         debug_assert!(
@@ -85,9 +86,13 @@ impl<VM: VMBinding> GCController<VM> {
             "Workers are still doing work when GC started."
         );
 
-        // Add a ScheduleCollection work packet.  It is the seed of other work packets.
-        self.scheduler.work_buckets[WorkBucketStage::Unconstrained].add(ScheduleCollection);
-
+        if single_thread {
+            self.scheduler.work_buckets[WorkBucketStage::Unconstrained]
+                .add(ScheduleSingleThreadCollection);
+        } else {
+            // Add a ScheduleCollection work packet.  It is the seed of other work packets.
+            self.scheduler.work_buckets[WorkBucketStage::Unconstrained].add(ScheduleCollection);
+        }
         // Notify only one worker at this time because there is only one work packet,
         // namely `ScheduleCollection`.
         self.scheduler.worker_monitor.resume_and_wait(false);

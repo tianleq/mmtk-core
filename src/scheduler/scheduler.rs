@@ -38,22 +38,22 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
         // Create work buckets for workers.
         let mut work_buckets = enum_map! {
-            WorkBucketStage::Unconstrained => WorkBucket::new(true, worker_monitor.clone()),
-            WorkBucketStage::Prepare => WorkBucket::new(false, worker_monitor.clone()),
-            WorkBucketStage::Closure => WorkBucket::new(false, worker_monitor.clone()),
-            WorkBucketStage::SoftRefClosure => WorkBucket::new(false, worker_monitor.clone()),
-            WorkBucketStage::WeakRefClosure => WorkBucket::new(false, worker_monitor.clone()),
-            WorkBucketStage::FinalRefClosure => WorkBucket::new(false, worker_monitor.clone()),
-            WorkBucketStage::PhantomRefClosure => WorkBucket::new(false, worker_monitor.clone()),
-            WorkBucketStage::VMRefClosure => WorkBucket::new(false, worker_monitor.clone()),
-            WorkBucketStage::CalculateForwarding => WorkBucket::new(false, worker_monitor.clone()),
-            WorkBucketStage::SecondRoots => WorkBucket::new(false, worker_monitor.clone()),
-            WorkBucketStage::RefForwarding => WorkBucket::new(false, worker_monitor.clone()),
-            WorkBucketStage::FinalizableForwarding => WorkBucket::new(false, worker_monitor.clone()),
-            WorkBucketStage::VMRefForwarding => WorkBucket::new(false, worker_monitor.clone()),
-            WorkBucketStage::Compact => WorkBucket::new(false, worker_monitor.clone()),
-            WorkBucketStage::Release => WorkBucket::new(false, worker_monitor.clone()),
-            WorkBucketStage::Final => WorkBucket::new(false, worker_monitor.clone()),
+            WorkBucketStage::Unconstrained => WorkBucket::new(true, worker_monitor.clone(), num_workers),
+            WorkBucketStage::Prepare => WorkBucket::new(false, worker_monitor.clone(), num_workers),
+            WorkBucketStage::Closure => WorkBucket::new(false, worker_monitor.clone(), num_workers),
+            WorkBucketStage::SoftRefClosure => WorkBucket::new(false, worker_monitor.clone(), num_workers),
+            WorkBucketStage::WeakRefClosure => WorkBucket::new(false, worker_monitor.clone(), num_workers),
+            WorkBucketStage::FinalRefClosure => WorkBucket::new(false, worker_monitor.clone(), num_workers),
+            WorkBucketStage::PhantomRefClosure => WorkBucket::new(false, worker_monitor.clone(), num_workers),
+            WorkBucketStage::VMRefClosure => WorkBucket::new(false, worker_monitor.clone(), num_workers),
+            WorkBucketStage::CalculateForwarding => WorkBucket::new(false, worker_monitor.clone(), num_workers),
+            WorkBucketStage::SecondRoots => WorkBucket::new(false, worker_monitor.clone(), num_workers),
+            WorkBucketStage::RefForwarding => WorkBucket::new(false, worker_monitor.clone(), num_workers),
+            WorkBucketStage::FinalizableForwarding => WorkBucket::new(false, worker_monitor.clone(), num_workers),
+            WorkBucketStage::VMRefForwarding => WorkBucket::new(false, worker_monitor.clone(), num_workers),
+            WorkBucketStage::Compact => WorkBucket::new(false, worker_monitor.clone(), num_workers),
+            WorkBucketStage::Release => WorkBucket::new(false, worker_monitor.clone(), num_workers),
+            WorkBucketStage::Final => WorkBucket::new(false, worker_monitor.clone(), num_workers),
         };
 
         // Set the open condition of each bucket.
@@ -217,6 +217,109 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         }
 
         self.work_buckets[WorkBucketStage::Release].add(VMPostForwarding::<VM>::default());
+    }
+
+    /// Schedule all the common work packets
+    pub fn schedule_single_thread_common_work<C: GCWorkContext<VM = VM> + 'static>(
+        &self,
+        plan: &'static C::PlanType,
+    ) {
+        use crate::plan::Plan;
+        use crate::scheduler::gc_work::*;
+        use crate::scheduler::single_thread_gc_work::*;
+        // Stop & scan mutators (mutator scanning can happen before STW)
+        self.work_buckets[WorkBucketStage::Unconstrained].add_local(SingleThreadStopMutators::<
+            C::SingleThreadProcessEdgesWorkType,
+        >::new());
+
+        // Prepare global/collectors/mutators
+        self.work_buckets[WorkBucketStage::Prepare].add_local(SingleThreadPrepare::<C>::new(plan));
+
+        // Release global/collectors/mutators
+        self.work_buckets[WorkBucketStage::Release].add_local(SingleThreadRelease::<C>::new(plan));
+
+        // Analysis GC work
+        #[cfg(feature = "analysis")]
+        {
+            use crate::util::analysis::GcHookWork;
+            self.work_buckets[WorkBucketStage::Unconstrained].add_local(GcHookWork);
+        }
+
+        // Sanity
+        #[cfg(feature = "sanity")]
+        {
+            use crate::util::sanity::sanity_checker::ScheduleSanityGC;
+            self.work_buckets[WorkBucketStage::Final]
+                .add_local(ScheduleSanityGC::<C::PlanType>::new(plan));
+        }
+
+        // Reference processing
+        if !*plan.base().options.no_reference_types {
+            use crate::util::reference_processor::{
+                PhantomRefProcessing, SoftRefProcessing, WeakRefProcessing,
+            };
+            self.work_buckets[WorkBucketStage::SoftRefClosure]
+                .add_local(SoftRefProcessing::<C::SingleThreadProcessEdgesWorkType>::new());
+            self.work_buckets[WorkBucketStage::WeakRefClosure]
+                .add_local(WeakRefProcessing::<C::SingleThreadProcessEdgesWorkType>::new());
+            self.work_buckets[WorkBucketStage::PhantomRefClosure]
+                .add_local(PhantomRefProcessing::<C::SingleThreadProcessEdgesWorkType>::new());
+
+            use crate::util::reference_processor::RefForwarding;
+            if plan.constraints().needs_forward_after_liveness {
+                self.work_buckets[WorkBucketStage::RefForwarding]
+                    .add_local(RefForwarding::<C::SingleThreadProcessEdgesWorkType>::new());
+            }
+
+            use crate::util::reference_processor::RefEnqueue;
+            self.work_buckets[WorkBucketStage::Release].add_local(RefEnqueue::<VM>::new());
+        }
+
+        // Finalization
+        if !*plan.base().options.no_finalizer {
+            use crate::util::finalizable_processor::{Finalization, ForwardFinalization};
+            // finalization
+            self.work_buckets[WorkBucketStage::FinalRefClosure]
+                .add_local(Finalization::<C::SingleThreadProcessEdgesWorkType>::new());
+            // forward refs
+            if plan.constraints().needs_forward_after_liveness {
+                self.work_buckets[WorkBucketStage::FinalizableForwarding]
+                    .add_local(ForwardFinalization::<C::SingleThreadProcessEdgesWorkType>::new());
+            }
+        }
+
+        // We add the VM-specific weak ref processing work regardless of MMTK-side options,
+        // including Options::no_finalizer and Options::no_reference_types.
+        //
+        // VMs need weak reference handling to function properly.  The VM may treat weak references
+        // as strong references, but it is not appropriate to simply disable weak reference
+        // handling from MMTk's side.  The VM, however, may choose to do nothing in
+        // `Collection::process_weak_refs` if appropriate.
+        //
+        // It is also not sound for MMTk core to turn off weak
+        // reference processing or finalization alone, because (1) not all VMs have the notion of
+        // weak references or finalizers, so it may not make sence, and (2) the VM may
+        // processing them together.
+
+        // VM-specific weak ref processing
+        // The `VMProcessWeakRefs` work packet is set as the sentinel so that it is executed when
+        // the `VMRefClosure` bucket is drained.  The VM binding may spawn new work packets into
+        // the `VMRefClosure` bucket, and request another `VMProcessWeakRefs` work packet to be
+        // executed again after this bucket is drained again.  Strictly speaking, the first
+        // `VMProcessWeakRefs` packet can be an ordinary packet (doesn't have to be a sentinel)
+        // because there are no other packets in the bucket.  We set it as sentinel for
+        // consistency.
+        self.work_buckets[WorkBucketStage::VMRefClosure].set_sentinel(Box::new(
+            VMProcessWeakRefs::<C::SingleThreadProcessEdgesWorkType>::new(),
+        ));
+
+        if plan.constraints().needs_forward_after_liveness {
+            // VM-specific weak ref forwarding
+            self.work_buckets[WorkBucketStage::VMRefForwarding]
+                .add_local(VMForwardWeakRefs::<C::SingleThreadProcessEdgesWorkType>::new());
+        }
+
+        self.work_buckets[WorkBucketStage::Release].add_local(VMPostForwarding::<VM>::default());
     }
 
     fn are_buckets_drained(&self, buckets: &[WorkBucketStage]) -> bool {

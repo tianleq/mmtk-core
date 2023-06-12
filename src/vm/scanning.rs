@@ -222,6 +222,17 @@ pub trait Scanning<VM: VMBinding> {
     /// * `factory`: The VM uses it to create work packets for scanning roots.
     fn scan_vm_specific_roots(tls: VMWorkerThread, factory: impl RootsWorkFactory<VM::VMEdge>);
 
+    /// Scan VM-specific roots in single thread. The creation of all root scan tasks (except thread scanning)
+    /// goes here.
+    ///
+    /// Arguments:
+    /// * `tls`: The GC thread that is performing this scanning.
+    /// * `factory`: The VM uses it to create work packets for scanning roots.
+    fn single_thread_scan_vm_specific_roots(
+        tls: VMWorkerThread,
+        factory: impl RootsWorkFactory<VM::VMEdge>,
+    );
+
     /// Return whether the VM supports return barriers. This is unused at the moment.
     fn supports_return_barrier() -> bool;
 

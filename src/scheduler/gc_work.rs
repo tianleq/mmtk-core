@@ -760,6 +760,7 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
         buffer: &[ObjectReference],
         worker: &mut GCWorker<<Self::E as ProcessEdgesWork>::VM>,
         mmtk: &'static MMTK<<Self::E as ProcessEdgesWork>::VM>,
+        single_thread: bool,
     ) {
         let tls = worker.tls;
 
@@ -808,7 +809,7 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
         // Then scan those objects for edges.
         let mut scan_later = vec![];
         {
-            let mut closure = ObjectsClosure::<Self::E>::new(worker);
+            let mut closure = ObjectsClosure::<Self::E>::new(worker, single_thread);
             for object in objects_to_scan.iter().copied() {
                 if <VM as VMBinding>::VMScanning::support_edge_enqueuing(tls, object) {
                     trace!("Scan object (edge) {}", object);
@@ -895,7 +896,7 @@ impl<VM: VMBinding, E: ProcessEdgesWork<VM = VM>> ScanObjectsWork<VM> for ScanOb
 impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanObjects<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         trace!("ScanObjects");
-        self.do_work_common(&self.buffer, worker, mmtk);
+        self.do_work_common(&self.buffer, worker, mmtk, false);
         trace!("ScanObjects End");
     }
 }
@@ -1024,7 +1025,7 @@ impl<E: ProcessEdgesWork, P: Plan<VM = E::VM> + PlanTraceObject<E::VM>> GCWork<E
 {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         trace!("PlanScanObjects");
-        self.do_work_common(&self.buffer, worker, mmtk);
+        self.do_work_common(&self.buffer, worker, mmtk, false);
         trace!("PlanScanObjects End");
     }
 }

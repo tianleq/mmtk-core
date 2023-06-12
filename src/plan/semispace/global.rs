@@ -78,6 +78,12 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
         scheduler.schedule_common_work::<SSGCWorkContext<VM>>(self);
     }
 
+    fn schedule_single_thread_collection(&'static self, scheduler: &GCWorkScheduler<Self::VM>) {
+        self.base().set_collection_kind::<Self>(self);
+        self.base().set_gc_status(GcStatus::GcPrepare);
+        scheduler.schedule_single_thread_common_work::<SSGCWorkContext<VM>>(self);
+    }
+
     fn get_allocator_mapping(&self) -> &'static EnumMap<AllocationSemantics, AllocatorSelector> {
         &ALLOCATOR_MAPPING
     }

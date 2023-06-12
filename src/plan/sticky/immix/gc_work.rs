@@ -1,5 +1,6 @@
 use crate::policy::gc_work::TraceKind;
 use crate::scheduler::gc_work::PlanProcessEdges;
+use crate::scheduler::single_thread_gc_work::SingleThreadPlanProcessEdges;
 use crate::{plan::generational::gc_work::GenNurseryProcessEdges, vm::VMBinding};
 
 use super::global::StickyImmix;
@@ -9,6 +10,8 @@ impl<VM: VMBinding> crate::scheduler::GCWorkContext for StickyImmixNurseryGCWork
     type VM = VM;
     type PlanType = StickyImmix<VM>;
     type ProcessEdgesWorkType = GenNurseryProcessEdges<VM, Self::PlanType>;
+
+    type SingleThreadProcessEdgesWorkType = GenNurseryProcessEdges<VM, Self::PlanType>;
 }
 
 pub struct StickyImmixMatureGCWorkContext<VM: VMBinding, const KIND: TraceKind>(
@@ -20,4 +23,6 @@ impl<VM: VMBinding, const KIND: TraceKind> crate::scheduler::GCWorkContext
     type VM = VM;
     type PlanType = StickyImmix<VM>;
     type ProcessEdgesWorkType = PlanProcessEdges<VM, Self::PlanType, KIND>;
+
+    type SingleThreadProcessEdgesWorkType = SingleThreadPlanProcessEdges<VM, Self::PlanType, KIND>;
 }

@@ -1,5 +1,5 @@
-use crate::DummyVM;
 use crate::edges::DummyVMEdge;
+use crate::DummyVM;
 use mmtk::util::opaque_pointer::*;
 use mmtk::util::ObjectReference;
 use mmtk::vm::EdgeVisitor;
@@ -21,6 +21,13 @@ impl Scanning<DummyVM> for VMScanning {
         unimplemented!()
     }
     fn scan_vm_specific_roots(_tls: VMWorkerThread, _factory: impl RootsWorkFactory<DummyVMEdge>) {
+        unimplemented!()
+    }
+
+    fn single_thread_scan_vm_specific_roots(
+        _tls: VMWorkerThread,
+        _factory: impl RootsWorkFactory<DummyVMEdge>,
+    ) {
         unimplemented!()
     }
     fn scan_object<EV: EdgeVisitor<DummyVMEdge>>(

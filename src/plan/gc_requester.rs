@@ -6,6 +6,7 @@ use std::sync::{Condvar, Mutex};
 struct RequestSync {
     request_count: isize,
     last_request_count: isize,
+    single_thread: bool,
 }
 
 /// GC requester.  This object allows other threads to request (trigger) GC,
@@ -30,6 +31,7 @@ impl<VM: VMBinding> GCRequester<VM> {
             request_sync: Mutex::new(RequestSync {
                 request_count: 0,
                 last_request_count: -1,
+                single_thread: false,
             }),
             request_condvar: Condvar::new(),
             request_flag: AtomicBool::new(false),
@@ -46,6 +48,21 @@ impl<VM: VMBinding> GCRequester<VM> {
         if !self.request_flag.load(Ordering::Relaxed) {
             self.request_flag.store(true, Ordering::Relaxed);
             guard.request_count += 1;
+            guard.single_thread = false;
+            self.request_condvar.notify_all();
+        }
+    }
+
+    pub fn request_single_thread_gc(&self) {
+        if self.request_flag.load(Ordering::Relaxed) {
+            return;
+        }
+
+        let mut guard = self.request_sync.lock().unwrap();
+        if !self.request_flag.load(Ordering::Relaxed) {
+            self.request_flag.store(true, Ordering::Relaxed);
+            guard.request_count += 1;
+            guard.single_thread = true;
             self.request_condvar.notify_all();
         }
     }
@@ -56,11 +73,12 @@ impl<VM: VMBinding> GCRequester<VM> {
         drop(guard);
     }
 
-    pub fn wait_for_request(&self) {
+    pub fn wait_for_request(&self) -> bool {
         let mut guard = self.request_sync.lock().unwrap();
         guard.last_request_count += 1;
         while guard.last_request_count == guard.request_count {
             guard = self.request_condvar.wait(guard).unwrap();
         }
+        guard.single_thread
     }
 }

@@ -44,6 +44,7 @@ pub type BucketOpenCondition<VM> = Box<dyn (Fn(&GCWorkScheduler<VM>) -> bool) + 
 pub struct WorkBucket<VM: VMBinding> {
     active: AtomicBool,
     queue: BucketQueue<VM>,
+    thread_local_queues: Vec<BucketQueue<VM>>,
     prioritized_queue: Option<BucketQueue<VM>>,
     monitor: Arc<WorkerMonitor>,
     can_open: Option<BucketOpenCondition<VM>>,
@@ -62,10 +63,15 @@ pub struct WorkBucket<VM: VMBinding> {
 }
 
 impl<VM: VMBinding> WorkBucket<VM> {
-    pub(crate) fn new(active: bool, monitor: Arc<WorkerMonitor>) -> Self {
+    pub(crate) fn new(active: bool, monitor: Arc<WorkerMonitor>, num_workers: usize) -> Self {
+        let mut thread_local_queues = Vec::new();
+        for _ in 0..num_workers {
+            thread_local_queues.push(BucketQueue::<VM>::new());
+        }
         Self {
             active: AtomicBool::new(active),
             queue: BucketQueue::new(),
+            thread_local_queues,
             prioritized_queue: None,
             monitor,
             can_open: None,
@@ -102,7 +108,9 @@ impl<VM: VMBinding> WorkBucket<VM> {
 
     /// Test if the bucket is drained
     pub fn is_empty(&self) -> bool {
-        self.queue.is_empty()
+        let ordinal = crate::scheduler::current_worker_ordinal().unwrap();
+        self.thread_local_queues[ordinal].is_empty()
+            && self.queue.is_empty()
             && self
                 .prioritized_queue
                 .as_ref()
@@ -125,6 +133,15 @@ impl<VM: VMBinding> WorkBucket<VM> {
     pub fn add_prioritized(&self, work: Box<dyn GCWork<VM>>) {
         self.prioritized_queue.as_ref().unwrap().push(work);
         self.notify_one_worker();
+    }
+
+    /// Add a work packet to the local queue
+    /// This function can only be called by gc threads who owns the local queue
+    /// so no need to notify other gc threads
+    pub fn add_local<W: GCWork<VM>>(&self, work: W) {
+        let ordinal = crate::scheduler::current_worker_ordinal().unwrap();
+        self.thread_local_queues[ordinal].push(Box::new(work));
+        // self.notify_one_worker();
     }
 
     /// Add a work packet to this bucket
@@ -159,12 +176,27 @@ impl<VM: VMBinding> WorkBucket<VM> {
         }
     }
 
+    /// Add multiple packets
+    pub fn bulk_add_local(&self, work_vec: Vec<Box<dyn GCWork<VM>>>) {
+        if work_vec.is_empty() {
+            return;
+        }
+        let ordinal = crate::scheduler::current_worker_ordinal().unwrap();
+
+        for w in work_vec {
+            self.thread_local_queues[ordinal].push(w);
+        }
+    }
+
     /// Get a work packet from this bucket
     pub fn poll(&self, worker: &Worker<Box<dyn GCWork<VM>>>) -> Steal<Box<dyn GCWork<VM>>> {
         if !self.is_activated() || self.is_empty() {
             return Steal::Empty;
         }
-        if let Some(prioritized_queue) = self.prioritized_queue.as_ref() {
+        let oridinal = crate::scheduler::current_worker_ordinal().unwrap();
+        if !self.thread_local_queues[oridinal].is_empty() {
+            self.thread_local_queues[oridinal].steal_batch_and_pop(worker)
+        } else if let Some(prioritized_queue) = self.prioritized_queue.as_ref() {
             prioritized_queue
                 .steal_batch_and_pop(worker)
                 .or_else(|| self.queue.steal_batch_and_pop(worker))

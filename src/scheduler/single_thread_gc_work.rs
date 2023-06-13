@@ -22,6 +22,10 @@ pub struct ScheduleSingleThreadCollection;
 
 impl<VM: VMBinding> GCWork<VM> for ScheduleSingleThreadCollection {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        debug!(
+            "ScheduleSingleThreadCollection executed by GC Thread {}",
+            crate::scheduler::worker::current_worker_ordinal().unwrap()
+        );
         mmtk.plan
             .schedule_single_thread_collection(worker.scheduler());
 

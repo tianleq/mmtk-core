@@ -552,7 +552,8 @@ impl<VM: VMBinding> BasePlan<VM> {
             info!("User triggering collection");
             self.user_triggered_collection
                 .store(true, Ordering::Relaxed);
-            self.gc_requester.request();
+            // self.gc_requester.request();
+            self.gc_requester.request_single_thread_gc();
             VM::VMCollection::block_for_gc(tls);
         }
     }

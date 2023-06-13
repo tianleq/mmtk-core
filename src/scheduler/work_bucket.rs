@@ -37,6 +37,10 @@ impl<VM: VMBinding> BucketQueue<VM> {
             self.queue.push(w);
         }
     }
+
+    fn steal(&self) -> Steal<Box<dyn GCWork<VM>>> {
+        self.queue.steal()
+    }
 }
 
 pub type BucketOpenCondition<VM> = Box<dyn (Fn(&GCWorkScheduler<VM>) -> bool) + Send>;
@@ -195,7 +199,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
         }
         let oridinal = crate::scheduler::current_worker_ordinal().unwrap();
         if !self.thread_local_queues[oridinal].is_empty() {
-            self.thread_local_queues[oridinal].steal_batch_and_pop(worker)
+            self.thread_local_queues[oridinal].steal()
         } else if let Some(prioritized_queue) = self.prioritized_queue.as_ref() {
             prioritized_queue
                 .steal_batch_and_pop(worker)

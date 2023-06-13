@@ -356,13 +356,17 @@ impl<VM: VMBinding> GCWorker<VM> {
     /// Entry of the worker thread. Resolve thread affinity, if it has been specified by the user.
     /// Each worker will keep polling and executing work packets in a loop.
     pub fn run(&mut self, tls: VMWorkerThread, mmtk: &'static MMTK<VM>) {
-        WORKER_ORDINAL.with(|x| x.store(Some(self.ordinal), Ordering::SeqCst));
+        WORKER_ORDINAL.with(|x: &Atomic<Option<usize>>| x.store(Some(self.ordinal), Ordering::SeqCst));
         self.scheduler.resolve_affinity(self.ordinal);
         self.tls = tls;
         self.copy = crate::plan::create_gc_worker_context(tls, mmtk);
         loop {
             let mut work = self.poll();
             work.do_work_with_stat(self, mmtk);
+            debug!(
+                "GC Thread {} executes the packet",
+                current_worker_ordinal().unwrap()
+            );
         }
     }
 }

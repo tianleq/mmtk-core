@@ -3,6 +3,7 @@ use super::*;
 use crate::vm::VMBinding;
 use crossbeam::deque::{Injector, Steal, Worker};
 use enum_map::Enum;
+use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -49,6 +50,7 @@ pub struct WorkBucket<VM: VMBinding> {
     active: AtomicBool,
     queue: BucketQueue<VM>,
     thread_local_queues: Vec<BucketQueue<VM>>,
+    thread_local_sentinels: Vec<RefCell<Option<Box<dyn GCWork<VM>>>>>,
     prioritized_queue: Option<BucketQueue<VM>>,
     monitor: Arc<WorkerMonitor>,
     can_open: Option<BucketOpenCondition<VM>>,
@@ -68,14 +70,17 @@ pub struct WorkBucket<VM: VMBinding> {
 
 impl<VM: VMBinding> WorkBucket<VM> {
     pub(crate) fn new(active: bool, monitor: Arc<WorkerMonitor>, num_workers: usize) -> Self {
-        let mut thread_local_queues = Vec::new();
+        let mut thread_local_queues = Vec::with_capacity(num_workers);
+        let mut thread_local_sentinels = Vec::with_capacity(num_workers);
         for _ in 0..num_workers {
             thread_local_queues.push(BucketQueue::<VM>::new());
+            thread_local_sentinels.push(RefCell::new(None));
         }
         Self {
             active: AtomicBool::new(active),
             queue: BucketQueue::new(),
             thread_local_queues,
+            thread_local_sentinels,
             prioritized_queue: None,
             monitor,
             can_open: None,
@@ -112,14 +117,23 @@ impl<VM: VMBinding> WorkBucket<VM> {
 
     /// Test if the bucket is drained
     pub fn is_empty(&self) -> bool {
-        let ordinal = crate::scheduler::current_worker_ordinal().unwrap();
-        self.thread_local_queues[ordinal].is_empty()
-            && self.queue.is_empty()
-            && self
-                .prioritized_queue
-                .as_ref()
-                .map(|q| q.is_empty())
-                .unwrap_or(true)
+        let ordinal = crate::scheduler::current_worker_ordinal();
+        if ordinal.is_none() {
+            self.queue.is_empty()
+                && self
+                    .prioritized_queue
+                    .as_ref()
+                    .map(|q| q.is_empty())
+                    .unwrap_or(true)
+        } else {
+            self.thread_local_queues[ordinal.unwrap()].is_empty()
+                && self.queue.is_empty()
+                && self
+                    .prioritized_queue
+                    .as_ref()
+                    .map(|q| q.is_empty())
+                    .unwrap_or(true)
+        }
     }
 
     pub fn is_drained(&self) -> bool {
@@ -226,6 +240,12 @@ impl<VM: VMBinding> WorkBucket<VM> {
         sentinel.is_some()
     }
 
+    pub fn set_local_sentinel(&self, new_sentinel: Box<dyn GCWork<VM>>) {
+        let ordinal = crate::scheduler::current_worker_ordinal().unwrap();
+        let val = self.thread_local_sentinels[ordinal].replace(Some(new_sentinel));
+        debug_assert!(val.is_none(), "local sentinel already exists");
+    }
+
     pub fn update(&self, scheduler: &GCWorkScheduler<VM>) -> bool {
         if let Some(can_open) = self.can_open.as_ref() {
             if !self.is_activated() && can_open(scheduler) {
@@ -234,6 +254,36 @@ impl<VM: VMBinding> WorkBucket<VM> {
             }
         }
         false
+    }
+
+    pub fn maybe_schedule_local_sentinel(&self) -> bool {
+        debug_assert!(
+            self.is_activated(),
+            "Attempted to schedule local sentinel work while bucket is not open"
+        );
+        let mut has_work = false;
+        for (ordinal, sentinel) in self.thread_local_sentinels.iter().enumerate() {
+            if let Some(work) = sentinel.take() {
+                // We don't need to call `self.add` because this function is called by the coordinator
+                // when workers are stopped.  We don't need to notify the workers because the
+                // coordinator will do that later.
+                // We can just "sneak" the sentinel work packet into the current bucket.
+                self.thread_local_queues[ordinal].push(work);
+                has_work = true;
+            }
+        }
+        has_work
+        // let maybe_sentinel = self.thread_local_sentinels[ordinal].take();
+        // if let Some(work) = maybe_sentinel {
+        //     // We don't need to call `self.add` because this function is called by the coordinator
+        //     // when workers are stopped.  We don't need to notify the workers because the
+        //     // coordinator will do that later.
+        //     // We can just "sneak" the sentinel work packet into the current bucket.
+        //     self.thread_local_queues[ordinal].push(work);
+        //     true
+        // } else {
+        //     false
+        // }
     }
 
     pub fn maybe_schedule_sentinel(&self) -> bool {

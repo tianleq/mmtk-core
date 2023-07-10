@@ -92,7 +92,7 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
         if !buf.is_empty() {
             if self.single_thread {
                 self.worker.add_local_work(
-                    WorkBucketStage::Closure,
+                    WorkBucketStage::Unconstrained,
                     E::new(buf, false, self.worker.mmtk),
                 );
             } else {

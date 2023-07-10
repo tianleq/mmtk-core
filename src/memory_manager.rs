@@ -931,3 +931,16 @@ pub fn add_local_work_packets<VM: VMBinding>(
 ) {
     mmtk.scheduler.work_buckets[bucket].bulk_add_local(packets)
 }
+
+/// Trigger a single thread garbage collection as requested by the user.
+///
+/// Arguments:
+/// * `mmtk`: A reference to an MMTk instance.
+/// * `tls`: The thread that triggers this collection request.
+pub fn handle_user_collection_request_with_single_thread<VM: VMBinding>(
+    mmtk: &MMTK<VM>,
+    tls: VMMutatorThread,
+) {
+    mmtk.plan
+        .handle_user_collection_request_with_single_thread(tls, true, false);
+}

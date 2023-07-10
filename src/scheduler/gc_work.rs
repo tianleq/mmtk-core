@@ -641,6 +641,10 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for E {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
         self.set_worker(worker);
         self.process_edges();
+        info!(
+            "ProcessEdgesWork executed by GC Thread {}",
+            crate::scheduler::worker::current_worker_ordinal().unwrap()
+        );
         if !self.nodes.is_empty() {
             self.flush();
         }

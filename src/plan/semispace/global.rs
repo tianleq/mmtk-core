@@ -9,6 +9,7 @@ use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::copyspace::CopySpace;
 use crate::policy::space::Space;
+use crate::scheduler::single_thread_gc_work::SingleThreadSentinel;
 use crate::scheduler::*;
 use crate::util::alloc::allocators::AllocatorSelector;
 use crate::util::copy::*;
@@ -78,10 +79,21 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
         scheduler.schedule_common_work::<SSGCWorkContext<VM>>(self);
     }
 
-    fn schedule_single_thread_collection(&'static self, scheduler: &GCWorkScheduler<Self::VM>) {
+    fn schedule_single_thread_collection(&'static self, worker: &mut GCWorker<Self::VM>) {
         self.base().set_collection_kind::<Self>(self);
         self.base().set_gc_status(GcStatus::GcPrepare);
-        scheduler.schedule_single_thread_common_work::<SSGCWorkContext<VM>>(self);
+
+        // scheduler.schedule_single_thread_common_work::<SSGCWorkContext<VM>>(self);
+        single_thread_gc_work::SingleThreadStopMutators::<
+            <SSGCWorkContext<VM> as GCWorkContext>::SingleThreadProcessEdgesWorkType,
+        >::new()
+        .do_work(worker, worker.mmtk);
+        single_thread_gc_work::SingleThreadPrepare::<SSGCWorkContext<VM>>::new(self)
+            .do_work(worker, worker.mmtk);
+
+        worker.scheduler().work_buckets[WorkBucketStage::Unconstrained].set_local_sentinel(
+            Box::new(SingleThreadSentinel::<SSGCWorkContext<VM>>::new(self)),
+        );
     }
 
     fn get_allocator_mapping(&self) -> &'static EnumMap<AllocationSemantics, AllocatorSelector> {

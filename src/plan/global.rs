@@ -180,7 +180,7 @@ pub trait Plan: 'static + Sync + Downcast {
     fn base(&self) -> &BasePlan<Self::VM>;
     fn base_mut(&mut self) -> &mut BasePlan<Self::VM>;
     fn schedule_collection(&'static self, _scheduler: &GCWorkScheduler<Self::VM>);
-    fn schedule_single_thread_collection(&'static self, _scheduler: &GCWorkScheduler<Self::VM>) {}
+    fn schedule_single_thread_collection(&'static self, _worker: &mut GCWorker<Self::VM>) {}
     fn common(&self) -> &CommonPlan<Self::VM> {
         panic!("Common Plan not handled!")
     }
@@ -322,6 +322,30 @@ pub trait Plan: 'static + Sync + Downcast {
             }
         }
         self.base().handle_user_collection_request(tls, force)
+    }
+
+    /// The application code has requested a single thread collection. This is just a GC hint, and
+    /// we may ignore it.
+    ///
+    /// # Arguments
+    /// * `tls`: The mutator thread that requests the GC
+    /// * `force`: The request cannot be ignored (except for NoGC)
+    /// * `exhaustive`: The requested GC should be exhaustive. This is also a hint.
+    fn handle_user_collection_request_with_single_thread(
+        &self,
+        tls: VMMutatorThread,
+        force: bool,
+        exhaustive: bool,
+    ) {
+        // For exhaustive on generational plans, we force a full heap GC.
+        // A plan may implement this method themselves to handle the exhaustive GC.
+        if exhaustive {
+            if let Some(gen) = self.generational() {
+                gen.force_full_heap_collection();
+            }
+        }
+        self.base()
+            .handle_user_collection_request_with_single_thread(tls, force)
     }
 
     /// Return whether last GC was an exhaustive attempt to collect the heap.
@@ -552,7 +576,21 @@ impl<VM: VMBinding> BasePlan<VM> {
             info!("User triggering collection");
             self.user_triggered_collection
                 .store(true, Ordering::Relaxed);
-            // self.gc_requester.request();
+            self.gc_requester.request();
+            VM::VMCollection::block_for_gc(tls);
+        }
+    }
+
+    /// The application code has requested a collection.
+    pub fn handle_user_collection_request_with_single_thread(
+        &self,
+        tls: VMMutatorThread,
+        force: bool,
+    ) {
+        if force || !*self.options.ignore_system_gc {
+            info!("User triggering single thread collection");
+            self.user_triggered_collection
+                .store(true, Ordering::Relaxed);
             self.gc_requester.request_single_thread_gc();
             VM::VMCollection::block_for_gc(tls);
         }

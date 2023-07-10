@@ -196,7 +196,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         //
         // It is also not sound for MMTk core to turn off weak
         // reference processing or finalization alone, because (1) not all VMs have the notion of
-        // weak references or finalizers, so it may not make sence, and (2) the VM may
+        // weak references or finalizers, so it may not make sense, and (2) the VM may
         // processing them together.
 
         // VM-specific weak ref processing
@@ -337,6 +337,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             if work_bucket.is_activated() && work_bucket.maybe_schedule_sentinel() {
                 trace!("Scheduled sentinel packet into {:?}", id);
                 new_packets = true;
+            } else if work_bucket.is_activated() && work_bucket.maybe_schedule_local_sentinel() {
+                trace!("Scheduled local sentinel packet into {:?}", id);
+                new_packets = true;
             }
         }
         new_packets
@@ -430,7 +433,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             return Steal::Success(w);
         }
         // Try get a packet from a work bucket.
-        for work_bucket in self.work_buckets.values() {
+        for (_, work_bucket) in self.work_buckets.iter() {
             match work_bucket.poll(&worker.local_work_buffer) {
                 Steal::Success(w) => return Steal::Success(w),
                 Steal::Retry => should_retry = true,

@@ -64,7 +64,8 @@ impl<VM: VMBinding> GCTrigger<VM> {
                 plan.get_reserved_pages(),
                 plan.get_total_pages(),
             );
-            plan.base().gc_requester.request();
+            // plan.base().gc_requester.request();
+            plan.base().gc_requester.request_single_thread_gc();
             return true;
         }
         false

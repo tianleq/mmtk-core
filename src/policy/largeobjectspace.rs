@@ -19,6 +19,7 @@ const PAGE_MASK: usize = !(BYTES_IN_PAGE - 1);
 const MARK_BIT: u8 = 0b01;
 const NURSERY_BIT: u8 = 0b10;
 const LOS_BIT_MASK: u8 = 0b11;
+const LOCAL_MARK_BIT: u8 = 0b100;
 
 /// This type implements a policy for large objects. Each instance corresponds
 /// to one Treadmill space.
@@ -26,7 +27,9 @@ pub struct LargeObjectSpace<VM: VMBinding> {
     common: CommonSpace<VM>,
     pr: FreeListPageResource<VM>,
     mark_state: u8,
+    local_mark_state: u8,
     in_nursery_gc: bool,
+    in_thread_local_gc: bool,
     treadmill: TreadMill,
 }
 
@@ -160,7 +163,9 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             pr,
             common,
             mark_state: 0,
+            local_mark_state: 0,
             in_nursery_gc: false,
+            in_thread_local_gc: false,
             treadmill: TreadMill::new(),
         }
     }
@@ -172,6 +177,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         }
         self.treadmill.flip(full_heap);
         self.in_nursery_gc = !full_heap;
+        self.in_thread_local_gc = false;
     }
 
     pub fn release(&mut self, full_heap: bool) {
@@ -181,6 +187,35 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             self.sweep_large_pages(false);
         }
     }
+
+    pub fn thread_local_prepare(&mut self, _tls: VMMutatorThread) {
+        debug_assert!(self.treadmill.is_from_space_empty());
+        self.in_thread_local_gc = true;
+        self.local_mark_state = LOCAL_MARK_BIT - self.local_mark_state;
+        self.in_nursery_gc = false;
+    }
+
+    pub fn thread_local_release(&mut self, _tls: VMMutatorThread) {
+        self.in_thread_local_gc = false;
+    }
+
+    fn trace_thread_local_object(
+        &self,
+        queue: &mut impl ObjectQueue,
+        object: ObjectReference,
+    ) -> ObjectReference {
+        // thread-local gc does not reclaim los
+        // but it still needs to mark and scan los objects
+        // as they may refer to immix space objects
+        if crate::util::public_bit::is_public::<VM>(object) {
+            return object;
+        }
+        if self.test_and_mark_without_side_effect(object, self.local_mark_state) {
+            queue.enqueue(object);
+        }
+        object
+    }
+
     // Allow nested-if for this function to make it clear that test_and_mark() is only executed
     // for the outer condition is met.
     #[allow(clippy::collapsible_if)]
@@ -195,6 +230,10 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             "{:x}: VO bit not set",
             object
         );
+
+        if self.in_thread_local_gc {
+            return self.trace_thread_local_object(queue, object);
+        }
         let nursery_object = self.is_in_nursery(object);
         trace!(
             "LOS object {} {} a nursery object",
@@ -227,6 +266,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         let sweep = |object: ObjectReference| {
             #[cfg(feature = "vo_bit")]
             crate::util::metadata::vo_bit::unset_vo_bit::<VM>(object);
+            crate::util::public_bit::unset_public_bit::<VM>(object);
             self.pr
                 .release_pages(get_super_page(object.to_object_start::<VM>()));
         };
@@ -244,6 +284,68 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     /// Allocate an object
     pub fn allocate_pages(&self, tls: VMThread, pages: usize) -> Address {
         self.acquire(tls, pages)
+    }
+
+    fn test_and_mark_without_side_effect(&self, object: ObjectReference, value: u8) -> bool {
+        debug_assert!(!self.in_nursery_gc);
+        loop {
+            let old_value = VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC.load_atomic::<VM, u8>(
+                object,
+                None,
+                Ordering::SeqCst,
+            );
+            let mark_bit = old_value & LOCAL_MARK_BIT;
+            if mark_bit == value {
+                return false;
+            }
+            if VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC
+                .compare_exchange_metadata::<VM, u8>(
+                    object,
+                    old_value,
+                    old_value & !LOCAL_MARK_BIT | value,
+                    None,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+                .is_ok()
+            {
+                break;
+            }
+        }
+        true
+    }
+
+    /// Test if the object's mark bit is the same as the given value. If it is not the same,
+    /// the method will attemp to mark the object and clear its nursery bit. If the attempt
+    /// succeeds, the method will return true, meaning the object is marked by this invocation.
+    /// Otherwise, it returns false.
+    fn test_and_mark_without_side_effect(&self, object: ObjectReference, value: u8) -> bool {
+        debug_assert!(!self.in_nursery_gc);
+        loop {
+            let old_value = VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC.load_atomic::<VM, u8>(
+                object,
+                None,
+                Ordering::SeqCst,
+            );
+            let mark_bit = old_value & LOCAL_MARK_BIT;
+            if mark_bit == value {
+                return false;
+            }
+            if VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC
+                .compare_exchange_metadata::<VM, u8>(
+                    object,
+                    old_value,
+                    old_value & !LOCAL_MARK_BIT | value,
+                    None,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+                .is_ok()
+            {
+                break;
+            }
+        }
+        true
     }
 
     /// Test if the object's mark bit is the same as the given value. If it is not the same,
@@ -301,6 +403,12 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             Ordering::Relaxed,
         ) & NURSERY_BIT
             == NURSERY_BIT
+    }
+
+    pub fn publish_object(&self, _object: ObjectReference) {
+        // thread-local gc does not reclaim los at the moment
+        // so do nothing. Once it starts reclaiming, marking
+        // is necessary
     }
 }
 

@@ -15,6 +15,7 @@ use crate::vm::*;
 #[repr(C)]
 pub struct ImmixAllocator<VM: VMBinding> {
     pub tls: VMThread,
+    pub mutator_id: u32,
     /// Bump pointer
     cursor: Address,
     /// Limit for bump pointer
@@ -82,10 +83,20 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
             );
             if get_maximum_aligned_size::<VM>(size, align) > Line::BYTES {
                 // Size larger than a line: do large allocation
-                self.overflow_alloc(size, align, offset)
+                let rtn = self.overflow_alloc(size, align, offset);
+                debug_assert!(
+                    !crate::util::public_bit::is_public_object(rtn),
+                    "public bit is not cleared properly"
+                );
+                rtn
             } else {
                 // Size smaller than a line: fit into holes
-                self.alloc_slow_hot(size, align, offset)
+                let rtn = self.alloc_slow_hot(size, align, offset);
+                debug_assert!(
+                    !crate::util::public_bit::is_public_object(rtn),
+                    "public bit is not cleared properly"
+                );
+                rtn
             }
         } else {
             // Simple bump allocation.
@@ -98,6 +109,10 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
                 result,
                 self.cursor,
                 self.limit
+            );
+            debug_assert!(
+                !crate::util::public_bit::is_public_object(result),
+                "public bit is not cleared properly"
             );
             result
         }
@@ -171,12 +186,14 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
 impl<VM: VMBinding> ImmixAllocator<VM> {
     pub fn new(
         tls: VMThread,
+        mutator_id: u32,
         space: Option<&'static dyn Space<VM>>,
         plan: &'static dyn Plan<VM = VM>,
         copy: bool,
     ) -> Self {
         ImmixAllocator {
             tls,
+            mutator_id,
             space: space.unwrap().downcast_ref::<ImmixSpace<VM>>().unwrap(),
             plan,
             cursor: Address::ZERO,
@@ -203,6 +220,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             self.request_for_large = true;
             let rtn = self.alloc_slow_inline(size, align, offset);
             self.request_for_large = false;
+
             rtn
         } else {
             fill_alignment_gap::<VM>(self.large_cursor, start);
@@ -254,6 +272,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     end_line,
                     self.tls
                 );
+                crate::util::public_bit::bzero_public_bit(self.cursor, self.limit - self.cursor);
                 crate::util::memory::zero(self.cursor, self.limit - self.cursor);
                 debug_assert!(
                     align_allocation_no_fill::<VM>(self.cursor, align, offset) + size <= self.limit
@@ -277,7 +296,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
     /// Get a recyclable block from ImmixSpace.
     fn acquire_recyclable_block(&mut self) -> bool {
-        match self.immix_space().get_reusable_block(self.copy) {
+        match self
+            .immix_space()
+            .get_reusable_block(self.copy, self.mutator_id)
+        {
             Some(block) => {
                 trace!("{:?}: acquire_recyclable_block -> {:?}", self.tls, block);
                 // Set the hole-searching cursor to the start of this block.
@@ -299,6 +321,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     block.start(),
                     block.end()
                 );
+                block.set_owner(self.mutator_id);
                 if self.request_for_large {
                     self.large_cursor = block.start();
                     self.large_limit = block.end();

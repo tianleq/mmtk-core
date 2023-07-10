@@ -6,7 +6,7 @@ use crate::util::address::Address;
 use crate::util::heap::{MonotonePageResource, PageResource};
 use crate::util::metadata::mark_bit::MarkState;
 
-use crate::util::{metadata, ObjectReference};
+use crate::util::{metadata, ObjectReference, VMMutatorThread};
 
 use crate::plan::{ObjectQueue, VectorObjectQueue};
 
@@ -182,6 +182,12 @@ impl<VM: VMBinding> ImmortalSpace<VM> {
         self.mark_state.on_global_release::<VM>();
     }
 
+    pub fn thread_local_prepare(&mut self, _tls: VMMutatorThread) {
+        self.mark_state = GC_MARK_BIT_MASK - self.mark_state;
+    }
+
+    pub fn thread_local_release(&mut self, _tls: VMMutatorThread) {}
+
     pub fn trace_object<Q: ObjectQueue>(
         &self,
         queue: &mut Q,
@@ -198,4 +204,6 @@ impl<VM: VMBinding> ImmortalSpace<VM> {
         }
         object
     }
+
+    pub fn publish_object(&self, _object: ObjectReference) {}
 }

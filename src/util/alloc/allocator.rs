@@ -165,6 +165,27 @@ pub trait Allocator<VM: VMBinding>: Downcast {
     /// * `offset` the required offset in bytes.
     fn alloc(&mut self, size: usize, align: usize, offset: usize) -> Address;
 
+    /// An allocation attempt. The implementation of this function depends on the allocator used.
+    /// If an allocator supports thread local allocations, then the allocation will be serviced
+    /// from its TLAB, otherwise it will default to using the slowpath, i.e. [`alloc_slow`](Allocator::alloc_slow).
+    ///
+    /// Note that in the case where the VM is out of memory, we invoke
+    /// [`Collection::out_of_memory`] to inform the binding and then return a null pointer back to
+    /// it. We have no assumptions on whether the VM will continue executing or abort immediately.
+    ///
+    /// An allocator needs to make sure the object reference for the returned address is in the same
+    /// chunk as the returned address (so the side metadata and the SFT for an object reference is valid).
+    /// See [`crate::util::alloc::object_ref_guard`](util/alloc/object_ref_guard).
+    ///
+    /// Arguments:
+    /// * `_context`: the mutator context
+    /// * `size`: the allocation size in bytes.
+    /// * `align`: the required alignment in bytes.
+    /// * `offset` the required offset in bytes.
+    fn alloc_local(&mut self, _context: u32, size: usize, align: usize, offset: isize) -> Address {
+        self.alloc(size, align, offset)
+    }
+
     /// Slowpath allocation attempt. This function is explicitly not inlined for performance
     /// considerations.
     ///

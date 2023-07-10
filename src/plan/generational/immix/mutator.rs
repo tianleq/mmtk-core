@@ -39,12 +39,14 @@ pub fn create_genimmix_mutator<VM: VMBinding>(
     };
 
     Mutator {
-        allocators: Allocators::<VM>::new(mutator_tls, &*mmtk.plan, &config.space_mapping),
+        allocators: Allocators::<VM>::new(mutator_tls, 0, &*mmtk.plan, &config.space_mapping),
         barrier: Box::new(ObjectBarrier::new(GenObjectBarrierSemantics::new(
             mmtk, genimmix,
         ))),
         mutator_tls,
         config,
         plan: genimmix,
+        thread_local_gc_status: 0,
+        mutator_id: 0,
     }
 }

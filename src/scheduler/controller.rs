@@ -8,6 +8,7 @@ use std::sync::Arc;
 use crate::plan::gc_requester::GCRequester;
 use crate::scheduler::gc_work::{EndOfGC, ScheduleCollection};
 use crate::scheduler::single_thread_gc_work::ScheduleSingleThreadCollection;
+use crate::scheduler::thread_local_gc_work::EndOfThreadLocalGC;
 use crate::scheduler::{GCWork, WorkBucketStage};
 use crate::util::VMWorkerThread;
 use crate::vm::VMBinding;
@@ -80,6 +81,9 @@ impl<VM: VMBinding> GCController<VM> {
     /// Coordinate workers to perform GC in response to a GC request.
     pub fn do_gc_until_completion(&mut self, single_thread: bool) {
         let gc_start = std::time::Instant::now();
+        let tls = self.mmtk.plan.base().gc_requester.get_tls();
+        let thread_local_gc =
+            tls != crate::util::VMMutatorThread(crate::util::VMThread::UNINITIALIZED);
 
         debug_assert!(
             self.scheduler.worker_monitor.debug_is_sleeping(),
@@ -137,6 +141,20 @@ impl<VM: VMBinding> GCController<VM> {
         let mut end_of_gc = EndOfGC {
             elapsed: gc_start.elapsed(),
         };
+
+        let (mut end_of_gc, mut end_of_thread_local_gc);
+        // let work: &mut dyn CoordinatorWork<VM> = if thread_local_gc {
+        //     end_of_thread_local_gc = EndOfThreadLocalGC {
+        //         elapsed: gc_start.elapsed(),
+        //         tls,
+        //     };
+        //     &mut end_of_thread_local_gc
+        // } else {
+        //     end_of_gc = EndOfGC {
+        //         elapsed: gc_start.elapsed(),
+        //     };
+        //     &mut end_of_gc
+        // };
         end_of_gc.do_work_with_stat(&mut self.coordinator_worker, self.mmtk);
 
         self.scheduler.debug_assert_all_buckets_deactivated();

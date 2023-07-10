@@ -71,6 +71,8 @@ pub struct Mutator<VM: VMBinding> {
     pub mutator_tls: VMMutatorThread,
     pub plan: &'static dyn Plan<VM = VM>,
     pub config: MutatorConfig<VM>,
+    pub thread_local_gc_status: i32,
+    pub mutator_id: u32,
 }
 
 impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
@@ -103,12 +105,12 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         _bytes: usize,
         allocator: AllocationSemantics,
     ) {
-        unsafe {
+        let space = unsafe {
             self.allocators
                 .get_allocator_mut(self.config.allocator_mapping[allocator])
         }
-        .get_space()
-        .initialize_object_metadata(refer, true)
+        .get_space();
+        space.initialize_object_metadata(refer, true);
     }
 
     fn get_tls(&self) -> VMMutatorThread {

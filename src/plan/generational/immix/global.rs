@@ -189,6 +189,8 @@ impl<VM: VMBinding> Plan for GenImmix<VM> {
     fn generational(&self) -> Option<&dyn GenerationalPlan<VM = VM>> {
         Some(self)
     }
+
+    fn publish_object(&self, _object: ObjectReference) {}
 }
 
 impl<VM: VMBinding> GenerationalPlan for GenImmix<VM> {

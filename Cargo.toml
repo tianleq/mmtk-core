@@ -55,7 +55,7 @@ rand = "0.8.5"
 built = { version = "=0.6.0", features = ["git2"] }
 
 [features]
-default = []
+default = ["immix_no_defrag"]
 
 # This feature is only supported on x86-64 for now
 # It's manually added to CI scripts

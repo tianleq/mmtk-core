@@ -14,14 +14,20 @@ pub struct ScheduleCollection;
 
 impl<VM: VMBinding> GCWork<VM> for ScheduleCollection {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        mmtk.plan.schedule_collection(worker.scheduler());
+        let tls = mmtk.plan.base().gc_requester.get_tls();
+        if tls != VMMutatorThread(VMThread::UNINITIALIZED) {
+            mmtk.plan
+                .schedule_thread_local_collection(tls, worker.scheduler());
+        } else {
+            mmtk.plan.schedule_collection(worker.scheduler());
 
-        // Tell GC trigger that GC started.
-        // We now know what kind of GC this is (e.g. nursery vs mature in gen copy, defrag vs fast in Immix)
-        // TODO: Depending on the OS scheduling, other workers can run so fast that they can finish
-        // everything in the `Unconstrained` and the `Prepare` buckets before we execute the next
-        // statement. Consider if there is a better place to call `on_gc_start`.
-        mmtk.plan.base().gc_trigger.policy.on_gc_start(mmtk);
+            // Tell GC trigger that GC started.
+            // We now know what kind of GC this is (e.g. nursery vs mature in gen copy, defrag vs fast in Immix)
+            // TODO: Depending on the OS scheduling, other workers can run so fast that they can finish
+            // everything in the `Unconstrained` and the `Prepare` buckets before we execute the next
+            // statement. Consider if there is a better place to call `on_gc_start`.
+            mmtk.plan.base().gc_trigger.policy.on_gc_start(mmtk);
+        }
     }
 }
 
@@ -162,6 +168,39 @@ impl<VM: VMBinding> GCWork<VM> for ReleaseCollector {
         worker.get_copy_context_mut().release();
     }
 }
+
+/// Scan a specific mutator
+///
+/// Schedule a `ScanStackRoots`
+///
+#[derive(Default)]
+pub struct ScanMutator<ScanEdges: ProcessEdgesWork> {
+    tls: VMMutatorThread,
+    phantom: PhantomData<ScanEdges>,
+}
+
+impl<ScanEdges: ProcessEdgesWork> ScanMutator<ScanEdges> {
+    pub fn new(tls: VMMutatorThread) -> Self {
+        Self {
+            tls,
+            phantom: PhantomData,
+        }
+    }
+}
+
+impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanMutator<E> {
+    fn do_work(&mut self, _worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
+        trace!("scan_mutator start");
+        mmtk.plan.base().prepare_for_stack_scanning();
+        <E::VM as VMBinding>::VMCollection::scan_mutator(self.tls, |mutator| {
+            mmtk.scheduler.work_buckets[WorkBucketStage::Prepare].add(ScanStackRoot::<E>(mutator));
+        });
+        trace!("scan_mutator end");
+        mmtk.scheduler.notify_mutators_paused(mmtk);
+    }
+}
+
+impl<E: ProcessEdgesWork> CoordinatorWork<E::VM> for ScanMutator<E> {}
 
 /// Stop all mutators
 ///

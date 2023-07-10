@@ -1,3 +1,4 @@
+use crate::util::{VMMutatorThread, VMThread};
 use crate::vm::VMBinding;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,6 +16,7 @@ pub struct GCRequester<VM: VMBinding> {
     request_sync: Mutex<RequestSync>,
     request_condvar: Condvar,
     request_flag: AtomicBool,
+    tls: std::sync::Mutex<VMMutatorThread>,
     phantom: PhantomData<VM>,
 }
 
@@ -35,11 +37,12 @@ impl<VM: VMBinding> GCRequester<VM> {
             }),
             request_condvar: Condvar::new(),
             request_flag: AtomicBool::new(false),
+            tls: std::sync::Mutex::new(VMMutatorThread(VMThread::UNINITIALIZED)),
             phantom: PhantomData,
         }
     }
 
-    pub fn request(&self) {
+    pub fn request(&self, thread_local_gc: bool, tls: VMMutatorThread) {
         if self.request_flag.load(Ordering::Relaxed) {
             return;
         }
@@ -47,6 +50,10 @@ impl<VM: VMBinding> GCRequester<VM> {
         let mut guard = self.request_sync.lock().unwrap();
         if !self.request_flag.load(Ordering::Relaxed) {
             self.request_flag.store(true, Ordering::Relaxed);
+            if thread_local_gc {
+                let mut t = self.tls.lock().unwrap();
+                *t = tls;
+            }
             guard.request_count += 1;
             guard.single_thread = false;
             self.request_condvar.notify_all();
@@ -70,6 +77,11 @@ impl<VM: VMBinding> GCRequester<VM> {
     pub fn clear_request(&self) {
         let guard = self.request_sync.lock().unwrap();
         self.request_flag.store(false, Ordering::Relaxed);
+        {
+            let mut t = self.tls.lock().unwrap();
+            *t = VMMutatorThread(VMThread::UNINITIALIZED);
+        }
+
         drop(guard);
     }
 
@@ -80,5 +92,9 @@ impl<VM: VMBinding> GCRequester<VM> {
             guard = self.request_condvar.wait(guard).unwrap();
         }
         guard.single_thread
+    }
+
+    pub fn get_tls(&self) -> VMMutatorThread {
+        *self.tls.lock().unwrap()
     }
 }

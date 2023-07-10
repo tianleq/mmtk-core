@@ -25,7 +25,7 @@ use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::options::Options;
 use crate::util::options::PlanSelector;
 use crate::util::statistics::stats::Stats;
-use crate::util::ObjectReference;
+use crate::util::{ObjectReference, VMThread};
 use crate::util::{VMMutatorThread, VMWorkerThread};
 use crate::vm::*;
 use downcast_rs::Downcast;
@@ -41,9 +41,7 @@ pub fn create_mutator<VM: VMBinding>(
 ) -> Box<Mutator<VM>> {
     Box::new(match *mmtk.options.plan {
         PlanSelector::NoGC => crate::plan::nogc::mutator::create_nogc_mutator(tls, &*mmtk.plan),
-        PlanSelector::SemiSpace => {
-            crate::plan::semispace::mutator::create_ss_mutator(tls, &*mmtk.plan)
-        }
+        PlanSelector::SemiSpace => crate::plan::semispace::mutator::create_ss_mutator(tls, mmtk),
         PlanSelector::GenCopy => {
             crate::plan::generational::copying::mutator::create_gencopy_mutator(tls, mmtk)
         }
@@ -53,7 +51,7 @@ pub fn create_mutator<VM: VMBinding>(
         PlanSelector::MarkSweep => {
             crate::plan::marksweep::mutator::create_ms_mutator(tls, &*mmtk.plan)
         }
-        PlanSelector::Immix => crate::plan::immix::mutator::create_immix_mutator(tls, &*mmtk.plan),
+        PlanSelector::Immix => crate::plan::immix::mutator::create_immix_mutator(tls, mmtk),
         PlanSelector::PageProtect => {
             crate::plan::pageprotect::mutator::create_pp_mutator(tls, &*mmtk.plan)
         }
@@ -181,6 +179,12 @@ pub trait Plan: 'static + Sync + Downcast {
     fn base_mut(&mut self) -> &mut BasePlan<Self::VM>;
     fn schedule_collection(&'static self, _scheduler: &GCWorkScheduler<Self::VM>);
     fn schedule_single_thread_collection(&'static self, _worker: &mut GCWorker<Self::VM>) {}
+    fn schedule_thread_local_collection(
+        &'static self,
+        _tls: VMMutatorThread,
+        _scheduler: &GCWorkScheduler<Self::VM>,
+    ) {
+    }
     fn common(&self) -> &CommonPlan<Self::VM> {
         panic!("Common Plan not handled!")
     }
@@ -248,6 +252,25 @@ pub trait Plan: 'static + Sync + Downcast {
     /// * `space_full`: the allocation to a specific space failed, must recover pages within 'space'.
     /// * `space`: an option to indicate if there is a space that has failed in an allocation.
     fn collection_required(&self, space_full: bool, space: Option<&dyn Space<Self::VM>>) -> bool;
+
+    /// Ask the plan if they would trigger a GC. If MMTk is in charge of triggering GCs, this method is called
+    /// periodically during allocation. However, MMTk may delegate the GC triggering decision to the runtime,
+    /// in which case, this method may not be called. This method returns true to trigger a collection.
+    ///
+    /// # Arguments
+    /// * `space_full`: the allocation to a specific space failed, must recover pages within 'space'.
+    /// * `space`: an option to indicate if there is a space that has failed in an allocation.
+    fn thread_local_collection_required(
+        &self,
+        _space_full: bool,
+        _space: Option<&dyn Space<Self::VM>>,
+    ) -> bool {
+        false
+    }
+
+    fn handle_thread_local_collection(&self, tls: VMMutatorThread) {
+        self.base().handle_thread_local_collection(tls);
+    }
 
     // Note: The following methods are about page accounting. The default implementation should
     // work fine for non-copying plans. For copying plans, the plan should override any of these methods
@@ -371,6 +394,14 @@ pub trait Plan: 'static + Sync + Downcast {
     fn sanity_check_object(&self, _object: ObjectReference) -> bool {
         true
     }
+
+    fn publish_object(&self, _object: ObjectReference);
+
+    fn thread_local_prepare(&mut self, _tls: VMMutatorThread) {}
+
+    fn thread_local_release(&mut self, _tls: VMMutatorThread) {}
+
+    fn do_thread_local_collection(&mut self, _tls: VMMutatorThread) {}
 }
 
 impl_downcast!(Plan assoc VM);
@@ -576,7 +607,8 @@ impl<VM: VMBinding> BasePlan<VM> {
             info!("User triggering collection");
             self.user_triggered_collection
                 .store(true, Ordering::Relaxed);
-            self.gc_requester.request();
+            self.gc_requester
+                .request(false, VMMutatorThread(VMThread::UNINITIALIZED));
             VM::VMCollection::block_for_gc(tls);
         }
     }
@@ -596,6 +628,14 @@ impl<VM: VMBinding> BasePlan<VM> {
         }
     }
 
+    pub fn handle_thread_local_collection(&self, tls: VMMutatorThread) {
+        self.user_triggered_collection
+            .store(true, Ordering::Relaxed);
+        self.gc_requester.request(true, tls);
+        VM::VMCollection::block_for_thread_local_gc(tls);
+        // VM::VMCollection::block_for_gc(tls);
+    }
+
     /// MMTK has requested stop-the-world activity (e.g., stw within a concurrent gc).
     // This is not used, as we do not have a concurrent plan.
     #[allow(unused)]
@@ -604,7 +644,8 @@ impl<VM: VMBinding> BasePlan<VM> {
             .store(true, Ordering::Relaxed);
         self.internal_triggered_collection
             .store(true, Ordering::Relaxed);
-        self.gc_requester.request();
+        self.gc_requester
+            .request(false, VMMutatorThread(VMThread::UNINITIALIZED));
     }
 
     /// Reset collection state information.
@@ -701,6 +742,28 @@ impl<VM: VMBinding> BasePlan<VM> {
         self.ro_space.release();
         #[cfg(feature = "vm_space")]
         self.vm_space.release();
+    }
+
+    pub fn thread_local_prepare(&mut self, _tls: VMMutatorThread) {
+        #[cfg(feature = "code_space")]
+        self.code_space.thread_local_prepare(_tls);
+        #[cfg(feature = "code_space")]
+        self.code_lo_space.thread_local_prepare(_tls);
+        #[cfg(feature = "ro_space")]
+        self.ro_space.thread_local_prepare(_tls);
+        #[cfg(feature = "vm_space")]
+        self.vm_space.thread_local_prepare(_tls);
+    }
+
+    pub fn thread_local_release(&mut self, _tls: VMMutatorThread) {
+        #[cfg(feature = "code_space")]
+        self.code_space.thread_local_release(_tls);
+        #[cfg(feature = "code_space")]
+        self.code_lo_space.thread_local_release(_tls);
+        #[cfg(feature = "ro_space")]
+        self.ro_space.thread_local_release(_tls);
+        #[cfg(feature = "vm_space")]
+        self.vm_space.thread_local_release(_tls);
     }
 
     pub fn set_collection_kind<P: Plan>(&self, plan: &P) {
@@ -896,6 +959,36 @@ impl<VM: VMBinding> BasePlan<VM> {
     pub fn get_malloc_bytes(&self) -> usize {
         self.malloc_bytes.load(Ordering::SeqCst)
     }
+
+    pub fn publish_object(&self, _object: ObjectReference) {
+        #[cfg(feature = "code_space")]
+        if self.code_space.in_space(_object) {
+            trace!("publish_object: object in code space");
+            self.code_space.publish_object(_object);
+            return;
+        }
+
+        #[cfg(feature = "code_space")]
+        if self.code_lo_space.in_space(_object) {
+            trace!("publish_object: object in large code space");
+            self.code_lo_space.publish_object(_object);
+            return;
+        }
+
+        #[cfg(feature = "ro_space")]
+        if self.ro_space.in_space(_object) {
+            trace!("publish_object: object in ro_space space");
+            self.ro_space.publish_object(_object);
+            return;
+        }
+
+        #[cfg(feature = "vm_space")]
+        if self.vm_space.in_space(_object) {
+            trace!("publish_object: object in boot space");
+            self.vm_space.publish_object(_object);
+            return;
+        }
+    }
 }
 
 /**
@@ -985,6 +1078,20 @@ impl<VM: VMBinding> CommonPlan<VM> {
         self.base.release(tls, full_heap)
     }
 
+    pub fn thread_local_prepare(&mut self, tls: VMMutatorThread) {
+        self.immortal.thread_local_prepare(tls);
+        self.los.thread_local_prepare(tls);
+        self.nonmoving.thread_local_prepare(tls);
+        self.base.thread_local_release(tls);
+    }
+
+    pub fn thread_local_release(&mut self, tls: VMMutatorThread) {
+        self.immortal.thread_local_release(tls);
+        self.los.thread_local_release(tls);
+        self.nonmoving.thread_local_release(tls);
+        self.base.thread_local_release(tls);
+    }
+
     pub fn stacks_prepared(&self) -> bool {
         self.base.stacks_prepared()
     }
@@ -1013,6 +1120,25 @@ impl<VM: VMBinding> CommonPlan<VM> {
             .verify_side_metadata_sanity(side_metadata_sanity_checker);
         self.nonmoving
             .verify_side_metadata_sanity(side_metadata_sanity_checker);
+    }
+
+    pub fn publish_object(&self, object: ObjectReference) {
+        if self.immortal.in_space(object) {
+            trace!("publish_object: object in immortal space");
+            self.immortal.publish_object(object);
+            return;
+        }
+        if self.los.in_space(object) {
+            trace!("publish_object: object in los");
+            self.los.publish_object(object);
+            return;
+        }
+        if self.nonmoving.in_space(object) {
+            trace!("publish_object: object in nonmoving space");
+            self.nonmoving.publish_object(object);
+            return;
+        }
+        self.base.publish_object(object);
     }
 }
 
@@ -1051,6 +1177,34 @@ pub trait PlanTraceObject<VM: VMBinding> {
     /// Whether objects in this plan may move. If any of the spaces used by the plan may move objects, this should
     /// return true.
     fn may_move_objects<const KIND: TraceKind>() -> bool;
+}
+
+pub trait PlanThreadlocalTraceObject<VM: VMBinding> {
+    /// Trace objects in the plan. Generally one needs to figure out
+    /// which space an object resides in, and invokes the corresponding policy
+    /// trace object method.
+    ///
+    /// Arguments:
+    /// * `trace`: the current transitive closure
+    /// * `object`: the object to trace. This is a non-nullable object reference.
+    /// * `worker`: the GC worker that is tracing this object.
+    fn thread_local_trace_object<Q: ObjectQueue, const KIND: TraceKind>(
+        &self,
+        queue: &mut Q,
+        object: ObjectReference,
+        worker: &mut Mutator<VM>,
+    ) -> ObjectReference;
+
+    /// Post-scan objects in the plan. Each object is scanned by `VM::VMScanning::scan_object()`, and this function
+    /// will be called after the `VM::VMScanning::scan_object()` as a hook to invoke possible policy post scan method.
+    /// If a plan does not have any policy that needs post scan, this method can be implemented as empty.
+    /// If a plan has a policy that has some policy specific behaviors for scanning (e.g. mark lines in Immix),
+    /// this method should also invoke those policy specific methods for objects in that space.
+    fn thread_local_post_scan_object(&self, object: ObjectReference);
+
+    /// Whether objects in this plan may move. If any of the spaces used by the plan may move objects, this should
+    /// return true.
+    fn thread_local_may_move_objects<const KIND: TraceKind>() -> bool;
 }
 
 use enum_map::Enum;

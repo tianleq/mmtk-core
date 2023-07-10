@@ -25,6 +25,7 @@ pub(crate) use global::create_plan;
 pub use global::AllocationSemantics;
 pub(crate) use global::GcStatus;
 pub use global::Plan;
+pub(crate) use global::PlanThreadlocalTraceObject;
 pub(crate) use global::PlanTraceObject;
 #[cfg(feature = "vm_space")] // This is used for creating VM space
 pub(crate) use global::{CreateGeneralPlanArgs, CreateSpecificPlanArgs};
@@ -38,7 +39,10 @@ pub use plan_constraints::PlanConstraints;
 pub use plan_constraints::DEFAULT_PLAN_CONSTRAINTS;
 
 mod tracing;
-pub use tracing::{ObjectQueue, ObjectsClosure, VectorObjectQueue, VectorQueue};
+pub use tracing::{
+    MarkingObjectPublicClosure, /*MarkingObjectPublicWithAssertClosure, */ ObjectQueue,
+    ObjectsClosure, ThreadlocalObjectsClosure, VectorObjectQueue, VectorQueue,
+};
 
 /// Generational plans (with a copying nursery)
 mod generational;

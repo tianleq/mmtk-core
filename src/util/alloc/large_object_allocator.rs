@@ -38,7 +38,12 @@ impl<VM: VMBinding> Allocator<VM> for LargeObjectAllocator<VM> {
         let cell: Address = self.alloc_slow(size, align, offset);
         // We may get a null ptr from alloc due to the VM being OOM
         if !cell.is_zero() {
-            allocator::align_allocation::<VM>(cell, align, offset)
+            let rtn = allocator::align_allocation::<VM>(cell, align, offset);
+            debug_assert!(
+                !crate::util::public_bit::is_public_object(rtn),
+                "public bit is not cleared properly"
+            );
+            rtn
         } else {
             cell
         }

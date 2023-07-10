@@ -119,6 +119,10 @@ pub trait RootsWorkFactory<ES: Edge>: Clone + Send + 'static {
     fn create_process_node_roots_work(&mut self, nodes: Vec<ObjectReference>);
 }
 
+pub trait ThreadlocalClosure {
+    fn do_closure(&mut self);
+}
+
 /// VM-specific methods for scanning roots/objects.
 pub trait Scanning<VM: VMBinding> {
     /// Scan stack roots after all mutators are paused.
@@ -230,6 +234,19 @@ pub trait Scanning<VM: VMBinding> {
         mutator: &'static mut Mutator<VM>,
         factory: impl RootsWorkFactory<VM::VMEdge>,
     );
+
+    /// Scan one mutator for roots.
+    ///
+    /// Arguments:
+    /// * `tls`: The GC thread that is performing this scanning.
+    /// * `mutator`: The reference to the mutator whose roots will be scanned.
+    /// * `factory`: The VM uses it to create work packets for scanning roots.
+    fn thread_local_scan_thread_root(
+        _tls: VMWorkerThread,
+        _mutator: &'static mut Mutator<VM>,
+        factory: impl RootsWorkFactory<VM::VMEdge>,
+    ) {
+    }
 
     /// Scan VM-specific roots. The creation of all root scan tasks (except thread scanning)
     /// goes here.

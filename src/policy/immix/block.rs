@@ -102,6 +102,17 @@ impl Block {
     pub const MARK_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_MARK;
 
+    /// Block owner table (side)
+    pub const OWNER_TABLE: SideMetadataSpec =
+        crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_OWNER;
+
+    /// Block level public table (side)
+    pub const PUBLICATION_TABLE: SideMetadataSpec =
+        crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_PUBLICATION;
+
+    // pub const LOCAL_MARK_TABLE: SideMetadataSpec =
+    //     crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_LOCAL_MARK;
+
     /// Get the chunk containing the block.
     pub fn chunk(&self) -> Chunk {
         Chunk::from_unaligned_address(self.0)
@@ -125,6 +136,30 @@ impl Block {
         let state = u8::from(state);
         Self::MARK_TABLE.store_atomic::<u8>(self.start(), state, Ordering::SeqCst);
     }
+
+    pub fn publish_block(&self) {
+        Self::PUBLICATION_TABLE.store_atomic::<u8>(self.start(), 1, Ordering::SeqCst);
+    }
+
+    pub fn reset_publication(&self) {
+        Self::PUBLICATION_TABLE.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
+    }
+
+    pub fn is_block_published(&self) -> bool {
+        Self::PUBLICATION_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst) == 1
+    }
+
+    // pub fn set_local_unmark_bit(&self) {
+    //     Self::LOCAL_MARK_TABLE.store_atomic::<u8>(self.start(), 1, Ordering::SeqCst);
+    // }
+
+    // pub fn clear_local_unmark_bit(&self) {
+    //     Self::LOCAL_MARK_TABLE.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
+    // }
+
+    // pub fn is_local_unmark_bit_set(&self) -> bool {
+    //     Self::LOCAL_MARK_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst) == 1
+    // }
 
     // Defrag byte
 
@@ -168,6 +203,7 @@ impl Block {
 
     /// Deinitalize a block before releasing.
     pub fn deinit(&self) {
+        crate::util::public_bit::bzero_public_bit(self.start(), Self::BYTES);
         self.set_state(BlockState::Unallocated);
     }
 
@@ -186,13 +222,12 @@ impl Block {
         RegionIterator::<Line>::new(self.start_line(), self.end_line())
     }
 
-    /// Sweep this block.
-    /// Return true if the block is swept.
-    pub fn sweep<VM: VMBinding>(
+    fn sweep_impl<VM: VMBinding>(
         &self,
         space: &ImmixSpace<VM>,
         mark_histogram: &mut Histogram,
         line_mark_state: Option<u8>,
+        thread_local: bool,
     ) -> bool {
         if super::BLOCK_ONLY {
             match self.get_state() {
@@ -201,9 +236,24 @@ impl Block {
                     #[cfg(feature = "vo_bit")]
                     vo_bit::helper::on_region_swept::<VM, _>(self, false);
 
-                    // Release the block if it is allocated but not marked by the current GC.
-                    space.release_block(*self);
-                    true
+                    if thread_local {
+                        if self.is_block_published() {
+                            // liveness of public block is unknown during thread-local gc
+                            // so conservatively treat it as live
+                            false
+                        } else {
+                            // Release the block if it is private and not marked by the current GC.
+                            self.clear_owner();
+                            space.release_block(*self);
+                            true
+                        }
+                    } else {
+                        // Release the block if it is allocated but not marked by the current GC.
+                        self.clear_owner();
+                        self.reset_publication();
+                        space.release_block(*self);
+                        true
+                    }
                 }
                 BlockState::Marked => {
                     #[cfg(feature = "vo_bit")]
@@ -241,9 +291,23 @@ impl Block {
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_region_swept::<VM, _>(self, false);
 
-                // Release the block if non of its lines are marked.
-                space.release_block(*self);
-                true
+                if thread_local {
+                    // liveness of public block is unknown during thread-local gc
+                    // so conservatively treat it as live
+                    if self.is_block_published() {
+                        false
+                    } else {
+                        self.clear_owner();
+                        space.release_block(*self);
+                        true
+                    }
+                } else {
+                    // Release the block if non of its lines are marked.
+                    self.clear_owner();
+                    self.reset_publication();
+                    space.release_block(*self);
+                    true
+                }
             } else {
                 // There are some marked lines. Keep the block live.
                 if marked_lines != Block::LINES {
@@ -298,6 +362,40 @@ impl Block {
                 }
             }
         }
+    }
+
+    /// Sweep this block.
+    /// Return true if the block is swept.
+    pub fn thread_local_sweep<VM: VMBinding>(
+        &self,
+        space: &ImmixSpace<VM>,
+        mark_histogram: &mut Histogram,
+        line_mark_state: Option<u8>,
+    ) -> bool {
+        self.sweep_impl(space, mark_histogram, line_mark_state, true)
+    }
+
+    /// Sweep this block.
+    /// Return true if the block is swept.
+    pub fn sweep<VM: VMBinding>(
+        &self,
+        space: &ImmixSpace<VM>,
+        mark_histogram: &mut Histogram,
+        line_mark_state: Option<u8>,
+    ) -> bool {
+        self.sweep_impl(space, mark_histogram, line_mark_state, false)
+    }
+
+    pub fn owner(&self) -> u32 {
+        Self::OWNER_TABLE.load_atomic::<u32>(self.start(), Ordering::SeqCst)
+    }
+
+    fn clear_owner(&self) {
+        self.set_owner(0);
+    }
+
+    pub fn set_owner(&self, owner: u32) {
+        Self::OWNER_TABLE.store_atomic::<u32>(self.start(), owner, Ordering::SeqCst)
     }
 }
 

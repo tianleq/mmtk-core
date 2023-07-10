@@ -41,6 +41,7 @@ pub const SS_CONSTRAINTS: PlanConstraints = PlanConstraints {
     num_specialized_scans: 1,
     max_non_los_default_alloc_bytes:
         crate::plan::plan_constraints::MAX_NON_LOS_ALLOC_BYTES_COPYING_PLAN,
+    barrier: crate::BarrierSelector::PublicObjectMarkingBarrier,
     ..PlanConstraints::default()
 };
 
@@ -154,6 +155,8 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
     fn common(&self) -> &CommonPlan<VM> {
         &self.common
     }
+
+    fn publish_object(&self, _object: crate::util::ObjectReference) {}
 }
 
 impl<VM: VMBinding> SemiSpace<VM> {

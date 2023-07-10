@@ -174,6 +174,7 @@ impl<VM: VMBinding> CopySpace<VM> {
         unsafe {
             #[cfg(feature = "vo_bit")]
             self.reset_vo_bit();
+            self.reset_public_bit();
             self.pr.reset();
         }
         self.common.metadata.reset();
@@ -191,6 +192,19 @@ impl<VM: VMBinding> CopySpace<VM> {
                     current_chunk + BYTES_IN_CHUNK - self.common.start,
                 );
             }
+        } else {
+            unimplemented!();
+        }
+    }
+
+    unsafe fn reset_public_bit(&self) {
+        let current_chunk = self.pr.get_current_chunk();
+        if self.common.contiguous {
+            crate::util::public_bit::bzero_public_bit(
+                self.common.start,
+                current_chunk + crate::util::heap::layout::vm_layout_constants::BYTES_IN_CHUNK
+                    - self.common.start,
+            );
         } else {
             unimplemented!();
         }
@@ -246,6 +260,13 @@ impl<VM: VMBinding> CopySpace<VM> {
             #[cfg(feature = "vo_bit")]
             crate::util::metadata::vo_bit::set_vo_bit::<VM>(new_object);
 
+            // ---- public bit begin ----
+            let is_pubic = crate::util::public_bit::is_public::<VM>(object);
+            if is_pubic {
+                crate::util::public_bit::set_public_bit::<VM>(new_object);
+            }
+            // ---- public bit end ----
+
             trace!("Forwarding pointer");
             queue.enqueue(new_object);
             trace!("Copied [{:?} -> {:?}]", object, new_object);
@@ -291,6 +312,7 @@ impl<VM: VMBinding> CopySpace<VM> {
 use crate::plan::Plan;
 use crate::util::alloc::Allocator;
 use crate::util::alloc::BumpAllocator;
+// use crate::util::alloc::MarkCompactAllocator;
 use crate::util::opaque_pointer::VMWorkerThread;
 
 /// Copy allocator for CopySpace

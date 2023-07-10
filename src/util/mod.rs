@@ -64,6 +64,11 @@ pub(crate) mod test_util;
 /// A treadmill implementation.
 pub(crate) mod treadmill;
 
+pub(crate) mod debug_bit;
+pub(crate) mod public_bit;
+
+pub(crate) mod object_metadata;
+
 // These modules are private. They are only used by other util modules.
 
 /// A very simple, generic malloc-free allocator
@@ -74,7 +79,11 @@ mod int_array_freelist;
 /// on demand direct from the OS (via mmap).
 mod raw_memory_freelist;
 
+use std::sync::atomic::AtomicU32;
+
 pub use self::address::Address;
 pub use self::address::ObjectReference;
 pub use self::opaque_pointer::*;
 pub use self::reference_processor::ReferenceProcessor;
+
+pub(crate) static MUTATOR_ID_GENERATOR: AtomicU32 = AtomicU32::new(1);

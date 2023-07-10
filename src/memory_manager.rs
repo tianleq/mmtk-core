@@ -25,6 +25,7 @@ use crate::util::opaque_pointer::*;
 use crate::util::{Address, ObjectReference};
 use crate::vm::edge_shape::MemorySlice;
 use crate::vm::ReferenceGlue;
+use crate::vm::Scanning;
 use crate::vm::VMBinding;
 use std::sync::atomic::Ordering;
 
@@ -421,7 +422,7 @@ pub fn gc_poll<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
     );
 
     let plan = mmtk.get_plan();
-    if plan.should_trigger_gc_when_heap_is_full() && plan.base().gc_trigger.poll(false, None) {
+    if plan.should_trigger_gc_when_heap_is_full() && plan.base().gc_trigger.poll(false, None, tls) {
         debug!("Collection required");
         assert!(plan.is_initialized(), "GC is not allowed here: collection is not initialized (did you call initialize_collection()?).");
         VM::VMCollection::block_for_gc(tls);
@@ -948,3 +949,56 @@ pub fn handle_user_collection_request_with_single_thread<VM: VMBinding>(
     mmtk.plan
         .handle_user_collection_request_with_single_thread(tls, true, false);
 }
+
+pub fn mmtk_set_public_bit<VM: VMBinding>(mmtk: &'static MMTK<VM>, object: ObjectReference) {
+    debug_assert!(!object.is_null(), "object is null!");
+    crate::util::public_bit::set_public_bit::<VM>(object);
+    mmtk.plan.publish_object(object);
+}
+
+pub fn mmtk_publish_object<VM: VMBinding>(mmtk: &'static MMTK<VM>, object: ObjectReference) {
+    if object.is_null() || crate::util::public_bit::is_public::<VM>(object) {
+        return;
+    };
+
+    let mut closure = crate::plan::MarkingObjectPublicClosure::<VM>::new(mmtk);
+    mmtk_set_public_bit(mmtk, object);
+    VM::VMScanning::scan_object(
+        VMWorkerThread(VMThread::UNINITIALIZED),
+        object,
+        &mut closure,
+    );
+    closure.do_closure();
+}
+
+pub fn mmtk_is_object_published<VM: VMBinding>(object: ObjectReference) -> bool {
+    if object.is_null() {
+        false
+    } else {
+        crate::util::public_bit::is_public::<VM>(object)
+    }
+}
+
+pub fn mmtk_handle_user_triggered_local_gc<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
+    // exactly one thread can trigger collection
+    // guaranteed by the lock in OpenJDK Binding
+
+    mmtk.plan.handle_thread_local_collection(tls);
+}
+
+pub fn mmtk_handle_user_triggered_global_gc<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
+    mmtk.plan.handle_user_collection_request(tls, true, false);
+}
+
+// pub fn mmtk_assert_object_publishedd<VM: VMBinding>(object: ObjectReference) {
+//     use crate::vm::ObjectModel;
+//     if object.is_null() {
+//         return;
+//     } else {
+//         let result = crate::util::public_bit::is_public::<VM>(object);
+//         if !result {
+//             VM::VMObjectModel::dump_object(object);
+//             assert!(false, "object in nmethod is not published");
+//         }
+//     }
+// }

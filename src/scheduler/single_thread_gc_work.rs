@@ -214,7 +214,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for SingleThreadScanStackRoot<E> {
         let base = &mmtk.plan.base();
         let mutators = <E::VM as VMBinding>::VMActivePlan::number_of_mutators();
         let factory = SingleThreadProcessEdgesWorkRootsWorkFactory::<E>::new(mmtk);
-        <E::VM as VMBinding>::VMScanning::scan_thread_root(
+        <E::VM as VMBinding>::VMScanning::scan_roots_in_mutator_thread(
             worker.tls,
             unsafe { &mut *(self.0 as *mut _) },
             factory,
@@ -247,7 +247,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for SingleThreadScanStackRoots<E> {
             "SingleThreadScanStackRoots is executed on the wrong gc thread"
         );
         let factory = SingleThreadProcessEdgesWorkRootsWorkFactory::<E>::new(mmtk);
-        <E::VM as VMBinding>::VMScanning::scan_thread_roots(worker.tls, factory);
+        <E::VM as VMBinding>::VMScanning::scan_roots_in_all_mutator_threads(worker.tls, factory);
         <E::VM as VMBinding>::VMScanning::notify_initial_thread_scan_complete(false, worker.tls);
         for mutator in <E::VM as VMBinding>::VMActivePlan::mutators() {
             mutator.flush();

@@ -17,13 +17,13 @@ use crate::util::metadata::{self, MetadataSpec};
 use crate::util::object_forwarding as ForwardingWord;
 use crate::util::{copy::*, VMMutatorThread};
 use crate::util::{Address, ObjectReference};
-use crate::vm::*;
 use crate::{
     plan::ObjectQueue,
     scheduler::{GCWork, GCWorkScheduler, GCWorker, WorkBucketStage},
     util::opaque_pointer::{VMThread, VMWorkerThread},
     MMTK,
 };
+use crate::{vm::*, Mutator};
 use atomic::Ordering;
 use std::sync::{atomic::AtomicU8, atomic::AtomicUsize, Arc};
 
@@ -213,26 +213,6 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
             }
         } else if KIND == TRACE_KIND_FAST {
             self.trace_object_without_moving(queue, object)
-        } else if KIND == TRACE_THREAD_LOCAL_FAST {
-            self.trace_thread_local_object_without_moving(queue, object)
-        } else if KIND == TRACE_THREAD_LOCAL_DEFRAG {
-            if Block::containing::<VM>(object).is_defrag_source() {
-                debug_assert!(self.in_defrag());
-                debug_assert!(
-                    !crate::plan::is_nursery_gc(&*worker.mmtk.plan),
-                    "Calling PolicyTraceObject on Immix in nursery GC"
-                );
-                self.trace_thread_local_object_with_opportunistic_copy(
-                    queue,
-                    object,
-                    copy.unwrap(),
-                    worker,
-                    // This should not be nursery collection. Nursery collection does not use PolicyTraceObject.
-                    false,
-                )
-            } else {
-                self.trace_thread_local_object_without_moving(queue, object)
-            }
         } else {
             unreachable!()
         }
@@ -273,7 +253,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 MetadataSpec::OnSide(Block::OWNER_TABLE),
                 MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
                 MetadataSpec::OnSide(Block::MARK_TABLE),
-                // MetadataSpec::OnSide(Block::LOCAL_MARK_TABLE),
                 MetadataSpec::OnSide(ChunkMap::ALLOC_TABLE),
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
                 *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC,
@@ -286,7 +265,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 MetadataSpec::OnSide(Block::PUBLICATION_TABLE),
                 MetadataSpec::OnSide(Block::OWNER_TABLE),
                 MetadataSpec::OnSide(Line::MARK_TABLE),
-                // MetadataSpec::OnSide(Block::LOCAL_MARK_TABLE),
                 MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
                 MetadataSpec::OnSide(Block::MARK_TABLE),
                 MetadataSpec::OnSide(ChunkMap::ALLOC_TABLE),
@@ -544,8 +522,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
     }
 
-    pub fn thread_local_release(&mut self, tls: VMMutatorThread) -> bool {
-        let did_defrag = self.defrag.in_defrag();
+    pub fn thread_local_release(&mut self, tls: VMMutatorThread) -> Vec<Box<dyn GCWork<VM>>> {
+        // let did_defrag = self.defrag.in_defrag();
 
         if !super::BLOCK_ONLY {
             self.line_unavail_state.store(
@@ -557,10 +535,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         // Sweep chunks and blocks
         let work_packets = self.generate_thread_local_sweep_tasks(tls);
-        self.scheduler().work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
+        // self.scheduler().work_buckets[WorkBucketStage::Release].bulk_add_local(work_packets);
 
         self.lines_consumed.store(0, Ordering::Relaxed);
-        did_defrag
+        // did_defrag
+        work_packets
     }
 
     fn generate_thread_local_sweep_tasks(&self, tls: VMMutatorThread) -> Vec<Box<dyn GCWork<VM>>> {
@@ -691,72 +670,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         object
     }
 
-    /// Trace and mark objects without evacuation.
-    pub fn trace_thread_local_object_without_moving(
-        &self,
-        queue: &mut impl ObjectQueue,
-        object: ObjectReference,
-    ) -> ObjectReference {
-        #[cfg(feature = "global_alloc_bit")]
-        debug_assert!(
-            crate::util::alloc_bit::is_alloced::<VM>(object),
-            "{:x}: alloc bit not set",
-            object
-        );
-        if crate::util::public_bit::is_public::<VM>(object) {
-            debug_assert!(
-                Block::containing::<VM>(object).is_block_published(),
-                "public block is corrupted"
-            );
-            return object;
-        }
-        if self.attempt_mark(object, self.mark_state) {
-            // Mark block and lines
-            if !super::BLOCK_ONLY {
-                if !super::MARK_LINE_AT_SCAN_TIME {
-                    self.mark_lines(object);
-                }
-            } else {
-                Block::containing::<VM>(object).set_state(BlockState::Marked);
-            }
-
-            #[cfg(feature = "vo_bit")]
-            vo_bit::helper::on_object_marked::<VM>(object);
-
-            // Visit node
-            queue.enqueue(object);
-            self.unlog_object_if_needed(object);
-            return object;
-        }
-        object
-    }
-
-    /// Trace object and do evacuation if required.
-    #[allow(clippy::assertions_on_constants)]
-    pub fn trace_thread_local_object_with_opportunistic_copy(
-        &self,
-        queue: &mut impl ObjectQueue,
-        object: ObjectReference,
-        semantics: CopySemantics,
-        worker: &mut GCWorker<VM>,
-        nursery_collection: bool,
-    ) -> ObjectReference {
-        if crate::util::public_bit::is_public::<VM>(object) {
-            debug_assert!(
-                Block::containing::<VM>(object).is_block_published(),
-                "public block is corrupted"
-            );
-            return object;
-        }
-        self.trace_object_with_opportunistic_copy(
-            queue,
-            object,
-            semantics,
-            worker,
-            nursery_collection,
-        )
-    }
-
     /// Trace object and do evacuation if required.
     #[allow(clippy::assertions_on_constants)]
     pub fn trace_object_with_opportunistic_copy(
@@ -848,6 +761,72 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.unlog_object_if_needed(new_object);
             new_object
         }
+    }
+
+    /// Trace and mark objects without evacuation.
+    pub fn thread_local_trace_object_without_moving(
+        &self,
+        queue: &mut impl ObjectQueue,
+        object: ObjectReference,
+    ) -> ObjectReference {
+        #[cfg(feature = "global_alloc_bit")]
+        debug_assert!(
+            crate::util::alloc_bit::is_alloced::<VM>(object),
+            "{:x}: alloc bit not set",
+            object
+        );
+        if crate::util::public_bit::is_public::<VM>(object) {
+            debug_assert!(
+                Block::containing::<VM>(object).is_block_published(),
+                "public block is corrupted"
+            );
+            return object;
+        }
+        if self.attempt_mark(object, self.mark_state) {
+            // Mark block and lines
+            if !super::BLOCK_ONLY {
+                if !super::MARK_LINE_AT_SCAN_TIME {
+                    self.mark_lines(object);
+                }
+            } else {
+                Block::containing::<VM>(object).set_state(BlockState::Marked);
+            }
+
+            #[cfg(feature = "vo_bit")]
+            vo_bit::helper::on_object_marked::<VM>(object);
+
+            // Visit node
+            queue.enqueue(object);
+            self.unlog_object_if_needed(object);
+            return object;
+        }
+        object
+    }
+
+    /// Trace object and do evacuation if required.
+    #[allow(clippy::assertions_on_constants)]
+    pub fn thread_local_trace_object_with_opportunistic_copy(
+        &self,
+        queue: &mut impl ObjectQueue,
+        object: ObjectReference,
+        semantics: CopySemantics,
+        worker: &mut GCWorker<VM>,
+        nursery_collection: bool,
+    ) -> ObjectReference {
+        if crate::util::public_bit::is_public::<VM>(object) {
+            debug_assert!(
+                Block::containing::<VM>(object).is_block_published(),
+                "public block is corrupted"
+            );
+            return object;
+        }
+        self.trace_object_with_opportunistic_copy(
+            queue,
+            object,
+            semantics,
+            worker,
+            nursery_collection,
+        )
     }
 
     fn unlog_object_if_needed(&self, object: ObjectReference) {
@@ -1009,6 +988,52 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         } else {
             Block::containing::<VM>(object).publish_block()
         }
+    }
+}
+
+impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for ImmixSpace<VM> {
+    fn thread_local_trace_object<Q: ObjectQueue, const KIND: TraceKind>(
+        &self,
+        queue: &mut Q,
+        object: ObjectReference,
+        copy: Option<CopySemantics>,
+        _mutator: &mut Mutator<VM>,
+        worker: &mut GCWorker<VM>,
+    ) -> ObjectReference {
+        if KIND == TRACE_THREAD_LOCAL_FAST {
+            self.thread_local_trace_object_without_moving(queue, object)
+        } else if KIND == TRACE_THREAD_LOCAL_DEFRAG {
+            if Block::containing::<VM>(object).is_defrag_source() {
+                debug_assert!(self.in_defrag());
+                debug_assert!(
+                    !crate::plan::is_nursery_gc(&*worker.mmtk.plan),
+                    "Calling PolicyTraceObject on Immix in nursery GC"
+                );
+                self.thread_local_trace_object_with_opportunistic_copy(
+                    queue,
+                    object,
+                    copy.unwrap(),
+                    worker,
+                    // This should not be nursery collection. Nursery collection does not use PolicyTraceObject.
+                    false,
+                )
+            } else {
+                self.thread_local_trace_object_without_moving(queue, object)
+            }
+        } else {
+            unreachable!()
+        }
+    }
+
+    fn thread_local_post_scan_object(&self, object: ObjectReference) {
+        if super::MARK_LINE_AT_SCAN_TIME && !super::BLOCK_ONLY {
+            debug_assert!(self.in_space(object));
+            self.mark_lines(object);
+        }
+    }
+
+    fn thread_local_may_move_objects<const KIND: TraceKind>() -> bool {
+        true
     }
 }
 

@@ -343,87 +343,87 @@ impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM>
     fn memory_region_copy_slow(&mut self, _src: VM::VMMemorySlice, _dst: VM::VMMemorySlice) {}
 }
 
-pub struct PublicObjectMarkingBarrier<S: BarrierSemantics> {
-    semantics: S,
-}
+// pub struct PublicObjectMarkingBarrier<S: BarrierSemantics> {
+//     semantics: S,
+// }
 
-impl<S: BarrierSemantics> PublicObjectMarkingBarrier<S> {
-    pub fn new(semantics: S) -> Self {
-        Self { semantics }
-    }
-}
+// impl<S: BarrierSemantics> PublicObjectMarkingBarrier<S> {
+//     pub fn new(semantics: S) -> Self {
+//         Self { semantics }
+//     }
+// }
 
-impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
-    #[inline(always)]
-    fn object_reference_write_pre(
-        &mut self,
-        src: ObjectReference,
-        slot: <S::VM as VMBinding>::VMEdge,
-        target: ObjectReference,
-    ) {
-        // only trace when store private to a public object
-        if is_public::<S::VM>(src) {
-            if !target.is_null() && !is_public::<S::VM>(target) {
-                self.object_reference_write_slow(src, slot, target);
-            }
-        }
-    }
+// impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
+//     #[inline(always)]
+//     fn object_reference_write_pre(
+//         &mut self,
+//         src: ObjectReference,
+//         slot: <S::VM as VMBinding>::VMEdge,
+//         target: ObjectReference,
+//     ) {
+//         // only trace when store private to a public object
+//         if is_public::<S::VM>(src) {
+//             if !target.is_null() && !is_public::<S::VM>(target) {
+//                 self.object_reference_write_slow(src, slot, target);
+//             }
+//         }
+//     }
 
-    #[inline(always)]
-    fn object_reference_write_slow(
-        &mut self,
-        src: ObjectReference,
-        slot: <S::VM as VMBinding>::VMEdge,
-        target: ObjectReference,
-    ) {
-        debug_assert!(is_public::<S::VM>(src), "source check is broken");
-        debug_assert!(!target.is_null(), "target null check is broken");
-        debug_assert!(!is_public::<S::VM>(target), "target check is broken");
-        self.semantics
-            .object_reference_write_slow(src, slot, target);
-    }
+//     #[inline(always)]
+//     fn object_reference_write_slow(
+//         &mut self,
+//         src: ObjectReference,
+//         slot: <S::VM as VMBinding>::VMEdge,
+//         target: ObjectReference,
+//     ) {
+//         debug_assert!(is_public::<S::VM>(src), "source check is broken");
+//         debug_assert!(!target.is_null(), "target null check is broken");
+//         debug_assert!(!is_public::<S::VM>(target), "target check is broken");
+//         self.semantics
+//             .object_reference_write_slow(src, slot, target);
+//     }
 
-    #[inline(always)]
-    fn memory_region_copy_post(
-        &mut self,
-        src: <S::VM as VMBinding>::VMMemorySlice,
-        dst: <S::VM as VMBinding>::VMMemorySlice,
-    ) {
-        self.semantics.memory_region_copy_slow(src, dst);
-    }
-}
+//     #[inline(always)]
+//     fn memory_region_copy_post(
+//         &mut self,
+//         src: <S::VM as VMBinding>::VMMemorySlice,
+//         dst: <S::VM as VMBinding>::VMMemorySlice,
+//     ) {
+//         self.semantics.memory_region_copy_slow(src, dst);
+//     }
+// }
 
-pub struct PublicObjectMarkingBarrierSemantics<VM: VMBinding> {
-    mmtk: &'static MMTK<VM>,
-}
+// pub struct PublicObjectMarkingBarrierSemantics<VM: VMBinding> {
+//     mmtk: &'static MMTK<VM>,
+// }
 
-impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
-    pub fn new(mmtk: &'static MMTK<VM>) -> Self {
-        Self { mmtk }
-    }
+// impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
+//     pub fn new(mmtk: &'static MMTK<VM>) -> Self {
+//         Self { mmtk }
+//     }
 
-    fn trace_public_object(&mut self, _src: ObjectReference, value: ObjectReference) {
-        let mut closure = MarkingObjectPublicClosure::<VM>::new(self.mmtk);
-        set_public_bit::<VM>(value);
-        self.mmtk.plan.publish_object(value);
-        VM::VMScanning::scan_object(VMWorkerThread(VMThread::UNINITIALIZED), value, &mut closure);
-        closure.do_closure();
-    }
-}
+//     fn trace_public_object(&mut self, _src: ObjectReference, value: ObjectReference) {
+//         let mut closure = MarkingObjectPublicClosure::<VM>::new(self.mmtk);
+//         set_public_bit::<VM>(value);
+//         self.mmtk.plan.publish_object(value);
+//         VM::VMScanning::scan_object(VMWorkerThread(VMThread::UNINITIALIZED), value, &mut closure);
+//         closure.do_closure();
+//     }
+// }
 
-impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM> {
-    type VM = VM;
+// impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM> {
+//     type VM = VM;
 
-    fn object_reference_write_slow(
-        &mut self,
-        src: ObjectReference,
-        _slot: VM::VMEdge,
-        target: ObjectReference,
-    ) {
-        self.trace_public_object(src, target)
-    }
+//     fn object_reference_write_slow(
+//         &mut self,
+//         src: ObjectReference,
+//         _slot: VM::VMEdge,
+//         target: ObjectReference,
+//     ) {
+//         self.trace_public_object(src, target)
+//     }
 
-    fn flush(&mut self) {}
+//     fn flush(&mut self) {}
 
-    fn memory_region_copy_slow(&mut self, _src: VM::VMMemorySlice, _dst: VM::VMMemorySlice) {}
-}
+//     fn memory_region_copy_slow(&mut self, _src: VM::VMMemorySlice, _dst: VM::VMMemorySlice) {}
+// }

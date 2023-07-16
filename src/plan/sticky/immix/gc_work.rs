@@ -12,6 +12,8 @@ impl<VM: VMBinding> crate::scheduler::GCWorkContext for StickyImmixNurseryGCWork
     type ProcessEdgesWorkType = GenNurseryProcessEdges<VM, Self::PlanType>;
 
     type SingleThreadProcessEdgesWorkType = GenNurseryProcessEdges<VM, Self::PlanType>;
+
+    type ThreadlocalProcessEdgesWorkType = GenNurseryProcessEdges<VM, Self::PlanType>;
 }
 
 pub struct StickyImmixMatureGCWorkContext<VM: VMBinding, const KIND: TraceKind>(
@@ -25,4 +27,6 @@ impl<VM: VMBinding, const KIND: TraceKind> crate::scheduler::GCWorkContext
     type ProcessEdgesWorkType = PlanProcessEdges<VM, Self::PlanType, KIND>;
 
     type SingleThreadProcessEdgesWorkType = SingleThreadPlanProcessEdges<VM, Self::PlanType, KIND>;
+
+    type ThreadlocalProcessEdgesWorkType = SingleThreadPlanProcessEdges<VM, Self::PlanType, KIND>;
 }

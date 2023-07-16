@@ -235,19 +235,6 @@ pub trait Scanning<VM: VMBinding> {
         factory: impl RootsWorkFactory<VM::VMEdge>,
     );
 
-    /// Scan one mutator for roots.
-    ///
-    /// Arguments:
-    /// * `tls`: The GC thread that is performing this scanning.
-    /// * `mutator`: The reference to the mutator whose roots will be scanned.
-    /// * `factory`: The VM uses it to create work packets for scanning roots.
-    fn thread_local_scan_thread_root(
-        _tls: VMWorkerThread,
-        _mutator: &'static mut Mutator<VM>,
-        factory: impl RootsWorkFactory<VM::VMEdge>,
-    ) {
-    }
-
     /// Scan VM-specific roots. The creation of all root scan tasks (except thread scanning)
     /// goes here.
     ///

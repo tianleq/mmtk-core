@@ -12,4 +12,7 @@ impl<VM: VMBinding> crate::scheduler::GCWorkContext for PPGCWorkContext<VM> {
 
     type SingleThreadProcessEdgesWorkType =
         SingleThreadPlanProcessEdges<Self::VM, PageProtect<VM>, DEFAULT_TRACE>;
+
+    type ThreadlocalProcessEdgesWorkType =
+        SingleThreadPlanProcessEdges<Self::VM, PageProtect<VM>, DEFAULT_TRACE>;
 }

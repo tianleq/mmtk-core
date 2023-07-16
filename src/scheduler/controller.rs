@@ -5,10 +5,10 @@
 
 use std::sync::Arc;
 
-use crate::plan::gc_requester::GCRequester;
+use crate::plan::gc_requester::{GCRequest, GCRequester};
 use crate::scheduler::gc_work::{EndOfGC, ScheduleCollection};
 use crate::scheduler::single_thread_gc_work::ScheduleSingleThreadCollection;
-use crate::scheduler::thread_local_gc_work::EndOfThreadLocalGC;
+use crate::scheduler::thread_local_gc_work::{EndOfThreadLocalGC, ScheduleThreadlocalCollection};
 use crate::scheduler::{GCWork, WorkBucketStage};
 use crate::util::VMWorkerThread;
 use crate::vm::VMBinding;
@@ -50,10 +50,10 @@ impl<VM: VMBinding> GCController<VM> {
 
         loop {
             debug!("[STWController: Waiting for request...]");
-            let single_thread = self.requester.wait_for_request();
+            let req = self.requester.wait_for_request();
             debug!("[STWController: Request recieved.]");
 
-            self.do_gc_until_completion(single_thread);
+            self.do_gc_until_completion(req);
             debug!("[STWController: Worker threads complete!]");
         }
     }
@@ -79,20 +79,21 @@ impl<VM: VMBinding> GCController<VM> {
     }
 
     /// Coordinate workers to perform GC in response to a GC request.
-    pub fn do_gc_until_completion(&mut self, single_thread: bool) {
+    pub fn do_gc_until_completion(&mut self, req: GCRequest) {
         let gc_start = std::time::Instant::now();
-        let tls = self.mmtk.plan.base().gc_requester.get_tls();
-        let thread_local_gc =
-            tls != crate::util::VMMutatorThread(crate::util::VMThread::UNINITIALIZED);
 
         debug_assert!(
             self.scheduler.worker_monitor.debug_is_sleeping(),
             "Workers are still doing work when GC started."
         );
 
-        if single_thread {
+        if req.single_thread {
             self.scheduler.work_buckets[WorkBucketStage::Unconstrained]
                 .add(ScheduleSingleThreadCollection);
+        } else if req.thread_local {
+            // Add a ScheduleCollection work packet.  It is the seed of other work packets.
+            self.scheduler.work_buckets[WorkBucketStage::Unconstrained]
+                .add(ScheduleThreadlocalCollection(req.tls));
         } else {
             // Add a ScheduleCollection work packet.  It is the seed of other work packets.
             self.scheduler.work_buckets[WorkBucketStage::Unconstrained].add(ScheduleCollection);
@@ -138,24 +139,24 @@ impl<VM: VMBinding> GCController<VM> {
         //       Otherwise, for generational GCs, workers will receive and process
         //       newly generated remembered-sets from those open buckets.
         //       But these remsets should be preserved until next GC.
-        let mut end_of_gc = EndOfGC {
-            elapsed: gc_start.elapsed(),
-        };
+        // let mut end_of_gc = EndOfGC {
+        //     elapsed: gc_start.elapsed(),
+        // };
 
         let (mut end_of_gc, mut end_of_thread_local_gc);
-        // let work: &mut dyn CoordinatorWork<VM> = if thread_local_gc {
-        //     end_of_thread_local_gc = EndOfThreadLocalGC {
-        //         elapsed: gc_start.elapsed(),
-        //         tls,
-        //     };
-        //     &mut end_of_thread_local_gc
-        // } else {
-        //     end_of_gc = EndOfGC {
-        //         elapsed: gc_start.elapsed(),
-        //     };
-        //     &mut end_of_gc
-        // };
-        end_of_gc.do_work_with_stat(&mut self.coordinator_worker, self.mmtk);
+        let end_of_gc_work: &mut dyn GCWork<VM> = if req.thread_local {
+            end_of_thread_local_gc = EndOfThreadLocalGC {
+                elapsed: gc_start.elapsed(),
+                tls: req.tls,
+            };
+            &mut end_of_thread_local_gc
+        } else {
+            end_of_gc = EndOfGC {
+                elapsed: gc_start.elapsed(),
+            };
+            &mut end_of_gc
+        };
+        end_of_gc_work.do_work_with_stat(&mut self.coordinator_worker, self.mmtk);
 
         self.scheduler.debug_assert_all_buckets_deactivated();
     }

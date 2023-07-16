@@ -14,20 +14,14 @@ pub struct ScheduleCollection;
 
 impl<VM: VMBinding> GCWork<VM> for ScheduleCollection {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let tls = mmtk.plan.base().gc_requester.get_tls();
-        if tls != VMMutatorThread(VMThread::UNINITIALIZED) {
-            mmtk.plan
-                .schedule_thread_local_collection(tls, worker.scheduler());
-        } else {
-            mmtk.plan.schedule_collection(worker.scheduler());
+        mmtk.plan.schedule_collection(worker.scheduler());
 
-            // Tell GC trigger that GC started.
-            // We now know what kind of GC this is (e.g. nursery vs mature in gen copy, defrag vs fast in Immix)
-            // TODO: Depending on the OS scheduling, other workers can run so fast that they can finish
-            // everything in the `Unconstrained` and the `Prepare` buckets before we execute the next
-            // statement. Consider if there is a better place to call `on_gc_start`.
-            mmtk.plan.base().gc_trigger.policy.on_gc_start(mmtk);
-        }
+        // Tell GC trigger that GC started.
+        // We now know what kind of GC this is (e.g. nursery vs mature in gen copy, defrag vs fast in Immix)
+        // TODO: Depending on the OS scheduling, other workers can run so fast that they can finish
+        // everything in the `Unconstrained` and the `Prepare` buckets before we execute the next
+        // statement. Consider if there is a better place to call `on_gc_start`.
+        mmtk.plan.base().gc_trigger.policy.on_gc_start(mmtk);
     }
 }
 
@@ -168,39 +162,6 @@ impl<VM: VMBinding> GCWork<VM> for ReleaseCollector {
         worker.get_copy_context_mut().release();
     }
 }
-
-/// Scan a specific mutator
-///
-/// Schedule a `ScanStackRoots`
-///
-#[derive(Default)]
-pub struct ScanMutator<ScanEdges: ProcessEdgesWork> {
-    tls: VMMutatorThread,
-    phantom: PhantomData<ScanEdges>,
-}
-
-impl<ScanEdges: ProcessEdgesWork> ScanMutator<ScanEdges> {
-    pub fn new(tls: VMMutatorThread) -> Self {
-        Self {
-            tls,
-            phantom: PhantomData,
-        }
-    }
-}
-
-impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanMutator<E> {
-    fn do_work(&mut self, _worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
-        trace!("scan_mutator start");
-        mmtk.plan.base().prepare_for_stack_scanning();
-        <E::VM as VMBinding>::VMCollection::scan_mutator(self.tls, |mutator| {
-            mmtk.scheduler.work_buckets[WorkBucketStage::Prepare].add(ScanStackRoot::<E>(mutator));
-        });
-        trace!("scan_mutator end");
-        mmtk.scheduler.notify_mutators_paused(mmtk);
-    }
-}
-
-impl<E: ProcessEdgesWork> CoordinatorWork<E::VM> for ScanMutator<E> {}
 
 /// Stop all mutators
 ///
@@ -354,7 +315,7 @@ impl<E: ProcessEdgesWork> ObjectTracerContext<E::VM> for ProcessEdgesWorkTracerC
         let mmtk = worker.mmtk;
 
         // Prepare the underlying ProcessEdgesWork
-        let mut process_edges_work = E::new(vec![], false, mmtk);
+        let mut process_edges_work = E::new(vec![], false, mmtk, Option::None);
         // FIXME: This line allows us to omit the borrowing lifetime of worker.
         // We should refactor ProcessEdgesWork so that it uses `worker` locally, not as a member.
         process_edges_work.set_worker(worker);
@@ -609,7 +570,12 @@ pub trait ProcessEdgesWork:
     const OVERWRITE_REFERENCE: bool = true;
     const SCAN_OBJECTS_IMMEDIATELY: bool = true;
 
-    fn new(edges: Vec<EdgeOf<Self>>, roots: bool, mmtk: &'static MMTK<Self::VM>) -> Self;
+    fn new(
+        edges: Vec<EdgeOf<Self>>,
+        roots: bool,
+        mmtk: &'static MMTK<Self::VM>,
+        tls: Option<VMMutatorThread>,
+    ) -> Self;
 
     /// Trace an MMTk object. The implementation should forward this call to the policy-specific
     /// `trace_object()` methods, depending on which space this object is in.
@@ -710,7 +676,12 @@ impl<VM: VMBinding> ProcessEdgesWork for SFTProcessEdges<VM> {
     type VM = VM;
     type ScanObjectsWorkType = ScanObjects<Self>;
 
-    fn new(edges: Vec<EdgeOf<Self>>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+    fn new(
+        edges: Vec<EdgeOf<Self>>,
+        roots: bool,
+        mmtk: &'static MMTK<VM>,
+        _tls: Option<VMMutatorThread>,
+    ) -> Self {
         let base = ProcessEdgesBase::new(edges, roots, mmtk);
         Self { base }
     }
@@ -750,13 +721,13 @@ impl<E: ProcessEdgesWork> RootsWorkFactory<EdgeOf<E>> for ProcessEdgesWorkRootsW
         crate::memory_manager::add_work_packet(
             self.mmtk,
             WorkBucketStage::Closure,
-            E::new(edges, true, self.mmtk),
+            E::new(edges, true, self.mmtk, Option::None),
         );
     }
 
     fn create_process_node_roots_work(&mut self, nodes: Vec<ObjectReference>) {
         // We want to use E::create_scan_work.
-        let process_edges_work = E::new(vec![], true, self.mmtk);
+        let process_edges_work = E::new(vec![], true, self.mmtk, Option::None);
         let work = process_edges_work.create_scan_work(nodes, true);
         crate::memory_manager::add_work_packet(self.mmtk, WorkBucketStage::Closure, work);
     }
@@ -804,6 +775,7 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
         worker: &mut GCWorker<<Self::E as ProcessEdgesWork>::VM>,
         mmtk: &'static MMTK<<Self::E as ProcessEdgesWork>::VM>,
         single_thread: bool,
+        mutator_tls: VMMutatorThread,
     ) {
         let tls = worker.tls;
 
@@ -828,7 +800,7 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
         // objects which are traced for the first time.
         let scanned_root_objects = self.roots().then(|| {
             // We create an instance of E to use its `trace_object` method and its object queue.
-            let mut process_edges_work = Self::E::new(vec![], false, mmtk);
+            let mut process_edges_work = Self::E::new(vec![], false, mmtk, Option::None);
             process_edges_work.set_worker(worker);
 
             for object in buffer.iter().copied() {
@@ -852,7 +824,7 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
         // Then scan those objects for edges.
         let mut scan_later = vec![];
         {
-            let mut closure = ObjectsClosure::<Self::E>::new(worker, single_thread);
+            let mut closure = ObjectsClosure::<Self::E>::new(worker, single_thread, mutator_tls);
             for object in objects_to_scan.iter().copied() {
                 if <VM as VMBinding>::VMScanning::support_edge_enqueuing(tls, object) {
                     trace!("Scan object (edge) {}", object);
@@ -939,7 +911,13 @@ impl<VM: VMBinding, E: ProcessEdgesWork<VM = VM>> ScanObjectsWork<VM> for ScanOb
 impl<E: ProcessEdgesWork> GCWork<E::VM> for ScanObjects<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         trace!("ScanObjects");
-        self.do_work_common(&self.buffer, worker, mmtk, false);
+        self.do_work_common(
+            &self.buffer,
+            worker,
+            mmtk,
+            false,
+            VMMutatorThread(VMThread::UNINITIALIZED),
+        );
         trace!("ScanObjects End");
     }
 }
@@ -966,7 +944,12 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
     type VM = VM;
     type ScanObjectsWorkType = PlanScanObjects<Self, P>;
 
-    fn new(edges: Vec<EdgeOf<Self>>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+    fn new(
+        edges: Vec<EdgeOf<Self>>,
+        roots: bool,
+        mmtk: &'static MMTK<VM>,
+        _tls: Option<VMMutatorThread>,
+    ) -> Self {
         let base = ProcessEdgesBase::new(edges, roots, mmtk);
         let plan = base.plan().downcast_ref::<P>().unwrap();
         Self { plan, base }
@@ -1068,7 +1051,13 @@ impl<E: ProcessEdgesWork, P: Plan<VM = E::VM> + PlanTraceObject<E::VM>> GCWork<E
 {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         trace!("PlanScanObjects");
-        self.do_work_common(&self.buffer, worker, mmtk, false);
+        self.do_work_common(
+            &self.buffer,
+            worker,
+            mmtk,
+            false,
+            VMMutatorThread(VMThread::UNINITIALIZED),
+        );
         trace!("PlanScanObjects End");
     }
 }

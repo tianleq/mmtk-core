@@ -110,9 +110,6 @@ impl Block {
     pub const PUBLICATION_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_PUBLICATION;
 
-    // pub const LOCAL_MARK_TABLE: SideMetadataSpec =
-    //     crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_LOCAL_MARK;
-
     /// Get the chunk containing the block.
     pub fn chunk(&self) -> Chunk {
         Chunk::from_unaligned_address(self.0)
@@ -148,18 +145,6 @@ impl Block {
     pub fn is_block_published(&self) -> bool {
         Self::PUBLICATION_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst) == 1
     }
-
-    // pub fn set_local_unmark_bit(&self) {
-    //     Self::LOCAL_MARK_TABLE.store_atomic::<u8>(self.start(), 1, Ordering::SeqCst);
-    // }
-
-    // pub fn clear_local_unmark_bit(&self) {
-    //     Self::LOCAL_MARK_TABLE.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
-    // }
-
-    // pub fn is_local_unmark_bit_set(&self) -> bool {
-    //     Self::LOCAL_MARK_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst) == 1
-    // }
 
     // Defrag byte
 

@@ -70,16 +70,14 @@ impl<VM: VMBinding> GCTrigger<VM> {
                 plan.get_total_pages(),
             );
             // plan.base().gc_requester.request();
-            plan.base()
-                .gc_requester
-                .request(false, VMMutatorThread(VMThread::UNINITIALIZED));
+            plan.base().gc_requester.request();
             return true;
         } else if self
             .policy
             .is_thread_local_gc_required(space_full, space, plan)
         {
             // plan.base().gc_requester.request_single_thread_gc(true, tls);
-            plan.base().gc_requester.request(true, tls);
+            plan.base().gc_requester.request_thread_local_gc(tls);
             return true;
         }
         false

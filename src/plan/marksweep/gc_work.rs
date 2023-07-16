@@ -12,4 +12,7 @@ impl<VM: VMBinding> crate::scheduler::GCWorkContext for MSGCWorkContext<VM> {
 
     type SingleThreadProcessEdgesWorkType =
         SingleThreadPlanProcessEdges<Self::VM, MarkSweep<VM>, DEFAULT_TRACE>;
+
+    type ThreadlocalProcessEdgesWorkType =
+        SingleThreadPlanProcessEdges<Self::VM, MarkSweep<VM>, DEFAULT_TRACE>;
 }

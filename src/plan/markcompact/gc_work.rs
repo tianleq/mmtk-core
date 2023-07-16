@@ -93,4 +93,7 @@ impl<VM: VMBinding> crate::scheduler::GCWorkContext for MarkCompactGCWorkContext
 
     type SingleThreadProcessEdgesWorkType =
         SingleThreadPlanProcessEdges<VM, MarkCompact<VM>, TRACE_KIND_MARK>;
+
+    type ThreadlocalProcessEdgesWorkType =
+        SingleThreadPlanProcessEdges<VM, MarkCompact<VM>, TRACE_KIND_MARK>;
 }

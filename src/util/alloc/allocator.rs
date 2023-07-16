@@ -182,7 +182,7 @@ pub trait Allocator<VM: VMBinding>: Downcast {
     /// * `size`: the allocation size in bytes.
     /// * `align`: the required alignment in bytes.
     /// * `offset` the required offset in bytes.
-    fn alloc_local(&mut self, _context: u32, size: usize, align: usize, offset: isize) -> Address {
+    fn alloc_local(&mut self, _context: u32, size: usize, align: usize, offset: usize) -> Address {
         self.alloc(size, align, offset)
     }
 

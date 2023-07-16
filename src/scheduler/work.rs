@@ -52,4 +52,5 @@ pub trait GCWorkContext {
     // `associated_type_defaults` which has not yet been stablized.
     type ProcessEdgesWorkType: ProcessEdgesWork<VM = Self::VM>;
     type SingleThreadProcessEdgesWorkType: ProcessEdgesWork<VM = Self::VM>;
+    type ThreadlocalProcessEdgesWorkType: ProcessEdgesWork<VM = Self::VM>;
 }

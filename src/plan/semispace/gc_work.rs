@@ -12,4 +12,7 @@ impl<VM: VMBinding> crate::scheduler::GCWorkContext for SSGCWorkContext<VM> {
 
     type SingleThreadProcessEdgesWorkType =
         SingleThreadPlanProcessEdges<Self::VM, SemiSpace<VM>, DEFAULT_TRACE>;
+
+    type ThreadlocalProcessEdgesWorkType =
+        SingleThreadPlanProcessEdges<Self::VM, SemiSpace<VM>, DEFAULT_TRACE>;
 }

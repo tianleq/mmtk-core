@@ -7,6 +7,7 @@ pub const DEFAULT_TRACE: u8 = u8::MAX;
 use crate::plan::ObjectQueue;
 use crate::scheduler::GCWorker;
 use crate::util::copy::CopySemantics;
+use crate::Mutator;
 
 use crate::util::ObjectReference;
 
@@ -46,6 +47,8 @@ pub trait PolicyThreadlocalTraceObject<VM: VMBinding> {
         queue: &mut Q,
         object: ObjectReference,
         copy: Option<CopySemantics>,
+        mutator: &mut Mutator<VM>,
+        worker: &mut GCWorker<VM>,
     ) -> ObjectReference;
 
     /// Policy-specific post-scan-object hook.  It is called after scanning

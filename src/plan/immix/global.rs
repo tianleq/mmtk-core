@@ -9,13 +9,17 @@ use crate::plan::global::GcStatus;
 use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
+use crate::plan::PlanThreadlocalTraceObject;
+use crate::policy::gc_work::PolicyThreadlocalTraceObject;
 use crate::policy::immix::ImmixSpaceArgs;
 use crate::policy::immix::{
     TRACE_KIND_DEFRAG, TRACE_KIND_FAST, TRACE_THREAD_LOCAL_DEFRAG, TRACE_THREAD_LOCAL_FAST,
 };
 use crate::policy::space::Space;
-use crate::scheduler::thread_local_gc_work::ThreadLocalPrepare;
-use crate::scheduler::thread_local_gc_work::ThreadLocalRelease;
+use crate::scheduler::thread_local_gc_work::ScanMutator;
+use crate::scheduler::thread_local_gc_work::ThreadlocalPrepare;
+use crate::scheduler::thread_local_gc_work::ThreadlocalRelease;
+use crate::scheduler::thread_local_gc_work::ThreadlocalSentinel;
 use crate::scheduler::*;
 use crate::util::alloc::allocators::AllocatorSelector;
 use crate::util::copy::*;
@@ -108,7 +112,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     fn schedule_thread_local_collection(
         &'static self,
         tls: VMMutatorThread,
-        scheduler: &GCWorkScheduler<Self::VM>,
+        worker: &mut GCWorker<Self::VM>,
     ) {
         self.base().set_collection_kind::<Self>(self);
         self.base().set_gc_status(GcStatus::GcPrepare);
@@ -116,7 +120,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             Immix<VM>,
             ImmixGCWorkContext<VM, TRACE_THREAD_LOCAL_FAST>,
             ImmixGCWorkContext<VM, TRACE_THREAD_LOCAL_DEFRAG>,
-        >(tls, self, &self.immix_space, scheduler)
+        >(tls, self, &self.immix_space, worker)
     }
 
     fn get_allocator_mapping(&self) -> &'static EnumMap<AllocationSemantics, AllocatorSelector> {
@@ -133,10 +137,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         self.immix_space.thread_local_prepare(tls);
     }
 
-    fn thread_local_release(&mut self, tls: VMMutatorThread) {
+    fn thread_local_release(&mut self, tls: VMMutatorThread) -> Vec<Box<dyn GCWork<VM>>> {
         // at the moment, thread-local gc only reclaiming immix space
         self.common.thread_local_release(tls);
-        self.immix_space.thread_local_release(tls);
+        self.immix_space.thread_local_release(tls)
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
@@ -256,9 +260,8 @@ impl<VM: VMBinding> Immix<VM> {
         tls: VMMutatorThread,
         plan: &'static PlanType,
         immix_space: &ImmixSpace<VM>,
-        scheduler: &GCWorkScheduler<VM>,
+        worker: &mut GCWorker<VM>,
     ) {
-        use crate::scheduler::gc_work::*;
         let in_defrag = immix_space.decide_whether_to_defrag(
             plan.is_emergency_collection(),
             false,
@@ -269,26 +272,103 @@ impl<VM: VMBinding> Immix<VM> {
 
         if in_defrag {
             //Scan mutator
-            scheduler.work_buckets[WorkBucketStage::Unconstrained]
-                .add(ScanMutator::<DefragContext::ProcessEdgesWorkType>::new(tls));
+            worker.scheduler().work_buckets[WorkBucketStage::Unconstrained].add(ScanMutator::<
+                DefragContext::ProcessEdgesWorkType,
+            >::new(
+                tls
+            ));
             // Prepare global/collectors/mutators
-            scheduler.work_buckets[WorkBucketStage::Prepare]
-                .add(ThreadLocalPrepare::<DefragContext>::new(plan, tls));
+            worker.scheduler().work_buckets[WorkBucketStage::Prepare].add(ThreadlocalPrepare::<
+                DefragContext,
+            >::new(
+                plan, tls
+            ));
 
             // Release global/collectors/mutators
-            scheduler.work_buckets[WorkBucketStage::Release]
-                .add(ThreadLocalRelease::<DefragContext>::new(plan, tls));
+            worker.scheduler().work_buckets[WorkBucketStage::Release].add(ThreadlocalRelease::<
+                DefragContext,
+            >::new(
+                plan, tls
+            ));
         } else {
+            // single_thread_gc_work::SingleThreadStopMutators::<
+            //     <SSGCWorkContext<VM> as GCWorkContext>::SingleThreadProcessEdgesWorkType,
+            // >::new()
+            // .do_work(worker, worker.mmtk);
+            // single_thread_gc_work::SingleThreadPrepare::<SSGCWorkContext<VM>>::new(self)
+            //     .do_work(worker, worker.mmtk);
+
+            // worker.scheduler().work_buckets[WorkBucketStage::Unconstrained].set_local_sentinel(
+            //     Box::new(SingleThreadSentinel::<SSGCWorkContext<VM>>::new(self)),
+            // );
+
             //Scan mutator
-            scheduler.work_buckets[WorkBucketStage::Unconstrained]
-                .add(ScanMutator::<FastContext::ProcessEdgesWorkType>::new(tls));
+            ScanMutator::<FastContext::ThreadlocalProcessEdgesWorkType>::new(tls)
+                .do_work(worker, worker.mmtk);
             // Prepare global/collectors/mutators
-            scheduler.work_buckets[WorkBucketStage::Prepare]
-                .add(ThreadLocalPrepare::<FastContext>::new(plan, tls));
+            ThreadlocalPrepare::<FastContext>::new(plan, tls).do_work(worker, worker.mmtk);
 
             // Release global/collectors/mutators
-            scheduler.work_buckets[WorkBucketStage::Release]
-                .add(ThreadLocalRelease::<FastContext>::new(plan, tls));
+            worker.scheduler().work_buckets[WorkBucketStage::Unconstrained]
+                .set_local_sentinel(Box::new(ThreadlocalSentinel::<FastContext>::new(plan, tls)));
         }
+    }
+}
+
+impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for Immix<VM> {
+    fn thread_local_post_scan_object(&self, object: ObjectReference) {
+        if self.immix_space.in_space(object) {
+            <ImmixSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_post_scan_object(
+                &self.immix_space,
+                object,
+            );
+            return;
+        }
+        <CommonPlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_post_scan_object(
+            &self.common,
+            object,
+        )
+    }
+
+    fn thread_local_may_move_objects<const KIND: crate::policy::gc_work::TraceKind>() -> bool {
+        false
+            || <ImmixSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_may_move_objects::<
+                KIND,
+            >()
+            || <CommonPlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_may_move_objects::<
+                KIND,
+            >()
+    }
+
+    fn thread_local_trace_object<
+        Q: crate::ObjectQueue,
+        const KIND: crate::policy::gc_work::TraceKind,
+    >(
+        &self,
+        queue: &mut Q,
+        object: ObjectReference,
+        mutator: &mut crate::Mutator<VM>,
+        worker: &mut GCWorker<VM>,
+    ) -> ObjectReference {
+        if self.immix_space.in_space(object) {
+            <ImmixSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<
+                Q,
+                KIND,
+            >(
+                &self.immix_space,
+                queue,
+                object,
+                Some(CopySemantics::DefaultCopy),
+                mutator,
+                worker,
+            );
+        }
+        <CommonPlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_trace_object::<Q, KIND>(
+            &self.common,
+            queue,
+            object,
+            mutator,
+            worker,
+        )
     }
 }

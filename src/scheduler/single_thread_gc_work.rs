@@ -172,13 +172,13 @@ impl<E: ProcessEdgesWork> RootsWorkFactory<EdgeOf<E>>
         crate::memory_manager::add_local_work_packet(
             self.mmtk,
             WorkBucketStage::Unconstrained,
-            E::new(edges, true, self.mmtk),
+            E::new(edges, true, self.mmtk, Option::None),
         );
     }
 
     fn create_process_node_roots_work(&mut self, nodes: Vec<ObjectReference>) {
         // We want to use E::create_scan_work.
-        let process_edges_work = E::new(vec![], true, self.mmtk);
+        let process_edges_work = E::new(vec![], true, self.mmtk, Option::None);
         let work = process_edges_work.create_scan_work(nodes, true);
         crate::memory_manager::add_local_work_packet(
             self.mmtk,
@@ -427,7 +427,12 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
     type VM = VM;
     type ScanObjectsWorkType = SingleThreadPlanScanObjects<Self, P>;
 
-    fn new(edges: Vec<EdgeOf<Self>>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+    fn new(
+        edges: Vec<EdgeOf<Self>>,
+        roots: bool,
+        mmtk: &'static MMTK<VM>,
+        _tls: Option<VMMutatorThread>,
+    ) -> Self {
         let base = ProcessEdgesBase::new(edges, roots, mmtk);
         let plan = base.plan().downcast_ref::<P>().unwrap();
         Self { plan, base }
@@ -554,7 +559,13 @@ impl<E: ProcessEdgesWork, P: Plan<VM = E::VM> + PlanTraceObject<E::VM>> GCWork<E
             mmtk.active_gc_thread_id.load(atomic::Ordering::SeqCst) == worker.ordinal,
             "SingleThreadPlanScanObjects is executed on the wrong gc thread"
         );
-        self.do_work_common(&self.buffer, worker, mmtk, true);
+        self.do_work_common(
+            &self.buffer,
+            worker,
+            mmtk,
+            true,
+            VMMutatorThread(VMThread::UNINITIALIZED),
+        );
         trace!("PlanScanObjects End");
     }
 }

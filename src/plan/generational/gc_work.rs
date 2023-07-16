@@ -2,7 +2,7 @@ use atomic::Ordering;
 
 use crate::plan::PlanTraceObject;
 use crate::scheduler::{gc_work::*, GCWork, GCWorker};
-use crate::util::ObjectReference;
+use crate::util::{ObjectReference, VMMutatorThread};
 use crate::vm::edge_shape::{Edge, MemorySlice};
 use crate::vm::*;
 use crate::MMTK;
@@ -25,7 +25,12 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>> ProcessEdg
     type VM = VM;
     type ScanObjectsWorkType = PlanScanObjects<Self, P>;
 
-    fn new(edges: Vec<EdgeOf<Self>>, roots: bool, mmtk: &'static MMTK<VM>) -> Self {
+    fn new(
+        edges: Vec<EdgeOf<Self>>,
+        roots: bool,
+        mmtk: &'static MMTK<VM>,
+        _tls: Option<VMMutatorThread>,
+    ) -> Self {
         let base = ProcessEdgesBase::new(edges, roots, mmtk);
         let plan = base.plan().downcast_ref().unwrap();
         Self { plan, base }
@@ -144,7 +149,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessRegionModBuf<E> {
                 }
             }
             // Forward entries
-            GCWork::do_work(&mut E::new(edges, false, mmtk), worker, mmtk)
+            GCWork::do_work(&mut E::new(edges, false, mmtk, Option::None), worker, mmtk)
         }
     }
 }

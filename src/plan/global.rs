@@ -182,7 +182,7 @@ pub trait Plan: 'static + Sync + Downcast {
     fn schedule_thread_local_collection(
         &'static self,
         _tls: VMMutatorThread,
-        _scheduler: &GCWorkScheduler<Self::VM>,
+        _worker: &mut GCWorker<Self::VM>,
     ) {
     }
     fn common(&self) -> &CommonPlan<Self::VM> {
@@ -399,9 +399,9 @@ pub trait Plan: 'static + Sync + Downcast {
 
     fn thread_local_prepare(&mut self, _tls: VMMutatorThread) {}
 
-    fn thread_local_release(&mut self, _tls: VMMutatorThread) {}
-
-    fn do_thread_local_collection(&mut self, _tls: VMMutatorThread) {}
+    fn thread_local_release(&mut self, _tls: VMMutatorThread) -> Vec<Box<dyn GCWork<Self::VM>>> {
+        Vec::new()
+    }
 }
 
 impl_downcast!(Plan assoc VM);
@@ -607,8 +607,7 @@ impl<VM: VMBinding> BasePlan<VM> {
             info!("User triggering collection");
             self.user_triggered_collection
                 .store(true, Ordering::Relaxed);
-            self.gc_requester
-                .request(false, VMMutatorThread(VMThread::UNINITIALIZED));
+            self.gc_requester.request();
             VM::VMCollection::block_for_gc(tls);
         }
     }
@@ -631,7 +630,7 @@ impl<VM: VMBinding> BasePlan<VM> {
     pub fn handle_thread_local_collection(&self, tls: VMMutatorThread) {
         self.user_triggered_collection
             .store(true, Ordering::Relaxed);
-        self.gc_requester.request(true, tls);
+        self.gc_requester.request_thread_local_gc(tls);
         VM::VMCollection::block_for_thread_local_gc(tls);
         // VM::VMCollection::block_for_gc(tls);
     }
@@ -644,8 +643,7 @@ impl<VM: VMBinding> BasePlan<VM> {
             .store(true, Ordering::Relaxed);
         self.internal_triggered_collection
             .store(true, Ordering::Relaxed);
-        self.gc_requester
-            .request(false, VMMutatorThread(VMThread::UNINITIALIZED));
+        self.gc_requester.request();
     }
 
     /// Reset collection state information.
@@ -991,6 +989,24 @@ impl<VM: VMBinding> BasePlan<VM> {
     }
 }
 
+impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for BasePlan<VM> {
+    fn thread_local_trace_object<Q: ObjectQueue, const KIND: TraceKind>(
+        &self,
+        _queue: &mut Q,
+        object: ObjectReference,
+        _mutator: &mut Mutator<VM>,
+        _worker: &mut GCWorker<VM>,
+    ) -> ObjectReference {
+        object
+    }
+
+    fn thread_local_post_scan_object(&self, _object: ObjectReference) {}
+
+    fn thread_local_may_move_objects<const KIND: TraceKind>() -> bool {
+        false
+    }
+}
+
 /**
 CommonPlan is for representing state and features used by _many_ plans, but that are not fundamental to _all_ plans.  Examples include the Large Object Space and an Immortal space.  Features that are fundamental to _all_ plans must be included in BasePlan.
 */
@@ -1142,7 +1158,69 @@ impl<VM: VMBinding> CommonPlan<VM> {
     }
 }
 
-use crate::policy::gc_work::TraceKind;
+impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
+    fn thread_local_trace_object<Q: ObjectQueue, const KIND: TraceKind>(
+        &self,
+        queue: &mut Q,
+        object: ObjectReference,
+        mutator: &mut Mutator<VM>,
+        worker: &mut GCWorker<VM>,
+    ) -> ObjectReference {
+        if self.immortal.in_space(object) {
+            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<
+                Q,
+                KIND,
+            >(
+                &self.immortal,
+                queue,
+                object,
+                None,
+                mutator,
+                worker
+            );
+        }
+        if self.los.in_space(object) {
+            return <LargeObjectSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<Q, KIND>(
+                &self.los,
+                queue,
+                object,
+                None,
+                mutator,
+                worker
+            );
+        }
+        if self.nonmoving.in_space(object) {
+            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<Q, KIND>(
+                &self.nonmoving,
+                queue,
+                object,
+                None,
+                mutator,
+                worker
+            );
+        }
+        <BasePlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_trace_object::<Q, KIND>(
+            &self.base, queue, object, mutator, worker,
+        )
+    }
+
+    fn thread_local_post_scan_object(&self, object: ObjectReference) {
+        <BasePlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_post_scan_object(
+            &self.base, object,
+        )
+    }
+
+    fn thread_local_may_move_objects<const KIND: TraceKind>() -> bool {
+        false
+            || <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_may_move_objects::<
+                KIND,
+            >()
+            || <LargeObjectSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_may_move_objects::<KIND>()
+            || <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_may_move_objects::<KIND>()
+            || <BasePlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_may_move_objects::<KIND>()
+    }
+}
+use crate::policy::gc_work::{PolicyThreadlocalTraceObject, TraceKind};
 use crate::vm::VMBinding;
 
 /// A plan that uses `PlanProcessEdges` needs to provide an implementation for this trait.
@@ -1192,7 +1270,8 @@ pub trait PlanThreadlocalTraceObject<VM: VMBinding> {
         &self,
         queue: &mut Q,
         object: ObjectReference,
-        worker: &mut Mutator<VM>,
+        mutator: &mut Mutator<VM>,
+        worker: &mut GCWorker<VM>,
     ) -> ObjectReference;
 
     /// Post-scan objects in the plan. Each object is scanned by `VM::VMScanning::scan_object()`, and this function

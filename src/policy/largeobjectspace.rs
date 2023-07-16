@@ -141,6 +141,25 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LargeObjec
     }
 }
 
+impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM>
+    for LargeObjectSpace<VM>
+{
+    fn thread_local_trace_object<Q: ObjectQueue, const KIND: super::gc_work::TraceKind>(
+        &self,
+        queue: &mut Q,
+        object: ObjectReference,
+        _copy: Option<CopySemantics>,
+        mutator: &mut crate::Mutator<VM>,
+        _worker: &mut GCWorker<VM>,
+    ) -> ObjectReference {
+        self.thread_local_trace_object(queue, object, mutator)
+    }
+
+    fn thread_local_may_move_objects<const KIND: super::gc_work::TraceKind>() -> bool {
+        false
+    }
+}
+
 impl<VM: VMBinding> LargeObjectSpace<VM> {
     pub fn new(
         args: crate::policy::space::PlanCreateSpaceArgs<VM>,
@@ -199,10 +218,11 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         self.in_thread_local_gc = false;
     }
 
-    fn trace_thread_local_object(
+    fn thread_local_trace_object(
         &self,
         queue: &mut impl ObjectQueue,
         object: ObjectReference,
+        _mutator: &mut crate::Mutator<VM>,
     ) -> ObjectReference {
         // thread-local gc does not reclaim los
         // but it still needs to mark and scan los objects
@@ -231,9 +251,9 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             object
         );
 
-        if self.in_thread_local_gc {
-            return self.trace_thread_local_object(queue, object);
-        }
+        // if self.in_thread_local_gc {
+        //     return self.trace_thread_local_object(queue, object);
+        // }
         let nursery_object = self.is_in_nursery(object);
         trace!(
             "LOS object {} {} a nursery object",
@@ -284,35 +304,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     /// Allocate an object
     pub fn allocate_pages(&self, tls: VMThread, pages: usize) -> Address {
         self.acquire(tls, pages)
-    }
-
-    fn test_and_mark_without_side_effect(&self, object: ObjectReference, value: u8) -> bool {
-        debug_assert!(!self.in_nursery_gc);
-        loop {
-            let old_value = VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC.load_atomic::<VM, u8>(
-                object,
-                None,
-                Ordering::SeqCst,
-            );
-            let mark_bit = old_value & LOCAL_MARK_BIT;
-            if mark_bit == value {
-                return false;
-            }
-            if VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC
-                .compare_exchange_metadata::<VM, u8>(
-                    object,
-                    old_value,
-                    old_value & !LOCAL_MARK_BIT | value,
-                    None,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                )
-                .is_ok()
-            {
-                break;
-            }
-        }
-        true
     }
 
     /// Test if the object's mark bit is the same as the given value. If it is not the same,

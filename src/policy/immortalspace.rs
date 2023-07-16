@@ -13,6 +13,8 @@ use crate::plan::{ObjectQueue, VectorObjectQueue};
 use crate::policy::sft::GCWorkerMutRef;
 use crate::vm::{ObjectModel, VMBinding};
 
+const GC_MARK_BIT_MASK: u8 = 1;
+
 /// This type implements a simple immortal collection
 /// policy. Under this policy all that is required is for the
 /// "collector" to propagate marks in a liveness trace.  It does not
@@ -118,6 +120,23 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmortalSp
     }
 }
 
+impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for ImmortalSpace<VM> {
+    fn thread_local_trace_object<Q: ObjectQueue, const KIND: super::gc_work::TraceKind>(
+        &self,
+        queue: &mut Q,
+        object: ObjectReference,
+        _copy: Option<CopySemantics>,
+        _mutator: &mut crate::Mutator<VM>,
+        _worker: &mut GCWorker<VM>,
+    ) -> ObjectReference {
+        self.thread_local_trace_object(queue, object)
+    }
+
+    fn thread_local_may_move_objects<const KIND: super::gc_work::TraceKind>() -> bool {
+        false
+    }
+}
+
 impl<VM: VMBinding> ImmortalSpace<VM> {
     pub fn new(args: crate::policy::space::PlanCreateSpaceArgs<VM>) -> Self {
         let vm_map = args.vm_map;
@@ -183,7 +202,8 @@ impl<VM: VMBinding> ImmortalSpace<VM> {
     }
 
     pub fn thread_local_prepare(&mut self, _tls: VMMutatorThread) {
-        self.mark_state = GC_MARK_BIT_MASK - self.mark_state;
+        // TODO fix the mark_state
+        // self.mark_state = GC_MARK_BIT_MASK - self.mark_state;
     }
 
     pub fn thread_local_release(&mut self, _tls: VMMutatorThread) {}
@@ -199,6 +219,26 @@ impl<VM: VMBinding> ImmortalSpace<VM> {
             "{:x}: VO bit not set",
             object
         );
+        if self.mark_state.test_and_mark::<VM>(object) {
+            queue.enqueue(object);
+        }
+        object
+    }
+
+    pub fn thread_local_trace_object<Q: ObjectQueue>(
+        &self,
+        queue: &mut Q,
+        object: ObjectReference,
+    ) -> ObjectReference {
+        #[cfg(feature = "vo_bit")]
+        debug_assert!(
+            crate::util::metadata::vo_bit::is_vo_bit_set::<VM>(object),
+            "{:x}: VO bit not set",
+            object
+        );
+        if crate::util::public_bit::is_public::<VM>(object) {
+            return object;
+        }
         if self.mark_state.test_and_mark::<VM>(object) {
             queue.enqueue(object);
         }

@@ -18,7 +18,6 @@ use crate::policy::immix::{
 use crate::policy::space::Space;
 use crate::scheduler::thread_local_gc_work::ScanMutator;
 use crate::scheduler::thread_local_gc_work::ThreadlocalPrepare;
-use crate::scheduler::thread_local_gc_work::ThreadlocalRelease;
 use crate::scheduler::thread_local_gc_work::ThreadlocalSentinel;
 use crate::scheduler::*;
 use crate::util::alloc::allocators::AllocatorSelector;
@@ -132,15 +131,15 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         self.immix_space.prepare(true);
     }
 
-    fn thread_local_prepare(&mut self, tls: VMMutatorThread) {
-        self.common.thread_local_prepare(tls);
-        self.immix_space.thread_local_prepare(tls);
+    fn thread_local_prepare(&mut self, mutator_id: u32) {
+        self.common.thread_local_prepare(mutator_id);
+        self.immix_space.thread_local_prepare(mutator_id);
     }
 
-    fn thread_local_release(&mut self, tls: VMMutatorThread) -> Vec<Box<dyn GCWork<VM>>> {
+    fn thread_local_release(&mut self, mutator_id: u32) -> Vec<Box<dyn GCWork<VM>>> {
         // at the moment, thread-local gc only reclaiming immix space
-        self.common.thread_local_release(tls);
-        self.immix_space.thread_local_release(tls)
+        self.common.thread_local_release(mutator_id);
+        self.immix_space.thread_local_release(mutator_id)
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
@@ -269,39 +268,35 @@ impl<VM: VMBinding> Immix<VM> {
             plan.base().is_user_triggered_collection(),
             *plan.base().options.full_heap_system_gc,
         );
-
+        assert!(!in_defrag, "defrag has not been implemented");
         if in_defrag {
             //Scan mutator
-            worker.scheduler().work_buckets[WorkBucketStage::Unconstrained].add(ScanMutator::<
-                DefragContext::ProcessEdgesWorkType,
-            >::new(
-                tls
-            ));
+            ScanMutator::<DefragContext::ThreadlocalProcessEdgesWorkType>::new(tls)
+                .do_work(worker, worker.mmtk);
+            // worker.scheduler().work_buckets[WorkBucketStage::Unconstrained].add(ScanMutator::<
+            //     DefragContext::ProcessEdgesWorkType,
+            // >::new(
+            //     mutator_id
+            // ));
+
             // Prepare global/collectors/mutators
-            worker.scheduler().work_buckets[WorkBucketStage::Prepare].add(ThreadlocalPrepare::<
-                DefragContext,
-            >::new(
-                plan, tls
-            ));
+            ThreadlocalPrepare::<DefragContext>::new(plan, tls).do_work(worker, worker.mmtk);
+            // worker.scheduler().work_buckets[WorkBucketStage::Prepare].add(ThreadlocalPrepare::<
+            //     DefragContext,
+            // >::new(
+            //     plan, mutator_id
+            // ));
 
             // Release global/collectors/mutators
-            worker.scheduler().work_buckets[WorkBucketStage::Release].add(ThreadlocalRelease::<
-                DefragContext,
-            >::new(
-                plan, tls
-            ));
+            worker.scheduler().work_buckets[WorkBucketStage::Unconstrained].set_local_sentinel(
+                Box::new(ThreadlocalSentinel::<DefragContext>::new(plan, tls)),
+            );
+            // worker.scheduler().work_buckets[WorkBucketStage::Release].add(ThreadlocalRelease::<
+            //     DefragContext,
+            // >::new(
+            //     plan, mutator_id
+            // ));
         } else {
-            // single_thread_gc_work::SingleThreadStopMutators::<
-            //     <SSGCWorkContext<VM> as GCWorkContext>::SingleThreadProcessEdgesWorkType,
-            // >::new()
-            // .do_work(worker, worker.mmtk);
-            // single_thread_gc_work::SingleThreadPrepare::<SSGCWorkContext<VM>>::new(self)
-            //     .do_work(worker, worker.mmtk);
-
-            // worker.scheduler().work_buckets[WorkBucketStage::Unconstrained].set_local_sentinel(
-            //     Box::new(SingleThreadSentinel::<SSGCWorkContext<VM>>::new(self)),
-            // );
-
             //Scan mutator
             ScanMutator::<FastContext::ThreadlocalProcessEdgesWorkType>::new(tls)
                 .do_work(worker, worker.mmtk);

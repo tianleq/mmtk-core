@@ -67,7 +67,8 @@ pub(crate) mod treadmill;
 pub(crate) mod debug_bit;
 pub(crate) mod public_bit;
 
-pub(crate) mod object_metadata;
+// #[cfg(feature = "extra_header")]
+pub(crate) mod object_extra_header_metadata;
 
 // These modules are private. They are only used by other util modules.
 

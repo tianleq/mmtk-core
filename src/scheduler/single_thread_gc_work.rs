@@ -27,14 +27,6 @@ impl<VM: VMBinding> GCWork<VM> for ScheduleSingleThreadCollection {
             crate::scheduler::worker::current_worker_ordinal().unwrap()
         );
 
-        info!(
-            "ScheduleSingleThreadCollection executed by GC Thread {}",
-            crate::scheduler::worker::current_worker_ordinal().unwrap()
-        );
-        mmtk.active_gc_thread_id.store(
-            crate::scheduler::worker::current_worker_ordinal().unwrap(),
-            atomic::Ordering::SeqCst,
-        );
         // Tell GC trigger that GC started.
         // We now know what kind of GC this is (e.g. nursery vs mature in gen copy, defrag vs fast in Immix)
         // TODO: Depending on the OS scheduling, other workers can run so fast that they can finish
@@ -129,13 +121,9 @@ impl<C: GCWorkContext> SingleThreadPrepare<C> {
 impl<C: GCWorkContext + 'static> GCWork<C::VM> for SingleThreadPrepare<C> {
     fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
         trace!("SingleThreadPrepare Global");
-        info!(
+        debug!(
             "SingleThreadPrepare executed by GC Thread {}",
             crate::scheduler::worker::current_worker_ordinal().unwrap()
-        );
-        assert!(
-            mmtk.active_gc_thread_id.load(atomic::Ordering::SeqCst) == worker.ordinal,
-            "SingleThreadPrepare is executed on the wrong gc thread"
         );
         // We assume this is the only running work packet that accesses plan at the point of execution
         #[allow(clippy::cast_ref_to_mut)]
@@ -169,16 +157,33 @@ impl<E: ProcessEdgesWork> RootsWorkFactory<EdgeOf<E>>
     for SingleThreadProcessEdgesWorkRootsWorkFactory<E>
 {
     fn create_process_edge_roots_work(&mut self, edges: Vec<EdgeOf<E>>) {
+        #[cfg(not(feature = "debug_publish_object"))]
         crate::memory_manager::add_local_work_packet(
             self.mmtk,
             WorkBucketStage::Unconstrained,
             E::new(edges, true, self.mmtk, Option::None),
         );
+        #[cfg(feature = "debug_publish_object")]
+        crate::memory_manager::add_local_work_packet(
+            self.mmtk,
+            WorkBucketStage::Unconstrained,
+            E::new(
+                edges.iter().map(|&edge| edge.load()).collect(),
+                edges,
+                true,
+                self.mmtk,
+                Option::None,
+            ),
+        );
     }
 
     fn create_process_node_roots_work(&mut self, nodes: Vec<ObjectReference>) {
+        #[cfg(not(feature = "debug_publish_object"))]
         // We want to use E::create_scan_work.
         let process_edges_work = E::new(vec![], true, self.mmtk, Option::None);
+        #[cfg(feature = "debug_publish_object")]
+        // We want to use E::create_scan_work.
+        let process_edges_work = E::new(vec![], vec![], true, self.mmtk, Option::None);
         let work = process_edges_work.create_scan_work(nodes, true);
         crate::memory_manager::add_local_work_packet(
             self.mmtk,
@@ -203,13 +208,9 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for SingleThreadScanStackRoot<E> {
             self.0.get_tls()
         );
 
-        info!(
+        debug!(
             "SingleThreadScanStackRoot executed by GC Thread {}",
             crate::scheduler::worker::current_worker_ordinal().unwrap()
-        );
-        assert!(
-            mmtk.active_gc_thread_id.load(atomic::Ordering::SeqCst) == worker.ordinal,
-            "SingleThreadScanStackRoot is executed on the wrong gc thread"
         );
         let base = &mmtk.plan.base();
         let mutators = <E::VM as VMBinding>::VMActivePlan::number_of_mutators();
@@ -242,10 +243,7 @@ impl<E: ProcessEdgesWork> SingleThreadScanStackRoots<E> {
 impl<E: ProcessEdgesWork> GCWork<E::VM> for SingleThreadScanStackRoots<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         trace!("SingleThreadScanStackRoots");
-        assert!(
-            mmtk.active_gc_thread_id.load(atomic::Ordering::SeqCst) == worker.ordinal,
-            "SingleThreadScanStackRoots is executed on the wrong gc thread"
-        );
+
         let factory = SingleThreadProcessEdgesWorkRootsWorkFactory::<E>::new(mmtk);
         <E::VM as VMBinding>::VMScanning::scan_roots_in_all_mutator_threads(worker.tls, factory);
         <E::VM as VMBinding>::VMScanning::notify_initial_thread_scan_complete(false, worker.tls);
@@ -268,10 +266,7 @@ impl<E: ProcessEdgesWork> SingleThreadScanVMSpecificRoots<E> {
 impl<E: ProcessEdgesWork> GCWork<E::VM> for SingleThreadScanVMSpecificRoots<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         trace!("ScanStaticRoots");
-        assert!(
-            mmtk.active_gc_thread_id.load(atomic::Ordering::SeqCst) == worker.ordinal,
-            "SingleThreadScanVMSpecificRoots is executed on the wrong gc thread"
-        );
+
         let factory = SingleThreadProcessEdgesWorkRootsWorkFactory::<E>::new(mmtk);
         <E::VM as VMBinding>::VMScanning::single_thread_scan_vm_specific_roots(worker.tls, factory);
     }
@@ -293,10 +288,6 @@ impl<ScanEdges: ProcessEdgesWork> SingleThreadStopMutators<ScanEdges> {
 
 impl<E: ProcessEdgesWork> GCWork<E::VM> for SingleThreadStopMutators<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
-        assert!(
-            mmtk.active_gc_thread_id.load(atomic::Ordering::SeqCst) == worker.ordinal,
-            "SingleThreadStopMutators is executed on the wrong gc thread"
-        );
         trace!("single thread stop_all_mutators start");
         mmtk.plan.base().prepare_for_stack_scanning();
         <E::VM as VMBinding>::VMCollection::stop_all_mutators(worker.tls, |mutator| {
@@ -353,10 +344,7 @@ impl<C: GCWorkContext> SingleThreadRelease<C> {
 impl<C: GCWorkContext + 'static> GCWork<C::VM> for SingleThreadRelease<C> {
     fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
         trace!("Release Global");
-        assert!(
-            mmtk.active_gc_thread_id.load(atomic::Ordering::SeqCst) == worker.ordinal,
-            "SingleThreadRelease is executed on the wrong gc thread"
-        );
+
         self.plan.base().gc_trigger.policy.on_gc_release(mmtk);
 
         // We assume this is the only running work packet that accesses plan at the point of execution
@@ -388,22 +376,20 @@ impl<C: GCWorkContext> SingleThreadSentinel<C> {
 impl<C: GCWorkContext + 'static> GCWork<C::VM> for SingleThreadSentinel<C> {
     fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
         trace!("Single thread Sentinel");
-        info!(
+        debug!(
             "SingleThreadSentinel executed by GC Thread {}",
             crate::scheduler::worker::current_worker_ordinal().unwrap()
         );
-        assert!(
-            mmtk.active_gc_thread_id.load(atomic::Ordering::SeqCst) == worker.ordinal,
-            "SingleThreadSentinel is executed on the wrong gc thread"
-        );
+
         // Finalization and then do release
         if !*self.plan.base().options.no_finalizer {
             use crate::util::finalizable_processor::{Finalization, ForwardFinalization};
             // finalization
-            Finalization::<C::ProcessEdgesWorkType>::new().do_work(worker, mmtk);
+            Finalization::<C::ProcessEdgesWorkType>::new(Option::None).do_work(worker, mmtk);
             // forward refs
             if self.plan.constraints().needs_forward_after_liveness {
-                ForwardFinalization::<C::ProcessEdgesWorkType>::new().do_work(worker, mmtk);
+                ForwardFinalization::<C::ProcessEdgesWorkType>::new(Option::None)
+                    .do_work(worker, mmtk);
             }
         }
         SingleThreadRelease::<C>::new(self.plan).do_work(worker, mmtk);
@@ -427,6 +413,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
     type VM = VM;
     type ScanObjectsWorkType = SingleThreadPlanScanObjects<Self, P>;
 
+    #[cfg(not(feature = "debug_publish_object"))]
     fn new(
         edges: Vec<EdgeOf<Self>>,
         roots: bool,
@@ -434,6 +421,19 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
         _tls: Option<VMMutatorThread>,
     ) -> Self {
         let base = ProcessEdgesBase::new(edges, roots, mmtk);
+        let plan = base.plan().downcast_ref::<P>().unwrap();
+        Self { plan, base }
+    }
+
+    #[cfg(feature = "debug_publish_object")]
+    fn new(
+        sources: Vec<ObjectReference>,
+        edges: Vec<EdgeOf<Self>>,
+        roots: bool,
+        mmtk: &'static MMTK<Self::VM>,
+        _tls: Option<VMMutatorThread>,
+    ) -> Self {
+        let base = ProcessEdgesBase::new(sources, edges, roots, mmtk);
         let plan = base.plan().downcast_ref::<P>().unwrap();
         Self { plan, base }
     }
@@ -472,6 +472,15 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
             .trace_object::<VectorObjectQueue, KIND>(&mut self.base.nodes, object, worker)
     }
 
+    fn process_edges(&mut self) {
+        for i in 0..self.edges.len() {
+            #[cfg(not(feature = "debug_publish_object"))]
+            self.process_edge(self.edges[i]);
+            #[cfg(feature = "debug_publish_object")]
+            self._process_edge(self.sources[i], self.edges[i]);
+        }
+    }
+
     fn process_edge(&mut self, slot: EdgeOf<Self>) {
         let object = slot.load();
         let new_object = self.trace_object(object);
@@ -496,6 +505,36 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.base
+    }
+}
+
+impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind>
+    SingleThreadPlanProcessEdges<VM, P, KIND>
+{
+    fn _process_edge(&mut self, _source: ObjectReference, slot: EdgeOf<Self>) {
+        let object = slot.load();
+        let new_object = self.trace_object(object);
+        #[cfg(feature = "extra_header")]
+        {
+            if !object.is_null() && !crate::util::public_bit::is_public::<VM>(object) {
+                let m1 = crate::util::object_extra_header_metadata::get_extra_header_metadata::<
+                    VM,
+                    usize,
+                >(object);
+                let m2 = crate::util::object_extra_header_metadata::get_extra_header_metadata::<
+                    VM,
+                    usize,
+                >(_source);
+                debug_assert!(
+                    (m1 & object_extra_header_metadata::BOTTOM_HALF_MASK)
+                        == (m2 & object_extra_header_metadata::BOTTOM_HALF_MASK),
+                    "object is not published properly."
+                )
+            }
+        }
+        if P::may_move_objects::<KIND>() {
+            slot.store(new_object);
+        }
     }
 }
 
@@ -555,17 +594,7 @@ impl<E: ProcessEdgesWork, P: Plan<VM = E::VM> + PlanTraceObject<E::VM>> GCWork<E
 {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         trace!("PlanScanObjects");
-        assert!(
-            mmtk.active_gc_thread_id.load(atomic::Ordering::SeqCst) == worker.ordinal,
-            "SingleThreadPlanScanObjects is executed on the wrong gc thread"
-        );
-        self.do_work_common(
-            &self.buffer,
-            worker,
-            mmtk,
-            true,
-            VMMutatorThread(VMThread::UNINITIALIZED),
-        );
+        self.do_work_common(&self.buffer, worker, mmtk, true, Option::None);
         trace!("PlanScanObjects End");
     }
 }

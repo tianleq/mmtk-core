@@ -1,11 +1,13 @@
+use super::VMMutatorThread;
 use crate::plan::is_nursery_gc;
 use crate::scheduler::gc_work::ProcessEdgesWork;
 use crate::scheduler::{GCWork, GCWorker};
 use crate::util::ObjectReference;
 use crate::util::VMWorkerThread;
 use crate::vm::Finalizable;
-use crate::vm::{Collection, VMBinding};
+use crate::vm::{ActivePlan, Collection, VMBinding};
 use crate::MMTK;
+// use std::collections::HashMap;
 use std::marker::PhantomData;
 
 /// A special processor for Finalizable objects.
@@ -14,33 +16,53 @@ use std::marker::PhantomData;
 #[derive(Default)]
 pub struct FinalizableProcessor<F: Finalizable> {
     /// Candidate objects that has finalizers with them
-    candidates: Vec<F>,
+    candidates: Vec<(u32, F)>,
+
+    // thread_local_candidates: HashMap<u32, Vec<F>>,
+    // thread_local_ready_for_finalize: HashMap<u32, Vec<F>>,
     /// Index into candidates to record where we are up to in the last scan of the candidates.
     /// Index after nursery_index are new objects inserted after the last GC.
     nursery_index: usize,
     /// Objects that can be finalized. They are actually dead, but we keep them alive
     /// until the binding pops them from the queue.
-    ready_for_finalize: Vec<F>,
+    ready_for_finalize: Vec<(u32, F)>,
+
+    pub local_finalizables_count: u32,
+    pub public_finalizables_count: u32,
+    pub total_finalizables_count: u32,
 }
 
 impl<F: Finalizable> FinalizableProcessor<F> {
     pub fn new() -> Self {
         Self {
             candidates: vec![],
+
+            // thread_local_candidates: HashMap::new(),
+            // thread_local_ready_for_finalize: HashMap::new(),
             nursery_index: 0,
             ready_for_finalize: vec![],
+            local_finalizables_count: 0,
+            public_finalizables_count: 0,
+            total_finalizables_count: 0,
         }
     }
 
-    pub fn add(&mut self, object: F) {
-        self.candidates.push(object);
+    pub fn add(&mut self, mutator_id: u32, object: F) {
+        self.candidates.push((mutator_id, object));
+        self.total_finalizables_count += 1;
     }
 
     fn forward_finalizable_reference<E: ProcessEdgesWork>(e: &mut E, finalizable: &mut F) {
         finalizable.keep_alive::<E>(e);
     }
 
-    pub fn scan<E: ProcessEdgesWork>(&mut self, tls: VMWorkerThread, e: &mut E, nursery: bool) {
+    pub fn scan<E: ProcessEdgesWork>(
+        &mut self,
+        tls: VMWorkerThread,
+        e: &mut E,
+        nursery: bool,
+        mutator_id: Option<u32>,
+    ) {
         let start = if nursery { self.nursery_index } else { 0 };
 
         // We should go through ready_for_finalize objects and keep them alive.
@@ -49,12 +71,23 @@ impl<F: Finalizable> FinalizableProcessor<F> {
         // But we have to iterate through candidates after closure.
         self.candidates.append(&mut self.ready_for_finalize);
         debug_assert!(self.ready_for_finalize.is_empty());
-
-        for mut f in self.candidates.drain(start..).collect::<Vec<F>>() {
-            let reff = f.get_reference();
+        let keep_public_alive = mutator_id.is_some();
+        for mut f in self.candidates.drain(start..).collect::<Vec<(u32, F)>>() {
+            let reff: ObjectReference = f.1.get_reference();
+            if let Some(m) = mutator_id {
+                if f.0 != m {
+                    continue;
+                }
+            }
+            debug_assert!(
+                mutator_id.is_none() || mutator_id.unwrap() == f.0,
+                "mutator id mismatches for thread local gc"
+            );
             trace!("Pop {:?} for finalization", reff);
-            if reff.is_live() {
-                FinalizableProcessor::<F>::forward_finalizable_reference(e, &mut f);
+            if reff.is_live()
+                || (keep_public_alive && crate::util::public_bit::is_public::<E::VM>(reff))
+            {
+                FinalizableProcessor::<F>::forward_finalizable_reference(e, &mut f.1);
                 trace!("{:?} is live, push {:?} back to candidates", reff, f);
                 self.candidates.push(f);
                 continue;
@@ -81,19 +114,23 @@ impl<F: Finalizable> FinalizableProcessor<F> {
     pub fn forward_candidate<E: ProcessEdgesWork>(&mut self, e: &mut E, _nursery: bool) {
         self.candidates
             .iter_mut()
-            .for_each(|f| FinalizableProcessor::<F>::forward_finalizable_reference(e, f));
+            .for_each(|f| FinalizableProcessor::<F>::forward_finalizable_reference(e, &mut (*f).1));
         e.flush();
     }
 
     pub fn forward_finalizable<E: ProcessEdgesWork>(&mut self, e: &mut E, _nursery: bool) {
         self.ready_for_finalize
             .iter_mut()
-            .for_each(|f| FinalizableProcessor::<F>::forward_finalizable_reference(e, f));
+            .for_each(|f| FinalizableProcessor::<F>::forward_finalizable_reference(e, &mut (*f).1));
         e.flush();
     }
 
     pub fn get_ready_object(&mut self) -> Option<F> {
-        self.ready_for_finalize.pop()
+        if let Some(f) = self.ready_for_finalize.pop() {
+            Some(f.1)
+        } else {
+            Option::None
+        }
     }
 
     pub fn get_all_finalizers(&mut self) -> Vec<F> {
@@ -104,7 +141,11 @@ impl<F: Finalizable> FinalizableProcessor<F> {
         // We removed objects from candidates. Reset nursery_index
         self.nursery_index = 0;
 
-        ret
+        let mut result = vec![];
+        for f in ret {
+            result.push(f.1);
+        }
+        result
     }
 
     pub fn get_finalizers_for(&mut self, object: ObjectReference) -> Vec<F> {
@@ -112,13 +153,13 @@ impl<F: Finalizable> FinalizableProcessor<F> {
         // * for elements that equal to 'object', they will be removed from the original vec, and returned.
         // * for elements that do not equal to 'object', they will be left in the original vec.
         // TODO: We should replace this with `vec.drain_filter()` when it is stablized.
-        let drain_filter = |vec: &mut Vec<F>| -> Vec<F> {
+        let drain_filter = |vec: &mut Vec<(u32, F)>| -> Vec<F> {
             let mut i = 0;
             let mut ret = vec![];
             while i < vec.len() {
-                if vec[i].get_reference() == object {
+                if vec[i].1.get_reference() == object {
                     let val = vec.remove(i);
-                    ret.push(val);
+                    ret.push(val.1);
                 } else {
                     i += 1;
                 }
@@ -136,7 +177,7 @@ impl<F: Finalizable> FinalizableProcessor<F> {
 }
 
 #[derive(Default)]
-pub struct Finalization<E: ProcessEdgesWork>(PhantomData<E>);
+pub struct Finalization<E: ProcessEdgesWork>(PhantomData<E>, Option<VMMutatorThread>);
 
 impl<E: ProcessEdgesWork> GCWork<E::VM> for Finalization<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
@@ -146,10 +187,23 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for Finalization<E> {
             finalizable_processor.candidates.len(),
             finalizable_processor.ready_for_finalize.len()
         );
-
-        let mut w = E::new(vec![], false, mmtk, Option::None);
+        #[cfg(not(feature = "debug_publish_object"))]
+        let mut w = E::new(vec![], false, mmtk, self.1);
+        #[cfg(feature = "debug_publish_object")]
+        let mut w = E::new(vec![], vec![], false, mmtk, self.1);
         w.set_worker(worker);
-        finalizable_processor.scan(worker.tls, &mut w, is_nursery_gc(&*mmtk.plan));
+        if let Some(tls) = self.1 {
+            let mutator_id = <E::VM as VMBinding>::VMActivePlan::mutator(tls).mutator_id;
+            finalizable_processor.scan(worker.tls, &mut w, false, Some(mutator_id));
+        } else {
+            finalizable_processor.scan(
+                worker.tls,
+                &mut w,
+                is_nursery_gc(&*mmtk.plan),
+                Option::None,
+            );
+        }
+
         debug!(
             "Finished finalization, {} objects in candidates, {} objects ready to finalize",
             finalizable_processor.candidates.len(),
@@ -158,19 +212,22 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for Finalization<E> {
     }
 }
 impl<E: ProcessEdgesWork> Finalization<E> {
-    pub fn new() -> Self {
-        Self(PhantomData)
+    pub fn new(tls: Option<VMMutatorThread>) -> Self {
+        Self(PhantomData, tls)
     }
 }
 
 #[derive(Default)]
-pub struct ForwardFinalization<E: ProcessEdgesWork>(PhantomData<E>);
+pub struct ForwardFinalization<E: ProcessEdgesWork>(PhantomData<E>, Option<VMMutatorThread>);
 
 impl<E: ProcessEdgesWork> GCWork<E::VM> for ForwardFinalization<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         trace!("Forward finalization");
         let mut finalizable_processor = mmtk.finalizable_processor.lock().unwrap();
+        #[cfg(not(feature = "debug_publish_object"))]
         let mut w = E::new(vec![], false, mmtk, Option::None);
+        #[cfg(feature = "debug_publish_object")]
+        let mut w = E::new(vec![], vec![], false, mmtk, Option::None);
         w.set_worker(worker);
         finalizable_processor.forward_candidate(&mut w, is_nursery_gc(&*mmtk.plan));
 
@@ -179,7 +236,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ForwardFinalization<E> {
     }
 }
 impl<E: ProcessEdgesWork> ForwardFinalization<E> {
-    pub fn new() -> Self {
-        Self(PhantomData)
+    pub fn new(tls: Option<VMMutatorThread>) -> Self {
+        Self(PhantomData, tls)
     }
 }

@@ -260,6 +260,17 @@ impl<VM: VMBinding> CopySpace<VM> {
             #[cfg(feature = "vo_bit")]
             crate::util::metadata::vo_bit::set_vo_bit::<VM>(new_object);
 
+            #[cfg(feature = "extra_header")]
+            {
+                let metadata = crate::util::object_extra_header_metadata::get_extra_header_metadata::<
+                    VM,
+                    usize,
+                >(object);
+                crate::util::object_extra_header_metadata::store_extra_header_metadata::<VM, usize>(
+                    new_object, metadata,
+                );
+            }
+
             // ---- public bit begin ----
             let is_pubic = crate::util::public_bit::is_public::<VM>(object);
             if is_pubic {

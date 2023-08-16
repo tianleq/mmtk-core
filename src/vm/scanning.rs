@@ -7,12 +7,17 @@ use crate::vm::VMBinding;
 
 /// Callback trait of scanning functions that report edges.
 pub trait EdgeVisitor<ES: Edge> {
+    #[cfg(not(feature = "debug_publish_object"))]
     /// Call this function for each edge.
     fn visit_edge(&mut self, edge: ES);
+    #[cfg(feature = "debug_publish_object")]
+    /// Call this function for each edge.
+    fn visit_edge(&mut self, object: ObjectReference, edge: ES);
 }
 
 /// This lets us use closures as EdgeVisitor.
-impl<ES: Edge, F: FnMut(ES)> EdgeVisitor<ES> for F {
+impl<ES: Edge, F: FnMut(ObjectReference, ES)> EdgeVisitor<ES> for F {
+    #[cfg(not(feature = "debug_publish_object"))]
     fn visit_edge(&mut self, edge: ES) {
         #[cfg(debug_assertions)]
         trace!(
@@ -20,7 +25,19 @@ impl<ES: Edge, F: FnMut(ES)> EdgeVisitor<ES> for F {
             edge,
             edge.load()
         );
-        self(edge)
+        self(ObjectReference::NULL, edge)
+    }
+
+    #[cfg(feature = "debug_publish_object")]
+    fn visit_edge(&mut self, object: ObjectReference, edge: ES) {
+        #[cfg(debug_assertions)]
+        trace!(
+            "(FunctionClosure) Visit edge {:?} of object {:?} (pointing to {})",
+            edge,
+            object,
+            edge.load()
+        );
+        self(object, edge)
     }
 }
 
@@ -230,6 +247,21 @@ pub trait Scanning<VM: VMBinding> {
     /// * `mutator`: The reference to the mutator whose roots will be scanned.
     /// * `factory`: The VM uses it to create work packets for scanning roots.
     fn scan_roots_in_mutator_thread(
+        tls: VMWorkerThread,
+        mutator: &'static mut Mutator<VM>,
+        factory: impl RootsWorkFactory<VM::VMEdge>,
+    );
+
+    /// Scan one mutator for roots. (Do not use global data structure of the VM)
+    ///
+    /// The `memory_manager::is_mmtk_object` function can be used in this function if
+    /// -   the "is_mmtk_object" feature is enabled.
+    ///
+    /// Arguments:
+    /// * `tls`: The GC thread that is performing this scanning.
+    /// * `mutator`: The reference to the mutator whose roots will be scanned.
+    /// * `factory`: The VM uses it to create work packets for scanning roots.
+    fn thread_local_scan_roots_of_mutator_threads(
         tls: VMWorkerThread,
         mutator: &'static mut Mutator<VM>,
         factory: impl RootsWorkFactory<VM::VMEdge>,

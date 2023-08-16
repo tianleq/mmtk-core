@@ -5,12 +5,12 @@
 
 use std::sync::Arc;
 
-use crate::plan::gc_requester::{GCRequest, GCRequester};
+use crate::plan::gc_requester::GCRequester;
 use crate::scheduler::gc_work::{EndOfGC, ScheduleCollection};
 use crate::scheduler::single_thread_gc_work::ScheduleSingleThreadCollection;
-use crate::scheduler::thread_local_gc_work::{EndOfThreadLocalGC, ScheduleThreadlocalCollection};
+use crate::scheduler::thread_local_gc_work::ScheduleThreadlocalCollection;
 use crate::scheduler::{GCWork, WorkBucketStage};
-use crate::util::VMWorkerThread;
+use crate::util::{VMMutatorThread, VMWorkerThread};
 use crate::vm::VMBinding;
 use crate::MMTK;
 
@@ -50,54 +50,37 @@ impl<VM: VMBinding> GCController<VM> {
 
         loop {
             debug!("[STWController: Waiting for request...]");
-            let req = self.requester.wait_for_request();
+            let requests = self.requester.wait_for_request();
             debug!("[STWController: Request recieved.]");
-
-            self.do_gc_until_completion(req);
+            for req in requests {
+                if req.thread_local {
+                    self.do_thread_local_gc_until_completion(req.tls);
+                } else {
+                    debug_assert!(!req.thread_local, "This should be a global gc");
+                    self.do_gc_until_completion(req.single_thread);
+                }
+            }
             debug!("[STWController: Worker threads complete!]");
         }
     }
 
-    /// Find more work for workers to do.  Return true if more work is available.
-    fn find_more_work_for_workers(&mut self) -> bool {
-        if self.scheduler.worker_group.has_designated_work() {
-            return true;
-        }
-
-        // See if any bucket has a sentinel.
-        if self.scheduler.schedule_sentinels() {
-            return true;
-        }
-
-        // Try to open new buckets.
-        if self.scheduler.update_buckets() {
-            return true;
-        }
-
-        // If all of the above failed, it means GC has finished.
-        false
-    }
-
     /// Coordinate workers to perform GC in response to a GC request.
-    pub fn do_gc_until_completion(&mut self, req: GCRequest) {
+    pub fn do_gc_until_completion(&mut self, single_thread: bool) {
         let gc_start = std::time::Instant::now();
 
         debug_assert!(
             self.scheduler.worker_monitor.debug_is_sleeping(),
             "Workers are still doing work when GC started."
         );
-
-        if req.single_thread {
-            self.scheduler.work_buckets[WorkBucketStage::Unconstrained]
-                .add(ScheduleSingleThreadCollection);
-        } else if req.thread_local {
+        if single_thread {
             // Add a ScheduleCollection work packet.  It is the seed of other work packets.
             self.scheduler.work_buckets[WorkBucketStage::Unconstrained]
-                .add(ScheduleThreadlocalCollection(req.tls));
+                .add(ScheduleSingleThreadCollection);
         } else {
             // Add a ScheduleCollection work packet.  It is the seed of other work packets.
             self.scheduler.work_buckets[WorkBucketStage::Unconstrained].add(ScheduleCollection);
         }
+
         // Notify only one worker at this time because there is only one work packet,
         // namely `ScheduleCollection`.
         self.scheduler.worker_monitor.resume_and_wait(false);
@@ -139,25 +122,61 @@ impl<VM: VMBinding> GCController<VM> {
         //       Otherwise, for generational GCs, workers will receive and process
         //       newly generated remembered-sets from those open buckets.
         //       But these remsets should be preserved until next GC.
-        // let mut end_of_gc = EndOfGC {
-        //     elapsed: gc_start.elapsed(),
-        // };
-
-        let (mut end_of_gc, mut end_of_thread_local_gc);
-        let end_of_gc_work: &mut dyn GCWork<VM> = if req.thread_local {
-            end_of_thread_local_gc = EndOfThreadLocalGC {
-                elapsed: gc_start.elapsed(),
-                tls: req.tls,
-            };
-            &mut end_of_thread_local_gc
-        } else {
-            end_of_gc = EndOfGC {
-                elapsed: gc_start.elapsed(),
-            };
-            &mut end_of_gc
+        let mut end_of_gc = EndOfGC {
+            elapsed: gc_start.elapsed(),
         };
-        end_of_gc_work.do_work_with_stat(&mut self.coordinator_worker, self.mmtk);
+        end_of_gc.do_work_with_stat(&mut self.coordinator_worker, self.mmtk);
 
         self.scheduler.debug_assert_all_buckets_deactivated();
+    }
+
+    /// Find more work for workers to do.  Return true if more work is available.
+    fn find_more_work_for_workers(&mut self) -> bool {
+        if self.scheduler.worker_group.has_designated_work() {
+            return true;
+        }
+
+        // See if any bucket has a sentinel.
+        if self.scheduler.schedule_sentinels() {
+            return true;
+        }
+
+        // Try to open new buckets.
+        if self.scheduler.update_buckets() {
+            return true;
+        }
+
+        // If all of the above failed, it means GC has finished.
+        false
+    }
+
+    /// Coordinate workers to perform GC in response to a GC request.
+    pub fn do_thread_local_gc_until_completion(&mut self, tls: VMMutatorThread) {
+        let gc_start = std::time::Instant::now();
+
+        self.scheduler.work_buckets[WorkBucketStage::Unconstrained]
+            .add(ScheduleThreadlocalCollection(tls, gc_start));
+
+        // Notify only one worker at this time because there is only one work packet,
+        // namely `ScheduleCollection`.
+        self.scheduler.worker_monitor.resume(false);
+
+        // // Gradually open more buckets as workers stop each time they drain all open bucket.
+        // loop {
+        //     // Workers should only transition to the `Sleeping` state when all open buckets have
+        //     // been drained.
+        //     self.scheduler.assert_all_activated_buckets_are_empty();
+
+        //     let new_work_available = self.find_more_work_for_workers();
+
+        //     // GC finishes if there is no new work to do.
+        //     if !new_work_available {
+        //         break;
+        //     }
+
+        //     // Notify all workers because there should be many work packets available in the newly
+        //     // opened bucket(s).
+        //     self.scheduler.worker_monitor.resume_and_wait(true);
+        // }
     }
 }

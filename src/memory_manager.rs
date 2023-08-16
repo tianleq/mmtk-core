@@ -756,13 +756,17 @@ pub fn harness_end<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
 /// * `object`: The object that has a finalizer
 pub fn add_finalizer<VM: VMBinding>(
     mmtk: &'static MMTK<VM>,
+    _mutator_id: u32,
     object: <VM::VMReferenceGlue as ReferenceGlue<VM>>::FinalizableType,
 ) {
     if *mmtk.options.no_finalizer {
         warn!("add_finalizer() is called when no_finalizer = true");
     }
-
-    mmtk.finalizable_processor.lock().unwrap().add(object);
+    // mmtk.finalizable_processor.lock().unwrap().add(object);
+    mmtk.finalizable_processor
+        .lock()
+        .unwrap()
+        .add(_mutator_id, object);
 }
 
 /// Pin an object. MMTk will make sure that the object does not move
@@ -942,7 +946,7 @@ pub fn add_local_work_packets<VM: VMBinding>(
 /// Arguments:
 /// * `mmtk`: A reference to an MMTk instance.
 /// * `tls`: The thread that triggers this collection request.
-pub fn handle_user_collection_request_with_single_thread<VM: VMBinding>(
+pub fn handle_user_single_thread_collection_request<VM: VMBinding>(
     mmtk: &MMTK<VM>,
     tls: VMMutatorThread,
 ) {
@@ -980,9 +984,6 @@ pub fn mmtk_is_object_published<VM: VMBinding>(object: ObjectReference) -> bool 
 }
 
 pub fn mmtk_handle_user_triggered_local_gc<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
-    // exactly one thread can trigger collection
-    // guaranteed by the lock in OpenJDK Binding
-
     mmtk.plan.handle_thread_local_collection(tls);
 }
 

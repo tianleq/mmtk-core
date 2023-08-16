@@ -165,12 +165,16 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         if !*plan.base().options.no_finalizer {
             use crate::util::finalizable_processor::{Finalization, ForwardFinalization};
             // finalization
-            self.work_buckets[WorkBucketStage::FinalRefClosure]
-                .add(Finalization::<C::ProcessEdgesWorkType>::new());
+            self.work_buckets[WorkBucketStage::FinalRefClosure].add(Finalization::<
+                C::ProcessEdgesWorkType,
+            >::new(
+                Option::None
+            ));
             // forward refs
             if plan.constraints().needs_forward_after_liveness {
-                self.work_buckets[WorkBucketStage::FinalizableForwarding]
-                    .add(ForwardFinalization::<C::ProcessEdgesWorkType>::new());
+                self.work_buckets[WorkBucketStage::FinalizableForwarding].add(
+                    ForwardFinalization::<C::ProcessEdgesWorkType>::new(Option::None),
+                );
             }
         }
 
@@ -207,109 +211,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         self.work_buckets[WorkBucketStage::Release].add(VMPostForwarding::<VM>::default());
     }
 
-    /// Schedule all the common work packets
-    pub fn schedule_single_thread_common_work<C: GCWorkContext<VM = VM> + 'static>(
-        &self,
-        plan: &'static C::PlanType,
-    ) {
-        use crate::plan::Plan;
-        use crate::scheduler::gc_work::*;
-        use crate::scheduler::single_thread_gc_work::*;
-        // Stop & scan mutators (mutator scanning can happen before STW)
-        self.work_buckets[WorkBucketStage::Unconstrained].add_local(SingleThreadStopMutators::<
-            C::SingleThreadProcessEdgesWorkType,
-        >::new());
-
-        // Prepare global/collectors/mutators
-        self.work_buckets[WorkBucketStage::Prepare].add_local(SingleThreadPrepare::<C>::new(plan));
-
-        // Release global/collectors/mutators
-        self.work_buckets[WorkBucketStage::Release].add_local(SingleThreadRelease::<C>::new(plan));
-
-        // Analysis GC work
-        #[cfg(feature = "analysis")]
-        {
-            use crate::util::analysis::GcHookWork;
-            self.work_buckets[WorkBucketStage::Unconstrained].add_local(GcHookWork);
-        }
-
-        // Sanity
-        #[cfg(feature = "sanity")]
-        {
-            use crate::util::sanity::sanity_checker::ScheduleSanityGC;
-            self.work_buckets[WorkBucketStage::Final]
-                .add_local(ScheduleSanityGC::<C::PlanType>::new(plan));
-        }
-
-        // Reference processing
-        if !*plan.base().options.no_reference_types {
-            use crate::util::reference_processor::{
-                PhantomRefProcessing, SoftRefProcessing, WeakRefProcessing,
-            };
-            self.work_buckets[WorkBucketStage::SoftRefClosure]
-                .add_local(SoftRefProcessing::<C::SingleThreadProcessEdgesWorkType>::new());
-            self.work_buckets[WorkBucketStage::WeakRefClosure]
-                .add_local(WeakRefProcessing::<C::SingleThreadProcessEdgesWorkType>::new());
-            self.work_buckets[WorkBucketStage::PhantomRefClosure]
-                .add_local(PhantomRefProcessing::<C::SingleThreadProcessEdgesWorkType>::new());
-
-            use crate::util::reference_processor::RefForwarding;
-            if plan.constraints().needs_forward_after_liveness {
-                self.work_buckets[WorkBucketStage::RefForwarding]
-                    .add_local(RefForwarding::<C::SingleThreadProcessEdgesWorkType>::new());
-            }
-
-            use crate::util::reference_processor::RefEnqueue;
-            self.work_buckets[WorkBucketStage::Release].add_local(RefEnqueue::<VM>::new());
-        }
-
-        // Finalization
-        if !*plan.base().options.no_finalizer {
-            use crate::util::finalizable_processor::{Finalization, ForwardFinalization};
-            // finalization
-            self.work_buckets[WorkBucketStage::FinalRefClosure]
-                .add_local(Finalization::<C::SingleThreadProcessEdgesWorkType>::new());
-            // forward refs
-            if plan.constraints().needs_forward_after_liveness {
-                self.work_buckets[WorkBucketStage::FinalizableForwarding]
-                    .add_local(ForwardFinalization::<C::SingleThreadProcessEdgesWorkType>::new());
-            }
-        }
-
-        // We add the VM-specific weak ref processing work regardless of MMTK-side options,
-        // including Options::no_finalizer and Options::no_reference_types.
-        //
-        // VMs need weak reference handling to function properly.  The VM may treat weak references
-        // as strong references, but it is not appropriate to simply disable weak reference
-        // handling from MMTk's side.  The VM, however, may choose to do nothing in
-        // `Collection::process_weak_refs` if appropriate.
-        //
-        // It is also not sound for MMTk core to turn off weak
-        // reference processing or finalization alone, because (1) not all VMs have the notion of
-        // weak references or finalizers, so it may not make sence, and (2) the VM may
-        // processing them together.
-
-        // VM-specific weak ref processing
-        // The `VMProcessWeakRefs` work packet is set as the sentinel so that it is executed when
-        // the `VMRefClosure` bucket is drained.  The VM binding may spawn new work packets into
-        // the `VMRefClosure` bucket, and request another `VMProcessWeakRefs` work packet to be
-        // executed again after this bucket is drained again.  Strictly speaking, the first
-        // `VMProcessWeakRefs` packet can be an ordinary packet (doesn't have to be a sentinel)
-        // because there are no other packets in the bucket.  We set it as sentinel for
-        // consistency.
-        self.work_buckets[WorkBucketStage::VMRefClosure].set_sentinel(Box::new(
-            VMProcessWeakRefs::<C::SingleThreadProcessEdgesWorkType>::new(),
-        ));
-
-        if plan.constraints().needs_forward_after_liveness {
-            // VM-specific weak ref forwarding
-            self.work_buckets[WorkBucketStage::VMRefForwarding]
-                .add_local(VMForwardWeakRefs::<C::SingleThreadProcessEdgesWorkType>::new());
-        }
-
-        self.work_buckets[WorkBucketStage::Release].add_local(VMPostForwarding::<VM>::default());
-    }
-
     fn are_buckets_drained(&self, buckets: &[WorkBucketStage]) -> bool {
         buckets.iter().all(|&b| self.work_buckets[b].is_drained())
     }
@@ -324,9 +225,6 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         for (id, work_bucket) in self.work_buckets.iter() {
             if work_bucket.is_activated() && work_bucket.maybe_schedule_sentinel() {
                 trace!("Scheduled sentinel packet into {:?}", id);
-                new_packets = true;
-            } else if work_bucket.is_activated() && work_bucket.maybe_schedule_local_sentinel() {
-                trace!("Scheduled local sentinel packet into {:?}", id);
                 new_packets = true;
             }
         }
@@ -428,15 +326,17 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 _ => {}
             }
         }
-        // Try steal some packets from any worker
-        for (id, worker_shared) in self.worker_group.workers_shared.iter().enumerate() {
-            if id == worker.ordinal {
-                continue;
-            }
-            match worker_shared.stealer.as_ref().unwrap().steal() {
-                Steal::Success(w) => return Steal::Success(w),
-                Steal::Retry => should_retry = true,
-                _ => {}
+        if worker.can_steal() {
+            // Try steal some packets from any worker
+            for (id, worker_shared) in self.worker_group.workers_shared.iter().enumerate() {
+                if id == worker.ordinal {
+                    continue;
+                }
+                match worker_shared.stealer.as_ref().unwrap().steal() {
+                    Steal::Success(w) => return Steal::Success(w),
+                    Steal::Retry => should_retry = true,
+                    _ => {}
+                }
             }
         }
         if should_retry {

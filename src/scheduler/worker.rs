@@ -129,6 +129,19 @@ impl WorkerMonitor {
         }
     }
 
+    /// Wake up workers without waiting
+    /// This is called by the coordinator.
+    /// If `all` is true, notify all workers; otherwise only notify one worker.
+    pub fn resume(&self, all: bool) {
+        let mut sync = self.sync.lock().unwrap();
+        sync.worker_group_state = WorkerGroupState::Working;
+        if all {
+            self.work_available.notify_all();
+        } else {
+            self.work_available.notify_one();
+        }
+    }
+
     /// Wake up workers and wait until they transition to `Sleeping` state again.
     /// This is called by the coordinator.
     /// If `all` is true, notify all workers; otherwise only notify one worker.
@@ -240,6 +253,8 @@ pub struct GCWorker<VM: VMBinding> {
     /// Local work packet queue.
     pub local_work_buffer: deque::Worker<Box<dyn GCWork<VM>>>,
     pub private_local_work_buffer: Vec<Box<dyn GCWork<VM>>>,
+    can_steal: bool,
+    pub gc_start: std::time::Instant,
 }
 
 unsafe impl<VM: VMBinding> Sync for GCWorkerShared<VM> {}
@@ -279,6 +294,8 @@ impl<VM: VMBinding> GCWorker<VM> {
             shared,
             local_work_buffer,
             private_local_work_buffer: Vec::new(),
+            can_steal: true,
+            gc_start: std::time::Instant::now(),
         }
     }
 
@@ -356,7 +373,8 @@ impl<VM: VMBinding> GCWorker<VM> {
     /// Entry of the worker thread. Resolve thread affinity, if it has been specified by the user.
     /// Each worker will keep polling and executing work packets in a loop.
     pub fn run(&mut self, tls: VMWorkerThread, mmtk: &'static MMTK<VM>) {
-        WORKER_ORDINAL.with(|x: &Atomic<Option<usize>>| x.store(Some(self.ordinal), Ordering::SeqCst));
+        WORKER_ORDINAL
+            .with(|x: &Atomic<Option<usize>>| x.store(Some(self.ordinal), Ordering::SeqCst));
         self.scheduler.resolve_affinity(self.ordinal);
         self.tls = tls;
         self.copy = crate::plan::create_gc_worker_context(tls, mmtk);
@@ -368,6 +386,18 @@ impl<VM: VMBinding> GCWorker<VM> {
                 current_worker_ordinal().unwrap()
             );
         }
+    }
+
+    pub fn can_steal(&self) -> bool {
+        self.can_steal
+    }
+
+    pub fn enable_steal(&mut self) {
+        self.can_steal = true;
+    }
+
+    pub fn disable_steal(&mut self) {
+        self.can_steal = false
     }
 }
 

@@ -3,7 +3,7 @@ use atomic::Ordering;
 use crate::plan::Plan;
 use crate::policy::space::Space;
 use crate::util::options::{GCTriggerSelector, Options};
-use crate::util::{conversions, VMMutatorThread, VMThread};
+use crate::util::{conversions, VMMutatorThread};
 use crate::vm::VMBinding;
 use crate::MMTK;
 use std::mem::MaybeUninit;
@@ -76,7 +76,6 @@ impl<VM: VMBinding> GCTrigger<VM> {
             .policy
             .is_thread_local_gc_required(space_full, space, plan)
         {
-            // plan.base().gc_requester.request_single_thread_gc(true, tls);
             plan.base().gc_requester.request_thread_local_gc(tls);
             return true;
         }

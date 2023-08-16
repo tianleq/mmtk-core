@@ -75,5 +75,6 @@ pub fn create_immix_mutator<VM: VMBinding>(
         plan,
         thread_local_gc_status: 0,
         mutator_id,
+        request_id: 0,
     }
 }

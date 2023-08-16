@@ -13,8 +13,6 @@ use crate::plan::{ObjectQueue, VectorObjectQueue};
 use crate::policy::sft::GCWorkerMutRef;
 use crate::vm::{ObjectModel, VMBinding};
 
-const GC_MARK_BIT_MASK: u8 = 1;
-
 /// This type implements a simple immortal collection
 /// policy. Under this policy all that is required is for the
 /// "collector" to propagate marks in a liveness trace.  It does not
@@ -201,12 +199,12 @@ impl<VM: VMBinding> ImmortalSpace<VM> {
         self.mark_state.on_global_release::<VM>();
     }
 
-    pub fn thread_local_prepare(&mut self, _tls: VMMutatorThread) {
+    pub fn thread_local_prepare(&mut self, _tls: u32) {
         // TODO fix the mark_state
         // self.mark_state = GC_MARK_BIT_MASK - self.mark_state;
     }
 
-    pub fn thread_local_release(&mut self, _tls: VMMutatorThread) {}
+    pub fn thread_local_release(&mut self, _tls: u32) {}
 
     pub fn trace_object<Q: ObjectQueue>(
         &self,

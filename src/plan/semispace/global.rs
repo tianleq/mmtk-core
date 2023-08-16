@@ -84,7 +84,6 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
         self.base().set_collection_kind::<Self>(self);
         self.base().set_gc_status(GcStatus::GcPrepare);
 
-        // scheduler.schedule_single_thread_common_work::<SSGCWorkContext<VM>>(self);
         single_thread_gc_work::SingleThreadStopMutators::<
             <SSGCWorkContext<VM> as GCWorkContext>::SingleThreadProcessEdgesWorkType,
         >::new()

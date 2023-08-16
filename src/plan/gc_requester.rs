@@ -8,6 +8,7 @@ struct RequestSync {
     request_count: isize,
     last_request_count: isize,
     single_thread: bool,
+    thread_local_requests: Vec<GCRequest>,
 }
 
 pub struct GCRequest {
@@ -20,7 +21,6 @@ pub struct GCRequest {
 /// and the GC coordinator thread waits for GC requests using this object.
 pub struct GCRequester<VM: VMBinding> {
     request_sync: Mutex<RequestSync>,
-    thread_local_request_sync: Mutex<Vec<GCRequest>>,
     request_condvar: Condvar,
     request_flag: AtomicBool,
     phantom: PhantomData<VM>,
@@ -40,8 +40,8 @@ impl<VM: VMBinding> GCRequester<VM> {
                 request_count: 0,
                 last_request_count: -1,
                 single_thread: false,
+                thread_local_requests: Vec::new(),
             }),
-            thread_local_request_sync: Mutex::new(vec![]),
             request_condvar: Condvar::new(),
             request_flag: AtomicBool::new(false),
             phantom: PhantomData,
@@ -63,13 +63,14 @@ impl<VM: VMBinding> GCRequester<VM> {
     }
 
     pub fn request_thread_local_gc(&self, tls: VMMutatorThread) {
-        let mut guard = self.thread_local_request_sync.lock().unwrap();
-        let req = GCRequest {
+        let mut guard = self.request_sync.lock().unwrap();
+        let req: GCRequest = GCRequest {
             single_thread: true,
             thread_local: true,
             tls,
         };
-        guard.push(req);
+        guard.thread_local_requests.push(req);
+
         self.request_condvar.notify_all();
     }
 
@@ -94,28 +95,29 @@ impl<VM: VMBinding> GCRequester<VM> {
         drop(guard);
     }
 
-    pub fn wait_for_request(&self) -> GCRequest {
-        {
-            // check thread-local request
-            let mut guard = self.thread_local_request_sync.lock().unwrap();
-            if let Some(req) = guard.pop() {
-                return GCRequest {
-                    single_thread: req.single_thread,
-                    thread_local: req.thread_local,
-                    tls: req.tls,
-                };
-            }
-        }
-
+    pub fn wait_for_request(&self) -> Vec<GCRequest> {
         let mut guard = self.request_sync.lock().unwrap();
         guard.last_request_count += 1;
-        while guard.last_request_count == guard.request_count {
+        while guard.last_request_count == guard.request_count
+            && guard.thread_local_requests.is_empty()
+        {
             guard = self.request_condvar.wait(guard).unwrap();
         }
-        return GCRequest {
-            single_thread: guard.single_thread,
-            thread_local: false,
-            tls: VMMutatorThread(VMThread::UNINITIALIZED),
-        };
+        // check if local gc is triggered
+        let requests: Vec<GCRequest> = guard.thread_local_requests.drain(..).collect();
+        if !requests.is_empty() {
+            guard.last_request_count -= 1;
+            return requests;
+        } else {
+            debug_assert!(
+                guard.last_request_count != guard.request_count,
+                "global gc request count is corrupted"
+            );
+            return vec![GCRequest {
+                single_thread: guard.single_thread,
+                thread_local: false,
+                tls: VMMutatorThread(VMThread::UNINITIALIZED),
+            }];
+        }
     }
 }

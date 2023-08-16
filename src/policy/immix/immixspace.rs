@@ -104,6 +104,11 @@ impl<VM: VMBinding> SFT for ImmixSpace<VM> {
             return true;
         }
 
+        // // If the object is pubilc, then treat it as alive
+        // if public_bit::is_public::<VM>(object) {
+        //     return true;
+        // }
+
         // If we never move objects, look no further.
         if super::NEVER_MOVE_OBJECTS {
             return false;
@@ -402,7 +407,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     } else {
                         None
                     },
-                    thread_local: false,
                 })
             });
             self.scheduler().work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);
@@ -482,7 +486,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         did_defrag
     }
 
-    pub fn thread_local_prepare(&mut self, _tls: VMMutatorThread) {
+    pub fn thread_local_prepare(&mut self, mutator_id: u32) {
         // Update mark_state
         if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
             self.mark_state = Self::MARKED_STATE;
@@ -499,8 +503,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let threshold = self.defrag.defrag_spill_threshold.load(Ordering::Acquire);
         // # Safety: ImmixSpace reference is always valid within this collection cycle.
         let space = unsafe { &*(self as *const Self) };
-        let work_packets = self.chunk_map.generate_tasks(|chunk| {
-            Box::new(PrepareBlockState {
+        for chunk in self.chunk_map.all_chunks() {
+            ThreadlocalPrepareBlockState {
                 space,
                 chunk,
                 defrag_threshold: if space.in_defrag() {
@@ -508,10 +512,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 } else {
                     None
                 },
-                thread_local: true,
-            })
-        });
-        self.scheduler().work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);
+                mutator_id,
+            }
+            .do_work();
+        }
 
         if !super::BLOCK_ONLY {
             self.line_mark_state.fetch_add(1, Ordering::AcqRel);
@@ -522,9 +526,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
     }
 
-    pub fn thread_local_release(&mut self, tls: VMMutatorThread) -> Vec<Box<dyn GCWork<VM>>> {
-        // let did_defrag = self.defrag.in_defrag();
-
+    pub fn thread_local_release(&mut self, mutator_id: u32) -> Vec<Box<dyn GCWork<VM>>> {
         if !super::BLOCK_ONLY {
             self.line_unavail_state.store(
                 self.line_mark_state.load(Ordering::Acquire),
@@ -534,15 +536,15 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.reusable_blocks.reset();
         }
         // Sweep chunks and blocks
-        let work_packets = self.generate_thread_local_sweep_tasks(tls);
+        let work_packets = self.generate_thread_local_sweep_tasks(mutator_id);
         // self.scheduler().work_buckets[WorkBucketStage::Release].bulk_add_local(work_packets);
 
         self.lines_consumed.store(0, Ordering::Relaxed);
-        // did_defrag
+
         work_packets
     }
 
-    fn generate_thread_local_sweep_tasks(&self, tls: VMMutatorThread) -> Vec<Box<dyn GCWork<VM>>> {
+    fn generate_thread_local_sweep_tasks(&self, mutator_id: u32) -> Vec<Box<dyn GCWork<VM>>> {
         self.defrag.mark_histograms.lock().clear();
         // # Safety: ImmixSpace reference is always valid within this collection cycle.
         let space = unsafe { &*(self as *const Self) };
@@ -550,12 +552,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             space,
             counter: AtomicUsize::new(0),
         });
-        let mutator = VM::VMActivePlan::mutator(tls);
+
         let tasks = self.chunk_map.generate_tasks(|chunk| {
             Box::new(ThreadLocalSweepChunk {
                 space,
                 chunk,
-                mutator_id: mutator.mutator_id,
+                mutator_id,
                 epilogue: epilogue.clone(),
             })
         });
@@ -1043,7 +1045,6 @@ pub struct PrepareBlockState<VM: VMBinding> {
     pub space: &'static ImmixSpace<VM>,
     pub chunk: Chunk,
     pub defrag_threshold: Option<usize>,
-    pub thread_local: bool,
 }
 
 impl<VM: VMBinding> PrepareBlockState<VM> {
@@ -1074,6 +1075,86 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
         self.reset_object_mark();
         // Iterate over all blocks in this chunk
         for block in self.chunk.iter_region::<Block>() {
+            let state = block.get_state();
+            // Skip unallocated blocks.
+            if state == BlockState::Unallocated {
+                continue;
+            }
+            // Check if this block needs to be defragmented.
+            let is_defrag_source = if !super::DEFRAG {
+                // Do not set any block as defrag source if defrag is disabled.
+                false
+            } else if super::DEFRAG_EVERY_BLOCK {
+                // Set every block as defrag source if so desired.
+                true
+            } else if let Some(defrag_threshold) = self.defrag_threshold {
+                // This GC is a defrag GC.
+                block.get_holes() > defrag_threshold
+            } else {
+                // Not a defrag GC.
+                false
+            };
+            block.set_as_defrag_source(is_defrag_source);
+            // Clear block mark data.
+            block.set_state(BlockState::Unmarked);
+
+            debug_assert!(!block.get_state().is_reusable());
+            debug_assert_ne!(block.get_state(), BlockState::Marked);
+            // Clear forwarding bits if necessary.
+            if is_defrag_source {
+                // Note that `ImmixSpace::is_live` depends on the fact that we only clear side
+                // forwarding bits for defrag sources.  If we change the code here, we need to
+                // make sure `ImmixSpace::is_live` is fixed, too.
+                if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC {
+                    // Clear on-the-side forwarding bits.
+                    side.bzero_metadata(block.start(), Block::BYTES);
+                }
+            }
+            // NOTE: We don't need to reset the forwarding pointer metadata because it is meaningless
+            // until the forwarding bits are also set, at which time we also write the forwarding
+            // pointer.
+        }
+    }
+}
+
+pub struct ThreadlocalPrepareBlockState<VM: VMBinding> {
+    pub space: &'static ImmixSpace<VM>,
+    pub chunk: Chunk,
+    pub defrag_threshold: Option<usize>,
+    pub mutator_id: u32,
+}
+
+impl<VM: VMBinding> ThreadlocalPrepareBlockState<VM> {
+    /// Clear object mark table
+    fn reset_object_mark(&self, block: Block) {
+        // NOTE: We reset the mark bits because cyclic mark bit is currently not supported, yet.
+        // See `ImmixSpace::prepare`.
+        if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC {
+            side.bzero_metadata(block.start(), Block::BYTES);
+        }
+        if self.space.space_args.reset_log_bit_in_major_gc {
+            if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC {
+                // We zero all the log bits in major GC, and for every object we trace, we will mark the log bit again.
+                side.bzero_metadata(block.start(), Block::BYTES);
+            } else {
+                // If the log bit is not in side metadata, we cannot bulk zero. We can either
+                // clear the bit for dead objects in major GC, or clear the log bit for new
+                // objects. In either cases, we do not need to set log bit at tracing.
+                unimplemented!("We cannot bulk zero unlogged bit.")
+            }
+        }
+    }
+
+    fn do_work(&mut self) {
+        // Clear object mark table for this chunk
+        // self.reset_object_mark();
+        // Iterate over all local blocks in this chunk
+        for block in self
+            .chunk
+            .iter_region::<Block>()
+            .filter(|block| block.owner() == self.mutator_id)
+        {
+            self.reset_object_mark(block);
             let state = block.get_state();
             // Skip unallocated blocks.
             if state == BlockState::Unallocated {

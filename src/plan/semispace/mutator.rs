@@ -67,6 +67,7 @@ pub fn create_ss_mutator<VM: VMBinding>(
         prepare_func: &ss_mutator_prepare,
         release_func: &ss_mutator_release,
     };
+    let mutator_id = crate::util::MUTATOR_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);
     Mutator {
         allocators: Allocators::<VM>::new(mutator_tls, 0, plan, &config.space_mapping),
         // barrier: Box::new(NoBarrier),
@@ -77,6 +78,7 @@ pub fn create_ss_mutator<VM: VMBinding>(
         config,
         plan,
         thread_local_gc_status: 0,
-        mutator_id: 0,
+        mutator_id,
+        request_id: 0,
     }
 }

@@ -55,7 +55,7 @@ rand = "0.8.5"
 built = { version = "=0.6.0", features = ["git2"] }
 
 [features]
-default = ["immix_non_moving"]
+default = ["immix_non_moving", "debug_publish_object"]
 
 # This feature is only supported on x86-64 for now
 # It's manually added to CI scripts
@@ -95,6 +95,12 @@ is_mmtk_object = ["vo_bit"]
 
 # Enable object pinning, in particular, enable pinning/unpinning, and its metadata
 object_pinning = []
+
+#Enable allocate extra header of each individual object
+extra_header = []
+
+#Enable debugging publishing object
+debug_publish_object = ["extra_header"]
 
 # The following two features are useful for using Immix for VMs that do not support moving GC.
 

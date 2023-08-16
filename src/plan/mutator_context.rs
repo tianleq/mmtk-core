@@ -73,6 +73,7 @@ pub struct Mutator<VM: VMBinding> {
     pub config: MutatorConfig<VM>,
     pub thread_local_gc_status: i32,
     pub mutator_id: u32,
+    pub request_id: u32,
 }
 
 impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
@@ -111,6 +112,14 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         }
         .get_space();
         space.initialize_object_metadata(refer, true);
+        #[cfg(feature = "debug_publish_object")]
+        {
+            let metadata: usize = (usize::try_from(self.request_id).unwrap() << 32)
+                | usize::try_from(self.mutator_id).unwrap();
+            crate::util::object_extra_header_metadata::store_extra_header_metadata::<VM, usize>(
+                refer, metadata,
+            );
+        }
     }
 
     fn get_tls(&self) -> VMMutatorThread {

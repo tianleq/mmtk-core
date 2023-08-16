@@ -47,6 +47,46 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         self.request_for_large = false;
         self.line = None;
     }
+
+    fn alloc_impl(&mut self, size: usize, align: usize, offset: usize) -> Address {
+        debug_assert!(
+            size <= crate::policy::immix::MAX_IMMIX_OBJECT_SIZE,
+            "Trying to allocate a {} bytes object, which is larger than MAX_IMMIX_OBJECT_SIZE {}",
+            size,
+            crate::policy::immix::MAX_IMMIX_OBJECT_SIZE
+        );
+        let result = align_allocation_no_fill::<VM>(self.cursor, align, offset);
+        let new_cursor = result + size;
+
+        if new_cursor > self.limit {
+            trace!(
+                "{:?}: Thread local buffer used up, go to alloc slow path",
+                self.tls
+            );
+            if get_maximum_aligned_size::<VM>(size, align) > Line::BYTES {
+                // Size larger than a line: do large allocation
+                let rtn = self.overflow_alloc(size, align, offset);
+                rtn
+            } else {
+                // Size smaller than a line: fit into holes
+                let rtn = self.alloc_slow_hot(size, align, offset);
+                rtn
+            }
+        } else {
+            // Simple bump allocation.
+            fill_alignment_gap::<VM>(self.cursor, result);
+            self.cursor = new_cursor;
+            trace!(
+                "{:?}: Bump allocation size: {}, result: {}, new_cursor: {}, limit: {}",
+                self.tls,
+                size,
+                result,
+                self.cursor,
+                self.limit
+            );
+            result
+        }
+    }
 }
 
 impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
@@ -66,55 +106,25 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
         crate::policy::immix::block::Block::BYTES
     }
 
+    #[cfg(not(feature = "extra_header"))]
     fn alloc(&mut self, size: usize, align: usize, offset: usize) -> Address {
-        debug_assert!(
-            size <= crate::policy::immix::MAX_IMMIX_OBJECT_SIZE,
-            "Trying to allocate a {} bytes object, which is larger than MAX_IMMIX_OBJECT_SIZE {}",
-            size,
-            crate::policy::immix::MAX_IMMIX_OBJECT_SIZE
-        );
-        let result = align_allocation_no_fill::<VM>(self.cursor, align, offset);
-        let new_cursor = result + size;
+        self.alloc_impl(size, align, offset)
+    }
 
-        if new_cursor > self.limit {
-            trace!(
-                "{:?}: Thread local buffer used up, go to alloc slow path",
-                self.tls
-            );
-            if get_maximum_aligned_size::<VM>(size, align) > Line::BYTES {
-                // Size larger than a line: do large allocation
-                let rtn = self.overflow_alloc(size, align, offset);
-                debug_assert!(
-                    !crate::util::public_bit::is_public_object(rtn),
-                    "public bit is not cleared properly"
-                );
-                rtn
-            } else {
-                // Size smaller than a line: fit into holes
-                let rtn = self.alloc_slow_hot(size, align, offset);
-                debug_assert!(
-                    !crate::util::public_bit::is_public_object(rtn),
-                    "public bit is not cleared properly"
-                );
-                rtn
-            }
-        } else {
-            // Simple bump allocation.
-            fill_alignment_gap::<VM>(self.cursor, result);
-            self.cursor = new_cursor;
-            trace!(
-                "{:?}: Bump allocation size: {}, result: {}, new_cursor: {}, limit: {}",
-                self.tls,
-                size,
-                result,
-                self.cursor,
-                self.limit
-            );
+    #[cfg(feature = "extra_header")]
+    fn alloc(&mut self, size: usize, align: usize, offset: usize) -> Address {
+        let rtn = self.alloc_impl(size + VM::EXTRA_HEADER_BYTES, align, offset);
+
+        // Check if the result is valid and return the actual object start address
+        // Note that `rtn` can be null in the case of OOM
+        if !rtn.is_zero() {
             debug_assert!(
-                !crate::util::public_bit::is_public_object(result),
+                !crate::util::public_bit::is_public_object(rtn + VM::EXTRA_HEADER_BYTES),
                 "public bit is not cleared properly"
             );
-            result
+            rtn + VM::EXTRA_HEADER_BYTES
+        } else {
+            rtn
         }
     }
 

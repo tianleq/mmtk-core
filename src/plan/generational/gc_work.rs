@@ -24,7 +24,7 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>> ProcessEdg
 {
     type VM = VM;
     type ScanObjectsWorkType = PlanScanObjects<Self, P>;
-
+    #[cfg(not(feature = "debug_publish_object"))]
     fn new(
         edges: Vec<EdgeOf<Self>>,
         roots: bool,
@@ -32,6 +32,19 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>> ProcessEdg
         _tls: Option<VMMutatorThread>,
     ) -> Self {
         let base = ProcessEdgesBase::new(edges, roots, mmtk);
+        let plan = base.plan().downcast_ref().unwrap();
+        Self { plan, base }
+    }
+
+    #[cfg(feature = "debug_publish_object")]
+    fn new(
+        sources: Vec<ObjectReference>,
+        edges: Vec<EdgeOf<Self>>,
+        roots: bool,
+        mmtk: &'static MMTK<VM>,
+        _mutator_id: Option<VMMutatorThread>,
+    ) -> Self {
+        let base = ProcessEdgesBase::new(sources, edges, roots, mmtk);
         let plan = base.plan().downcast_ref().unwrap();
         Self { plan, base }
     }
@@ -148,8 +161,22 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessRegionModBuf<E> {
                     edges.push(edge);
                 }
             }
+            #[cfg(not(feature = "debug_publish_object"))]
             // Forward entries
-            GCWork::do_work(&mut E::new(edges, false, mmtk, Option::None), worker, mmtk)
+            GCWork::do_work(&mut E::new(edges, false, mmtk, Option::None), worker, mmtk);
+            #[cfg(feature = "debug_publish_object")]
+            // Forward entries
+            GCWork::do_work(
+                &mut E::new(
+                    edges.iter().map(|&edge| edge.load()).collect(),
+                    edges,
+                    false,
+                    mmtk,
+                    Option::None,
+                ),
+                worker,
+                mmtk,
+            );
         }
     }
 }

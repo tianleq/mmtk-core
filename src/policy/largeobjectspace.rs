@@ -29,7 +29,6 @@ pub struct LargeObjectSpace<VM: VMBinding> {
     mark_state: u8,
     local_mark_state: u8,
     in_nursery_gc: bool,
-    in_thread_local_gc: bool,
     treadmill: TreadMill,
 }
 
@@ -184,7 +183,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             mark_state: 0,
             local_mark_state: 0,
             in_nursery_gc: false,
-            in_thread_local_gc: false,
             treadmill: TreadMill::new(),
         }
     }
@@ -196,7 +194,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         }
         self.treadmill.flip(full_heap);
         self.in_nursery_gc = !full_heap;
-        self.in_thread_local_gc = false;
     }
 
     pub fn release(&mut self, full_heap: bool) {
@@ -207,16 +204,13 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         }
     }
 
-    pub fn thread_local_prepare(&mut self, _tls: VMMutatorThread) {
+    pub fn thread_local_prepare(&mut self, _tls: u32) {
         debug_assert!(self.treadmill.is_from_space_empty());
-        self.in_thread_local_gc = true;
         self.local_mark_state = LOCAL_MARK_BIT - self.local_mark_state;
         self.in_nursery_gc = false;
     }
 
-    pub fn thread_local_release(&mut self, _tls: VMMutatorThread) {
-        self.in_thread_local_gc = false;
-    }
+    pub fn thread_local_release(&mut self, _tls: u32) {}
 
     fn thread_local_trace_object(
         &self,
@@ -251,9 +245,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             object
         );
 
-        // if self.in_thread_local_gc {
-        //     return self.trace_thread_local_object(queue, object);
-        // }
         let nursery_object = self.is_in_nursery(object);
         trace!(
             "LOS object {} {} a nursery object",

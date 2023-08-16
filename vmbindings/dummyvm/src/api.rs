@@ -190,11 +190,6 @@ pub extern "C" fn mmtk_harness_end() {
 }
 
 #[no_mangle]
-pub extern "C" fn mmtk_handle_user_collection_request_with_single_thread() {
-    memory_manager::handle_user_collection_request::<DummyVM>(&SINGLETON, tls);
-}
-
-#[no_mangle]
 pub extern "C" fn mmtk_process(name: *const c_char, value: *const c_char) -> bool {
     let name_str: &CStr = unsafe { CStr::from_ptr(name) };
     let value_str: &CStr = unsafe { CStr::from_ptr(value) };

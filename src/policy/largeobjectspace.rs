@@ -19,7 +19,10 @@ const PAGE_MASK: usize = !(BYTES_IN_PAGE - 1);
 const MARK_BIT: u8 = 0b01;
 const NURSERY_BIT: u8 = 0b10;
 const LOS_BIT_MASK: u8 = 0b11;
-const LOCAL_MARK_BIT: u8 = 0b100;
+#[cfg(feature = "thread_local_gc")]
+const BOTTOM_HALF_MASK: usize = 0x00000000FFFFFFFF;
+#[cfg(feature = "thread_local_gc")]
+const TOP_HALF_MASK: usize = 0xFFFFFFFF00000000;
 
 /// This type implements a policy for large objects. Each instance corresponds
 /// to one Treadmill space.
@@ -64,7 +67,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
             None,
             Ordering::SeqCst,
         );
-        let mut new_value = (old_value & (!LOS_BIT_MASK)) | self.mark_state;
+        let mut new_value: u8 = (old_value & (!LOS_BIT_MASK)) | self.mark_state;
         if alloc {
             new_value |= NURSERY_BIT;
         }
@@ -148,10 +151,13 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM>
         queue: &mut Q,
         object: ObjectReference,
         _copy: Option<CopySemantics>,
-        mutator: &mut crate::Mutator<VM>,
+        mutator_id: u32,
         _worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
-        self.thread_local_trace_object(queue, object, mutator)
+        #[cfg(feature = "thread_local_gc")]
+        return self.thread_local_trace_object(queue, object, mutator_id);
+        #[cfg(not(feature = "thread_local_gc"))]
+        return object;
     }
 
     fn thread_local_may_move_objects<const KIND: super::gc_work::TraceKind>() -> bool {
@@ -204,19 +210,23 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         }
     }
 
-    pub fn thread_local_prepare(&mut self, _tls: u32) {
-        debug_assert!(self.treadmill.is_from_space_empty());
-        self.local_mark_state = LOCAL_MARK_BIT - self.local_mark_state;
+    #[cfg(feature = "thread_local_gc")]
+    pub fn thread_local_prepare(&mut self, _mutator_id: u32) {
+        self.local_mark_state = MARK_BIT - self.local_mark_state;
         self.in_nursery_gc = false;
     }
 
-    pub fn thread_local_release(&mut self, _tls: u32) {}
+    #[cfg(feature = "thread_local_gc")]
+    pub fn thread_local_release(&mut self, mutator_id: u32) {
+        self.thread_local_sweep_large_pages(mutator_id);
+    }
 
+    #[cfg(feature = "thread_local_gc")]
     fn thread_local_trace_object(
         &self,
         queue: &mut impl ObjectQueue,
         object: ObjectReference,
-        _mutator: &mut crate::Mutator<VM>,
+        _mutator_id: u32,
     ) -> ObjectReference {
         // thread-local gc does not reclaim los
         // but it still needs to mark and scan los objects
@@ -224,7 +234,14 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         if crate::util::public_bit::is_public::<VM>(object) {
             return object;
         }
-        if self.test_and_mark_without_side_effect(object, self.local_mark_state) {
+        debug_assert!(
+            Self::get_object_owner(object) == _mutator_id,
+            "mutator_id: {}, los object owner: {}",
+            _mutator_id,
+            Self::get_object_owner(object)
+        );
+        if self.thread_local_mark(object, self.local_mark_state) {
+            // self.treadmill.copy(object, nursery_object);
             queue.enqueue(object);
         }
         object
@@ -245,6 +262,20 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             object
         );
 
+        #[cfg(feature = "thread_local_gc")]
+        {
+            #[cfg(feature = "debug_publish_object")]
+            unsafe {
+                let metadata: usize =
+                    crate::util::object_extra_header_metadata::get_extra_header_metadata::<VM, usize>(
+                        object,
+                    ) & crate::util::object_extra_header_metadata::BOTTOM_HALF_MASK;
+                let owner =
+                    crate::util::conversions::page_align_down(object.to_object_start::<VM>())
+                        .load::<usize>();
+                debug_assert!(metadata == owner, "metadata: {} owner: {}", metadata, owner);
+            }
+        }
         let nursery_object = self.is_in_nursery(object);
         trace!(
             "LOS object {} {} a nursery object",
@@ -278,6 +309,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             #[cfg(feature = "vo_bit")]
             crate::util::metadata::vo_bit::unset_vo_bit::<VM>(object);
             crate::util::public_bit::unset_public_bit::<VM>(object);
+
             self.pr
                 .release_pages(get_super_page(object.to_object_start::<VM>()));
         };
@@ -292,42 +324,91 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         }
     }
 
+    #[cfg(feature = "thread_local_gc")]
+    fn thread_local_sweep_large_pages(&mut self, mutator_id: u32) {
+        let sweep = |object: ObjectReference| {
+            #[cfg(feature = "vo_bit")]
+            crate::util::metadata::vo_bit::unset_vo_bit::<VM>(object);
+            crate::util::public_bit::unset_public_bit::<VM>(object);
+
+            self.pr
+                .release_pages(get_super_page(object.to_object_start::<VM>()));
+        };
+        let mut dead_nursery_objects = vec![];
+        let mut dead_objects = vec![];
+
+        for object in self.treadmill.thread_local_nursery_objects(|o| {
+            !crate::util::public_bit::is_public::<VM>(*o)
+                && Self::get_object_owner(*o) == mutator_id
+        }) {
+            debug_assert!(
+                Self::get_object_owner(object) == mutator_id,
+                "foreign objects discovered"
+            );
+            debug_assert!(
+                !crate::util::public_bit::is_public::<VM>(object),
+                "public objectc cannot be sweep"
+            );
+            if !self.test_thread_local_mark(object, self.local_mark_state) {
+                sweep(object);
+                dead_nursery_objects.push(object);
+            }
+        }
+
+        for object in self.treadmill.thread_local_objects(|o| {
+            !crate::util::public_bit::is_public::<VM>(*o)
+                && Self::get_object_owner(*o) == mutator_id
+        }) {
+            debug_assert!(
+                Self::get_object_owner(object) == mutator_id,
+                "foreign objects discovered"
+            );
+            debug_assert!(
+                !crate::util::public_bit::is_public::<VM>(object),
+                "public objectc cannot be sweep"
+            );
+            if !self.test_thread_local_mark(object, self.local_mark_state) {
+                sweep(object);
+                dead_objects.push(object);
+            }
+        }
+
+        self.treadmill
+            .thread_local_collect_nursery_objects(dead_nursery_objects);
+        self.treadmill.thread_local_collect_objects(dead_objects);
+    }
+
     /// Allocate an object
     pub fn allocate_pages(&self, tls: VMThread, pages: usize) -> Address {
         self.acquire(tls, pages)
     }
 
-    /// Test if the object's mark bit is the same as the given value. If it is not the same,
-    /// the method will attemp to mark the object and clear its nursery bit. If the attempt
-    /// succeeds, the method will return true, meaning the object is marked by this invocation.
-    /// Otherwise, it returns false.
-    fn test_and_mark_without_side_effect(&self, object: ObjectReference, value: u8) -> bool {
-        debug_assert!(!self.in_nursery_gc);
-        loop {
-            let old_value = VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC.load_atomic::<VM, u8>(
-                object,
-                None,
-                Ordering::SeqCst,
-            );
-            let mark_bit = old_value & LOCAL_MARK_BIT;
-            if mark_bit == value {
-                return false;
-            }
-            if VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC
-                .compare_exchange_metadata::<VM, u8>(
-                    object,
-                    old_value,
-                    old_value & !LOCAL_MARK_BIT | value,
-                    None,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                )
-                .is_ok()
-            {
-                break;
+    /// Test if the object's local mark bit is the same as the given value. If it is not the same,
+    /// the method will mark the object and return true. Otherwise, it returns false.
+    fn thread_local_mark(&self, object: ObjectReference, value: u8) -> bool {
+        unsafe {
+            let metadata_address =
+                crate::util::conversions::page_align_down(object.to_object_start::<VM>());
+
+            let metadata = metadata_address.load::<usize>();
+            let local_mark_value = (metadata & TOP_HALF_MASK) >> 32;
+            if u8::try_from(local_mark_value).unwrap() == value {
+                false
+            } else {
+                let mutator_id = metadata & BOTTOM_HALF_MASK;
+                let m = (usize::try_from(value).unwrap() << 32) | mutator_id;
+                metadata_address.store(m);
+                true
             }
         }
-        true
+    }
+
+    fn test_thread_local_mark(&self, object: ObjectReference, value: u8) -> bool {
+        let metaadta_address =
+            crate::util::conversions::page_align_down(object.to_object_start::<VM>());
+        let metadata = unsafe { metaadta_address.load::<usize>() };
+        let local_mark_value = (metadata & TOP_HALF_MASK) >> 32;
+        u8::try_from(local_mark_value).unwrap() == value
     }
 
     /// Test if the object's mark bit is the same as the given value. If it is not the same,
@@ -387,10 +468,16 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             == NURSERY_BIT
     }
 
-    pub fn publish_object(&self, _object: ObjectReference) {
-        // thread-local gc does not reclaim los at the moment
-        // so do nothing. Once it starts reclaiming, marking
-        // is necessary
+    pub fn publish_object(&self, _object: ObjectReference) {}
+
+    pub fn get_object_owner(object: ObjectReference) -> u32 {
+        unsafe {
+            let mutator_id =
+                crate::util::conversions::page_align_down(object.to_object_start::<VM>())
+                    .load::<usize>()
+                    & BOTTOM_HALF_MASK;
+            u32::try_from(mutator_id).unwrap()
+        }
     }
 }
 

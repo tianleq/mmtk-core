@@ -38,6 +38,7 @@ impl<VM: VMBinding> GCWork<VM> for ScheduleThreadlocalCollection {
         mmtk.plan.base().gc_trigger.policy.on_gc_start(mmtk);
         // When this gc thread is executing the local gc, it cannot steal work from others' bucket/queue
         worker.disable_steal();
+        VM::VMCollection::publish_vm_specific_roots(mutator_id);
         mmtk.plan.schedule_thread_local_collection(self.0, worker);
     }
 }
@@ -103,9 +104,9 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for ThreadlocalRelease<C> {
         #[allow(clippy::cast_ref_to_mut)]
         let plan_mut: &mut C::PlanType = unsafe { &mut *(self.plan as *const _ as *mut _) };
         let works = plan_mut.thread_local_release(mutator.mutator_id);
-        // for mut w in works {
-        //     w.do_work(worker, mmtk);
-        // }
+        for mut w in works {
+            w.do_work(worker, mmtk);
+        }
 
         ReleaseMutator::<C::VM>::new(mutator).do_work(worker, mmtk);
 
@@ -261,7 +262,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ThreadlocalScanStackRoot<E> {
         // let mutators = <E::VM as VMBinding>::VMActivePlan::number_of_mutators();
         let factory =
             ThreadlocalProcessEdgesWorkRootsWorkFactory::<E>::new(mmtk, self.0.mutator_tls);
-        <E::VM as VMBinding>::VMScanning::scan_roots_in_mutator_thread(
+        <E::VM as VMBinding>::VMScanning::thread_local_scan_roots_of_mutator_threads(
             worker.tls,
             unsafe { &mut *(self.0 as *mut _) },
             factory,
@@ -333,6 +334,7 @@ pub struct PlanThreadlocalProcessEdges<
     plan: &'static P,
     base: ProcessEdgesBase<VM>,
     tls: VMMutatorThread,
+    mutator_id: u32,
 }
 
 impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind>
@@ -366,10 +368,12 @@ impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIN
     ) -> Self {
         let base = ProcessEdgesBase::new(sources, edges, roots, mmtk);
         let plan = base.plan().downcast_ref::<P>().unwrap();
+        let mutator = VM::VMActivePlan::mutator(tls.unwrap());
         Self {
             plan,
             base,
             tls: tls.unwrap(),
+            mutator_id: mutator.mutator_id,
         }
     }
 
@@ -403,19 +407,59 @@ impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIN
         }
         // We cannot borrow `self` twice in a call, so we extract `worker` as a local variable.
         let worker = self.worker();
-        let mutator = VM::VMActivePlan::mutator(self.tls);
+        // let mutator = VM::VMActivePlan::mutator(self.tls);
+        let mutator_id = self.mutator_id;
         self.plan
             .thread_local_trace_object::<VectorObjectQueue, KIND>(
                 &mut self.base.nodes,
                 object,
-                mutator,
+                mutator_id,
                 worker,
             )
+    }
+
+    fn process_edges(&mut self) {
+        for i in 0..self.edges.len() {
+            #[cfg(not(feature = "debug_publish_object"))]
+            self.process_edge(self.edges[i]);
+            #[cfg(feature = "debug_publish_object")]
+            self._process_edge(self.sources[i], self.edges[i]);
+        }
     }
 
     fn process_edge(&mut self, slot: EdgeOf<Self>) {
         let object = slot.load();
         let new_object = self.trace_object(object);
+        if P::thread_local_may_move_objects::<KIND>() {
+            slot.store(new_object);
+        }
+    }
+}
+
+impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind>
+    PlanThreadlocalProcessEdges<VM, P, KIND>
+{
+    fn _process_edge(&mut self, _source: ObjectReference, slot: EdgeOf<Self>) {
+        let object = slot.load();
+        let new_object = self.trace_object(object);
+        #[cfg(feature = "extra_header")]
+        {
+            if !object.is_null() && !crate::util::public_bit::is_public::<VM>(object) {
+                let m1 = crate::util::object_extra_header_metadata::get_extra_header_metadata::<
+                    VM,
+                    usize,
+                >(object);
+                let m2 = crate::util::object_extra_header_metadata::get_extra_header_metadata::<
+                    VM,
+                    usize,
+                >(_source);
+                debug_assert!(
+                    (m1 & object_extra_header_metadata::BOTTOM_HALF_MASK)
+                        == (m2 & object_extra_header_metadata::BOTTOM_HALF_MASK),
+                    "object is not published properly."
+                )
+            }
+        }
         if P::thread_local_may_move_objects::<KIND>() {
             slot.store(new_object);
         }

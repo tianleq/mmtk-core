@@ -136,10 +136,6 @@ pub trait RootsWorkFactory<ES: Edge>: Clone + Send + 'static {
     fn create_process_node_roots_work(&mut self, nodes: Vec<ObjectReference>);
 }
 
-pub trait ThreadlocalClosure {
-    fn do_closure(&mut self);
-}
-
 /// VM-specific methods for scanning roots/objects.
 pub trait Scanning<VM: VMBinding> {
     /// Scan stack roots after all mutators are paused.

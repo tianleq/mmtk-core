@@ -55,7 +55,7 @@ rand = "0.8.5"
 built = { version = "=0.6.0", features = ["git2"] }
 
 [features]
-default = ["immix_non_moving", "debug_publish_object"]
+default = ["thread_local_gc", "debug_publish_object"]
 
 # This feature is only supported on x86-64 for now
 # It's manually added to CI scripts
@@ -101,6 +101,9 @@ extra_header = []
 
 #Enable debugging publishing object
 debug_publish_object = ["extra_header"]
+
+#Enable thread local gc
+thread_local_gc = ["immix_non_moving"]
 
 # The following two features are useful for using Immix for VMs that do not support moving GC.
 

@@ -64,6 +64,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         self.base().collection_required(self, space_full)
     }
 
+    #[cfg(feature = "thread_local_gc")]
     fn thread_local_collection_required(
         &self,
         _space_full: bool,
@@ -131,11 +132,13 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         self.immix_space.prepare(true);
     }
 
+    #[cfg(feature = "thread_local_gc")]
     fn thread_local_prepare(&mut self, mutator_id: u32) {
         self.common.thread_local_prepare(mutator_id);
         self.immix_space.thread_local_prepare(mutator_id);
     }
 
+    #[cfg(feature = "thread_local_gc")]
     fn thread_local_release(&mut self, mutator_id: u32) -> Vec<Box<dyn GCWork<VM>>> {
         // at the moment, thread-local gc only reclaiming immix space
         self.common.thread_local_release(mutator_id);
@@ -175,6 +178,13 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         } else {
             self.common().publish_object(object);
         }
+    }
+
+    fn get_object_owner(&self, _object: ObjectReference) -> Option<u32> {
+        if self.immix_space.in_space(_object) {
+            return Some(self.immix_space.get_object_owner(_object));
+        }
+        Option::None
     }
 }
 
@@ -342,7 +352,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for Immix<VM> {
         &self,
         queue: &mut Q,
         object: ObjectReference,
-        mutator: &mut crate::Mutator<VM>,
+        mutator_id: u32,
         worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
         if self.immix_space.in_space(object) {
@@ -354,7 +364,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for Immix<VM> {
                 queue,
                 object,
                 Some(CopySemantics::DefaultCopy),
-                mutator,
+                mutator_id,
                 worker,
             );
         }
@@ -362,7 +372,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for Immix<VM> {
             &self.common,
             queue,
             object,
-            mutator,
+            mutator_id,
             worker,
         )
     }

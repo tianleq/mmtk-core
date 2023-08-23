@@ -114,6 +114,7 @@ pub fn bind_mutator<VM: VMBinding>(
     if LOG_ALLOCATOR_MAPPING {
         info!("{:?}", mutator.config);
     }
+
     mutator
 }
 
@@ -960,10 +961,18 @@ pub fn mmtk_set_public_bit<VM: VMBinding>(mmtk: &'static MMTK<VM>, object: Objec
     mmtk.plan.publish_object(object);
 }
 
-pub fn mmtk_publish_object<VM: VMBinding>(mmtk: &'static MMTK<VM>, object: ObjectReference) {
+pub fn mmtk_publish_object<VM: VMBinding>(
+    mmtk: &'static MMTK<VM>,
+    object: ObjectReference,
+    mutator_id: Option<u32>,
+) {
     if object.is_null() || crate::util::public_bit::is_public::<VM>(object) {
         return;
-    };
+    }
+    // only publish objects of its own
+    if mutator_id.is_some() && mutator_id != mmtk.plan.get_object_owner(object) {
+        return;
+    }
 
     let mut closure = crate::plan::MarkingObjectPublicClosure::<VM>::new(mmtk);
     mmtk_set_public_bit(mmtk, object);
@@ -983,6 +992,7 @@ pub fn mmtk_is_object_published<VM: VMBinding>(object: ObjectReference) -> bool 
     }
 }
 
+#[cfg(feature = "thread_local_gc")]
 pub fn mmtk_handle_user_triggered_local_gc<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
     mmtk.plan.handle_thread_local_collection(tls);
 }
@@ -990,16 +1000,3 @@ pub fn mmtk_handle_user_triggered_local_gc<VM: VMBinding>(mmtk: &MMTK<VM>, tls: 
 pub fn mmtk_handle_user_triggered_global_gc<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
     mmtk.plan.handle_user_collection_request(tls, true, false);
 }
-
-// pub fn mmtk_assert_object_publishedd<VM: VMBinding>(object: ObjectReference) {
-//     use crate::vm::ObjectModel;
-//     if object.is_null() {
-//         return;
-//     } else {
-//         let result = crate::util::public_bit::is_public::<VM>(object);
-//         if !result {
-//             VM::VMObjectModel::dump_object(object);
-//             assert!(false, "object in nmethod is not published");
-//         }
-//     }
-// }

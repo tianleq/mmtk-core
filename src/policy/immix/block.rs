@@ -63,6 +63,13 @@ impl BlockState {
     }
 }
 
+#[cfg(feature = "thread_local_gc")]
+#[derive(Debug, Clone, Copy)]
+struct BlockListNode {
+    prev: usize,
+    next: usize,
+}
+
 /// Data structure to reference an immix block.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialOrd, PartialEq)]
@@ -109,6 +116,8 @@ impl Block {
     /// Block level public table (side)
     pub const PUBLICATION_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_PUBLICATION;
+
+    pub const BLOCK_LINKED_LIST_BYTES: usize = std::mem::size_of::<BlockListNode>();
 
     /// Get the chunk containing the block.
     pub fn chunk(&self) -> Chunk {
@@ -371,16 +380,49 @@ impl Block {
         self.sweep_impl(space, mark_histogram, line_mark_state, false)
     }
 
+    #[cfg(feature = "thread_local_gc")]
     pub fn owner(&self) -> u32 {
         Self::OWNER_TABLE.load_atomic::<u32>(self.start(), Ordering::SeqCst)
     }
 
+    #[cfg(feature = "thread_local_gc")]
     fn clear_owner(&self) {
         self.set_owner(0);
     }
 
+    #[cfg(feature = "thread_local_gc")]
     pub fn set_owner(&self, owner: u32) {
         Self::OWNER_TABLE.store_atomic::<u32>(self.start(), owner, Ordering::SeqCst)
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn add_block_to_list(&self, block: Self) {
+        unsafe {
+            block.start().store(BlockListNode {
+                prev: 0,
+                next: self.start().as_usize(),
+            });
+            self.start().store::<usize>(block.start().as_usize())
+        }
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn remove_block_from_list(&self) {
+        unsafe {
+            let node = self.start().load::<BlockListNode>();
+            let prev_block_address = Address::from_usize(node.prev);
+            let next_block_address = Address::from_usize(node.next);
+            let prev_node = prev_block_address.load::<BlockListNode>();
+            let next_node = next_block_address.load::<BlockListNode>();
+            prev_block_address.store(BlockListNode {
+                prev: prev_node.prev,
+                next: node.next,
+            });
+            next_block_address.store(BlockListNode {
+                prev: node.prev,
+                next: next_node.next,
+            });
+        }
     }
 }
 

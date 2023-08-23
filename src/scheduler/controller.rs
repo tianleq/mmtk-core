@@ -52,6 +52,7 @@ impl<VM: VMBinding> GCController<VM> {
             debug!("[STWController: Waiting for request...]");
             let requests = self.requester.wait_for_request();
             debug!("[STWController: Request recieved.]");
+            #[cfg(feature = "thread_local_gc")]
             for req in requests {
                 if req.thread_local {
                     self.do_thread_local_gc_until_completion(req.tls);
@@ -60,6 +61,8 @@ impl<VM: VMBinding> GCController<VM> {
                     self.do_gc_until_completion(req.single_thread);
                 }
             }
+            #[cfg(not(feature = "thread_local_gc"))]
+            self.do_gc_until_completion(requests[0].single_thread);
             debug!("[STWController: Worker threads complete!]");
         }
     }
@@ -149,7 +152,12 @@ impl<VM: VMBinding> GCController<VM> {
         // If all of the above failed, it means GC has finished.
         false
     }
+    #[cfg(not(feature = "thread_local_gc"))]
+    pub fn do_thread_local_gc_until_completion(&mut self, tls: VMMutatorThread) {
+        unimplemented!()
+    }
 
+    #[cfg(feature = "thread_local_gc")]
     /// Coordinate workers to perform GC in response to a GC request.
     pub fn do_thread_local_gc_until_completion(&mut self, tls: VMMutatorThread) {
         let gc_start = std::time::Instant::now();

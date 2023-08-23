@@ -71,9 +71,8 @@ pub struct Mutator<VM: VMBinding> {
     pub mutator_tls: VMMutatorThread,
     pub plan: &'static dyn Plan<VM = VM>,
     pub config: MutatorConfig<VM>,
-    pub thread_local_gc_status: i32,
+    pub thread_local_gc_status: u32,
     pub mutator_id: u32,
-    pub request_id: u32,
 }
 
 impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
@@ -114,11 +113,29 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         space.initialize_object_metadata(refer, true);
         #[cfg(feature = "debug_publish_object")]
         {
-            let metadata: usize = (usize::try_from(self.request_id).unwrap() << 32)
-                | usize::try_from(self.mutator_id).unwrap();
+            let metadata: usize = usize::try_from(self.mutator_id).unwrap();
             crate::util::object_extra_header_metadata::store_extra_header_metadata::<VM, usize>(
                 refer, metadata,
             );
+        }
+        #[cfg(feature = "thread_local_gc")]
+        if allocator == AllocationSemantics::Los {
+            // large object need to record its owner
+            let metadata = usize::try_from(self.mutator_id).unwrap();
+            unsafe {
+                #[cfg(feature = "extra_header")]
+                let offset = 16;
+                #[cfg(not(feature = "extra_header"))]
+                let offset = 8;
+                crate::util::conversions::page_align_down(refer.to_object_start::<VM>())
+                    .store(metadata);
+                debug_assert!(
+                    crate::util::conversions::is_page_aligned(Address::from_usize(
+                        refer.to_object_start::<VM>().as_usize() - offset
+                    )),
+                    "los object is not aligned"
+                );
+            }
         }
     }
 

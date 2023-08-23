@@ -132,6 +132,7 @@ pub trait Allocator<VM: VMBinding>: Downcast {
     /// Return the [`Plan`] instance that this allocator instance is associated with.
     fn get_plan(&self) -> &'static dyn Plan<VM = VM>;
 
+    #[cfg(feature = "thread_local_gc")]
     /// Return if this allocator can do thread local allocation. If an allocator does not do thread
     /// local allocation, each allocation will go to slowpath and will have a check for GC polls.
     fn does_thread_local_allocation(&self) -> bool;
@@ -164,6 +165,7 @@ pub trait Allocator<VM: VMBinding>: Downcast {
     /// * `offset` the required offset in bytes.
     fn alloc(&mut self, size: usize, align: usize, offset: usize) -> Address;
 
+    #[cfg(feature = "thread_local_gc")]
     /// An allocation attempt. The implementation of this function depends on the allocator used.
     /// If an allocator supports thread local allocations, then the allocation will be serviced
     /// from its TLAB, otherwise it will default to using the slowpath, i.e. [`alloc_slow`](Allocator::alloc_slow).
@@ -177,11 +179,17 @@ pub trait Allocator<VM: VMBinding>: Downcast {
     /// See [`crate::util::alloc::object_ref_guard`](util/alloc/object_ref_guard).
     ///
     /// Arguments:
-    /// * `_context`: the mutator context
+    /// * `mutator_id`: the mutator context
     /// * `size`: the allocation size in bytes.
     /// * `align`: the required alignment in bytes.
     /// * `offset` the required offset in bytes.
-    fn alloc_local(&mut self, _context: u32, size: usize, align: usize, offset: usize) -> Address {
+    fn alloc_local(
+        &mut self,
+        _mutator_id: u32,
+        size: usize,
+        align: usize,
+        offset: usize,
+    ) -> Address {
         self.alloc(size, align, offset)
     }
 

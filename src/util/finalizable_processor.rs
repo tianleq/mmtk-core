@@ -7,7 +7,6 @@ use crate::util::VMWorkerThread;
 use crate::vm::Finalizable;
 use crate::vm::{ActivePlan, Collection, VMBinding};
 use crate::MMTK;
-// use std::collections::HashMap;
 use std::marker::PhantomData;
 
 /// A special processor for Finalizable objects.
@@ -17,9 +16,6 @@ use std::marker::PhantomData;
 pub struct FinalizableProcessor<F: Finalizable> {
     /// Candidate objects that has finalizers with them
     candidates: Vec<(u32, F)>,
-
-    // thread_local_candidates: HashMap<u32, Vec<F>>,
-    // thread_local_ready_for_finalize: HashMap<u32, Vec<F>>,
     /// Index into candidates to record where we are up to in the last scan of the candidates.
     /// Index after nursery_index are new objects inserted after the last GC.
     nursery_index: usize,
@@ -36,9 +32,6 @@ impl<F: Finalizable> FinalizableProcessor<F> {
     pub fn new() -> Self {
         Self {
             candidates: vec![],
-
-            // thread_local_candidates: HashMap::new(),
-            // thread_local_ready_for_finalize: HashMap::new(),
             nursery_index: 0,
             ready_for_finalize: vec![],
             local_finalizables_count: 0,

@@ -260,6 +260,7 @@ pub trait Plan: 'static + Sync + Downcast {
     /// * `space`: an option to indicate if there is a space that has failed in an allocation.
     fn collection_required(&self, space_full: bool, space: Option<&dyn Space<Self::VM>>) -> bool;
 
+    #[cfg(feature = "thread_local_gc")]
     /// Ask the plan if they would trigger a GC. If MMTk is in charge of triggering GCs, this method is called
     /// periodically during allocation. However, MMTk may delegate the GC triggering decision to the runtime,
     /// in which case, this method may not be called. This method returns true to trigger a collection.
@@ -275,6 +276,7 @@ pub trait Plan: 'static + Sync + Downcast {
         false
     }
 
+    #[cfg(feature = "thread_local_gc")]
     fn handle_thread_local_collection(&self, tls: VMMutatorThread) {
         self.base().handle_thread_local_collection(tls);
     }
@@ -402,10 +404,18 @@ pub trait Plan: 'static + Sync + Downcast {
         true
     }
 
+    #[cfg(feature = "thread_local_gc")]
     fn publish_object(&self, _object: ObjectReference);
 
+    #[cfg(feature = "thread_local_gc")]
+    fn get_object_owner(&self, _object: ObjectReference) -> Option<u32> {
+        Option::None
+    }
+
+    #[cfg(feature = "thread_local_gc")]
     fn thread_local_prepare(&mut self, _mutator_id: u32) {}
 
+    #[cfg(feature = "thread_local_gc")]
     fn thread_local_release(&mut self, _mutator_id: u32) -> Vec<Box<dyn GCWork<Self::VM>>> {
         Vec::new()
     }
@@ -634,6 +644,7 @@ impl<VM: VMBinding> BasePlan<VM> {
         }
     }
 
+    #[cfg(feature = "thread_local_gc")]
     pub fn handle_thread_local_collection(&self, tls: VMMutatorThread) {
         self.user_triggered_collection
             .store(true, Ordering::Relaxed);
@@ -1000,7 +1011,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for BasePlan<VM> {
         &self,
         _queue: &mut Q,
         object: ObjectReference,
-        _mutator: &mut Mutator<VM>,
+        _mutator_id: u32,
         _worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
         object
@@ -1169,7 +1180,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
         &self,
         queue: &mut Q,
         object: ObjectReference,
-        mutator: &mut Mutator<VM>,
+        mutator_id: u32,
         worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
         if self.immortal.in_space(object) {
@@ -1181,7 +1192,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
                 queue,
                 object,
                 None,
-                mutator,
+                mutator_id,
                 worker
             );
         }
@@ -1191,7 +1202,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
                 queue,
                 object,
                 None,
-                mutator,
+                mutator_id,
                 worker
             );
         }
@@ -1201,12 +1212,12 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
                 queue,
                 object,
                 None,
-                mutator,
+                mutator_id,
                 worker
             );
         }
         <BasePlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_trace_object::<Q, KIND>(
-            &self.base, queue, object, mutator, worker,
+            &self.base, queue, object, mutator_id, worker,
         )
     }
 
@@ -1276,7 +1287,7 @@ pub trait PlanThreadlocalTraceObject<VM: VMBinding> {
         &self,
         queue: &mut Q,
         object: ObjectReference,
-        mutator: &mut Mutator<VM>,
+        mutator_id: u32,
         worker: &mut GCWorker<VM>,
     ) -> ObjectReference;
 

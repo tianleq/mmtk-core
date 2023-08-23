@@ -129,6 +129,7 @@ impl WorkerMonitor {
         }
     }
 
+    #[cfg(feature = "thread_local_gc")]
     /// Wake up workers without waiting
     /// This is called by the coordinator.
     /// If `all` is true, notify all workers; otherwise only notify one worker.

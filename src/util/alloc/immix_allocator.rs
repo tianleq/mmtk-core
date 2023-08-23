@@ -1,5 +1,6 @@
 use super::allocator::{align_allocation_no_fill, fill_alignment_gap};
 use crate::plan::Plan;
+use crate::policy::immix::block::Block;
 use crate::policy::immix::line::*;
 use crate::policy::immix::ImmixSpace;
 use crate::policy::space::Space;
@@ -36,6 +37,8 @@ pub struct ImmixAllocator<VM: VMBinding> {
     request_for_large: bool,
     /// Hole-searching cursor
     line: Option<Line>,
+    // header of the block acquired by this allocator
+    block_header: Option<Block>,
 }
 
 impl<VM: VMBinding> ImmixAllocator<VM> {
@@ -98,6 +101,7 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
         self.plan
     }
 
+    #[cfg(feature = "thread_local_gc")]
     fn does_thread_local_allocation(&self) -> bool {
         true
     }
@@ -191,6 +195,12 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
     fn get_tls(&self) -> VMThread {
         self.tls
     }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn alloc_local(&mut self, _context: u32, size: usize, align: usize, offset: usize) -> Address {
+        // TODO fix this with the correct semantic
+        self.alloc(size, align, offset)
+    }
 }
 
 impl<VM: VMBinding> ImmixAllocator<VM> {
@@ -214,6 +224,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             large_limit: Address::ZERO,
             request_for_large: false,
             line: None,
+            block_header: None,
         }
     }
 
@@ -331,12 +342,26 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     block.start(),
                     block.end()
                 );
-                block.set_owner(self.mutator_id);
+                #[cfg(not(feature = "thread_local_gc"))]
+                let block_start_offset = 0;
+                #[cfg(feature = "thread_local_gc")]
+                let block_start_offset = Block::BLOCK_LINKED_LIST_BYTES;
+                #[cfg(feature = "thread_local_gc")]
+                {
+                    block.set_owner(self.mutator_id);
+                    // maintain the doubly linked list of blocks allocated by this allocator
+                    if let Some(block_header) = self.block_header {
+                        block_header.add_block_to_list(block);
+                        self.block_header = Some(block);
+                    }
+                    self.block_header = Some(block);
+                }
+
                 if self.request_for_large {
-                    self.large_cursor = block.start();
+                    self.large_cursor = block.start() + block_start_offset;
                     self.large_limit = block.end();
                 } else {
-                    self.cursor = block.start();
+                    self.cursor = block.start() + block_start_offset;
                     self.limit = block.end();
                 }
                 self.alloc(size, align, offset)

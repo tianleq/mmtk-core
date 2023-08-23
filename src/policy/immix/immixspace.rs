@@ -6,6 +6,7 @@ use crate::policy::sft::GCWorkerMutRef;
 use crate::policy::sft::SFT;
 use crate::policy::space::{CommonSpace, Space};
 use crate::util::constants::LOG_BYTES_IN_PAGE;
+use crate::util::copy::*;
 use crate::util::heap::chunk_map::*;
 use crate::util::heap::BlockPageResource;
 use crate::util::heap::PageResource;
@@ -15,15 +16,14 @@ use crate::util::metadata::side_metadata::SideMetadataSpec;
 use crate::util::metadata::vo_bit;
 use crate::util::metadata::{self, MetadataSpec};
 use crate::util::object_forwarding as ForwardingWord;
-use crate::util::{copy::*, VMMutatorThread};
 use crate::util::{Address, ObjectReference};
+use crate::vm::*;
 use crate::{
     plan::ObjectQueue,
     scheduler::{GCWork, GCWorkScheduler, GCWorker, WorkBucketStage},
     util::opaque_pointer::{VMThread, VMWorkerThread},
     MMTK,
 };
-use crate::{vm::*, Mutator};
 use atomic::Ordering;
 use std::sync::{atomic::AtomicU8, atomic::AtomicUsize, Arc};
 
@@ -486,6 +486,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         did_defrag
     }
 
+    #[cfg(feature = "thread_local_gc")]
     pub fn thread_local_prepare(&mut self, mutator_id: u32) {
         // Update mark_state
         if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
@@ -526,6 +527,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
     }
 
+    #[cfg(feature = "thread_local_gc")]
     pub fn thread_local_release(&mut self, mutator_id: u32) -> Vec<Box<dyn GCWork<VM>>> {
         if !super::BLOCK_ONLY {
             self.line_unavail_state.store(
@@ -537,13 +539,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         // Sweep chunks and blocks
         let work_packets = self.generate_thread_local_sweep_tasks(mutator_id);
-        // self.scheduler().work_buckets[WorkBucketStage::Release].bulk_add_local(work_packets);
 
         self.lines_consumed.store(0, Ordering::Relaxed);
 
         work_packets
     }
 
+    #[cfg(feature = "thread_local_gc")]
     fn generate_thread_local_sweep_tasks(&self, mutator_id: u32) -> Vec<Box<dyn GCWork<VM>>> {
         self.defrag.mark_histograms.lock().clear();
         // # Safety: ImmixSpace reference is always valid within this collection cycle.
@@ -651,10 +653,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
         if self.attempt_mark(object, self.mark_state) {
             let block: Block = Block::containing::<VM>(object);
-            // debug_assert!(
-            //     !block.is_local_unmark_bit_set(),
-            //     "block escaped from local gc"
-            // );
 
             // Mark block and lines
             if !super::BLOCK_ONLY {
@@ -672,6 +670,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         object
     }
 
+    #[cfg(feature = "thread_local_gc")]
     /// Trace object and do evacuation if required.
     #[allow(clippy::assertions_on_constants)]
     pub fn trace_object_with_opportunistic_copy(
@@ -765,6 +764,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
     }
 
+    #[cfg(feature = "thread_local_gc")]
     /// Trace and mark objects without evacuation.
     pub fn thread_local_trace_object_without_moving(
         &self,
@@ -991,6 +991,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             Block::containing::<VM>(object).publish_block()
         }
     }
+
+    pub fn get_object_owner(&self, object: ObjectReference) -> u32 {
+        Block::containing::<VM>(object).owner()
+    }
 }
 
 impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for ImmixSpace<VM> {
@@ -999,7 +1003,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
         queue: &mut Q,
         object: ObjectReference,
         copy: Option<CopySemantics>,
-        _mutator: &mut Mutator<VM>,
+        _mutator_id: u32,
         worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
         if KIND == TRACE_THREAD_LOCAL_FAST {
@@ -1241,7 +1245,6 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
 struct ThreadLocalSweepChunk<VM: VMBinding> {
     space: &'static ImmixSpace<VM>,
     chunk: Chunk,
-    // tls: VMMutatorThread,
     mutator_id: u32,
     /// A destructor invoked when all `SweepChunk` packets are finished.
     epilogue: Arc<FlushPageResource<VM>>,

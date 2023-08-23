@@ -327,7 +327,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         #[allow(clippy::cast_ref_to_mut)]
         let me = unsafe { &mut *(self as *const _ as *mut Self) };
         self.common.accounting.release(pages as _);
-        let freed = me.free_list.free(page_offset as _, true);
+        let freed: i32 = me.free_list.free(page_offset as _, true);
         sync.pages_currently_on_freelist += pages as usize;
         if !self.common.contiguous {
             // only discontiguous spaces use chunks

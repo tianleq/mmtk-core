@@ -72,7 +72,9 @@ impl<VM: VMBinding> GCTrigger<VM> {
             // plan.base().gc_requester.request();
             plan.base().gc_requester.request();
             return true;
-        } else if self
+        }
+        #[cfg(feature = "thread_local_gc")]
+        if self
             .policy
             .is_thread_local_gc_required(space_full, space, plan)
         {

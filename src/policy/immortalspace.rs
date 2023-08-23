@@ -6,7 +6,7 @@ use crate::util::address::Address;
 use crate::util::heap::{MonotonePageResource, PageResource};
 use crate::util::metadata::mark_bit::MarkState;
 
-use crate::util::{metadata, ObjectReference, VMMutatorThread};
+use crate::util::{metadata, ObjectReference};
 
 use crate::plan::{ObjectQueue, VectorObjectQueue};
 
@@ -124,7 +124,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
         queue: &mut Q,
         object: ObjectReference,
         _copy: Option<CopySemantics>,
-        _mutator: &mut crate::Mutator<VM>,
+        _mutator_id: u32,
         _worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
         self.thread_local_trace_object(queue, object)

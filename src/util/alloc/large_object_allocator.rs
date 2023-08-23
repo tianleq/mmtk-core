@@ -2,9 +2,12 @@ use crate::plan::Plan;
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::Space;
 use crate::util::alloc::{allocator, Allocator};
-use crate::util::opaque_pointer::*;
 use crate::util::Address;
+use crate::util::{conversions, opaque_pointer::*};
 use crate::vm::VMBinding;
+
+#[cfg(feature = "thread_local_gc")]
+const LOS_OBJECT_OWNER_BYTES: usize = 8;
 
 #[repr(C)]
 pub struct LargeObjectAllocator<VM: VMBinding> {
@@ -30,20 +33,42 @@ impl<VM: VMBinding> Allocator<VM> for LargeObjectAllocator<VM> {
         self.space as &'static dyn Space<VM>
     }
 
+    #[cfg(feature = "thread_local_gc")]
     fn does_thread_local_allocation(&self) -> bool {
         false
     }
 
     #[cfg(not(feature = "extra_header"))]
     fn alloc(&mut self, size: usize, align: usize, offset: usize) -> Address {
-        self.alloc_impl(size, align, offset)
+        #[cfg(not(feature = "thread_local_gc"))]
+        let rtn = self.alloc_impl(size, align, offset);
+        #[cfg(feature = "thread_local_gc")]
+        let rtn = self.alloc_impl(size + LOS_OBJECT_OWNER_BYTES, align, offset);
+        if !rtn.is_zero() {
+            #[cfg(not(feature = "thread_local_gc"))]
+            return rtn;
+            #[cfg(feature = "thread_local_gc")]
+            return rtn + LOS_OBJECT_OWNER_BYTES;
+        } else {
+            rtn
+        }
     }
 
     #[cfg(feature = "extra_header")]
     fn alloc(&mut self, size: usize, align: usize, offset: usize) -> Address {
+        #[cfg(not(feature = "thread_local_gc"))]
         let rtn = self.alloc_impl(size + VM::EXTRA_HEADER_BYTES, align, offset);
+        #[cfg(feature = "thread_local_gc")]
+        let rtn = self.alloc_impl(
+            size + LOS_OBJECT_OWNER_BYTES + VM::EXTRA_HEADER_BYTES,
+            align,
+            offset,
+        );
         if !rtn.is_zero() {
-            rtn + VM::EXTRA_HEADER_BYTES
+            #[cfg(not(feature = "thread_local_gc"))]
+            return rtn + VM::EXTRA_HEADER_BYTES;
+            #[cfg(feature = "thread_local_gc")]
+            return rtn + LOS_OBJECT_OWNER_BYTES + VM::EXTRA_HEADER_BYTES;
         } else {
             rtn
         }
@@ -79,6 +104,10 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
             debug_assert!(
                 !crate::util::public_bit::is_public_object(rtn),
                 "public bit is not cleared properly"
+            );
+            debug_assert!(
+                conversions::is_page_aligned(rtn),
+                "los allocation is not page-aligned"
             );
             rtn
         } else {

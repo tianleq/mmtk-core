@@ -9,6 +9,8 @@ use crate::vm::*;
 use crate::*;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
+use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
 
 pub struct ScheduleCollection;
 
@@ -111,19 +113,17 @@ impl<C: GCWorkContext> Release<C> {
 }
 
 impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
-    fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
+    fn do_work(&mut self, _worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
         trace!("Release Global");
 
         self.plan.base().gc_trigger.policy.on_gc_release(mmtk);
 
-        // We assume this is the only running work packet that accesses plan at the point of execution
-        #[allow(clippy::cast_ref_to_mut)]
-        let plan_mut: &mut C::PlanType = unsafe { &mut *(self.plan as *const _ as *mut _) };
-        plan_mut.release(worker.tls);
-
+        let counter = Arc::new(AtomicUsize::new(
+            <C::VM as VMBinding>::VMActivePlan::number_of_mutators(),
+        ));
         for mutator in <C::VM as VMBinding>::VMActivePlan::mutators() {
             mmtk.scheduler.work_buckets[WorkBucketStage::Release]
-                .add(ReleaseMutator::<C::VM>::new(mutator));
+                .add(ReleaseMutator::<C::VM>::new(mutator, counter.clone()));
         }
         for w in &mmtk.scheduler.worker_group.workers_shared {
             let result = w.designated_work.push(Box::new(ReleaseCollector));
@@ -137,11 +137,12 @@ pub struct ReleaseMutator<VM: VMBinding> {
     // The mutator reference has static lifetime.
     // It is safe because the actual lifetime of this work-packet will not exceed the lifetime of a GC.
     pub mutator: &'static mut Mutator<VM>,
+    counter: Arc<AtomicUsize>,
 }
 
 impl<VM: VMBinding> ReleaseMutator<VM> {
-    pub fn new(mutator: &'static mut Mutator<VM>) -> Self {
-        Self { mutator }
+    pub fn new(mutator: &'static mut Mutator<VM>, counter: Arc<AtomicUsize>) -> Self {
+        Self { mutator, counter }
     }
 }
 
@@ -149,6 +150,17 @@ impl<VM: VMBinding> GCWork<VM> for ReleaseMutator<VM> {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         trace!("Release Mutator");
         self.mutator.release(worker.tls);
+        let value = self.counter.fetch_sub(1, atomic::Ordering::SeqCst);
+        if value == 1 {
+            // This is the last packet, now it is safe to create work packets to sweep blocks
+            #[cfg(debug_assertions)]
+            info!("All mutators have been released. Now do a global plan release.");
+            // We assume this is the only running work packet that accesses plan at the point of execution
+            #[allow(clippy::cast_ref_to_mut)]
+            let plan_mut: &mut dyn Plan<VM = VM> =
+                unsafe { &mut *(&(*_mmtk.plan) as *const _ as *mut _) };
+            plan_mut.release(worker.tls);
+        }
     }
 }
 

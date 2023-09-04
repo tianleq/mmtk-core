@@ -1,3 +1,5 @@
+use std::borrow::BorrowMut;
+
 use super::Immix;
 use crate::plan::barriers::{PublicObjectMarkingBarrier, PublicObjectMarkingBarrierSemantics};
 use crate::plan::mutator_context::create_allocator_mapping;
@@ -7,11 +9,13 @@ use crate::plan::mutator_context::MutatorConfig;
 use crate::plan::mutator_context::ReservedAllocators;
 use crate::plan::AllocationSemantics;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
-use crate::util::alloc::ImmixAllocator;
+use crate::util::alloc::{ImmixAllocator, LargeObjectAllocator};
 use crate::util::opaque_pointer::{VMMutatorThread, VMWorkerThread};
 use crate::vm::VMBinding;
 use crate::MMTK;
 use enum_map::EnumMap;
+
+const THREAD_LOCAL_GC_ACTIVE: u32 = 1;
 
 pub fn immix_mutator_prepare<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {
     let immix_allocator = unsafe {
@@ -25,14 +29,31 @@ pub fn immix_mutator_prepare<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMW
 }
 
 pub fn immix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {
-    let immix_allocator = unsafe {
-        mutator
-            .allocators
-            .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
+    let allocators = mutator.allocators.borrow_mut();
+    let thread_local_gc_active = mutator.thread_local_gc_status == THREAD_LOCAL_GC_ACTIVE;
+    {
+        let immix_allocator = unsafe {
+            allocators
+                .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
+        }
+        .downcast_mut::<ImmixAllocator<VM>>()
+        .unwrap();
+        immix_allocator.reset();
+        #[cfg(feature = "thread_local_gc")]
+        // For a thread local gc, it needs to sweep blocks
+        // A global gc has dedicated work packets of sweeping blocks,
+        // so no need to do it here
+        immix_allocator.thread_local_release(thread_local_gc_active);
     }
-    .downcast_mut::<ImmixAllocator<VM>>()
-    .unwrap();
-    immix_allocator.reset();
+    #[cfg(feature = "thread_local_gc")]
+    {
+        let los_allocator: &mut LargeObjectAllocator<VM> = unsafe {
+            allocators.get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Los])
+        }
+        .downcast_mut::<LargeObjectAllocator<VM>>()
+        .unwrap();
+        los_allocator.thread_local_release(thread_local_gc_active);
+    }
 }
 
 pub(in crate::plan) const RESERVED_ALLOCATORS: ReservedAllocators = ReservedAllocators {

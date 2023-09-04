@@ -199,12 +199,9 @@ impl<VM: VMBinding> ImmortalSpace<VM> {
         self.mark_state.on_global_release::<VM>();
     }
 
-    pub fn thread_local_prepare(&mut self, _tls: u32) {
-        // TODO fix the mark_state
-        // self.mark_state = GC_MARK_BIT_MASK - self.mark_state;
-    }
+    // pub fn thread_local_prepare(&self, _tls: u32) {}
 
-    pub fn thread_local_release(&mut self, _tls: u32) {}
+    // pub fn thread_local_release(&self, _tls: u32) {}
 
     pub fn trace_object<Q: ObjectQueue>(
         &self,

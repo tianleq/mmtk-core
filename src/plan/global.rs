@@ -244,13 +244,6 @@ pub trait Plan: 'static + Sync + Downcast {
     /// This is invoked once per GC by one worker thread. `tls` is the worker thread that executes this method.
     fn end_of_gc(&mut self, _tls: VMWorkerThread) {}
 
-    fn end_of_thread_local_gc(
-        &mut self,
-        _mutator_tls: VMMutatorThread,
-        _worker_tls: VMWorkerThread,
-    ) {
-    }
-
     /// Ask the plan if they would trigger a GC. If MMTk is in charge of triggering GCs, this method is called
     /// periodically during allocation. However, MMTk may delegate the GC triggering decision to the runtime,
     /// in which case, this method may not be called. This method returns true to trigger a collection.
@@ -412,13 +405,13 @@ pub trait Plan: 'static + Sync + Downcast {
         Option::None
     }
 
-    #[cfg(feature = "thread_local_gc")]
-    fn thread_local_prepare(&mut self, _mutator_id: u32) {}
+    // #[cfg(feature = "thread_local_gc")]
+    // fn thread_local_prepare(&mut self, _mutator_id: u32) {}
 
-    #[cfg(feature = "thread_local_gc")]
-    fn thread_local_release(&mut self, _mutator_id: u32) -> Vec<Box<dyn GCWork<Self::VM>>> {
-        Vec::new()
-    }
+    // #[cfg(feature = "thread_local_gc")]
+    // fn thread_local_release(&mut self, _mutator_id: u32) -> Vec<Box<dyn GCWork<Self::VM>>> {
+    //     Vec::new()
+    // }
 }
 
 impl_downcast!(Plan assoc VM);
@@ -759,27 +752,29 @@ impl<VM: VMBinding> BasePlan<VM> {
         self.vm_space.release();
     }
 
-    pub fn thread_local_prepare(&mut self, _tls: u32) {
-        #[cfg(feature = "code_space")]
-        self.code_space.thread_local_prepare(_tls);
-        #[cfg(feature = "code_space")]
-        self.code_lo_space.thread_local_prepare(_tls);
-        #[cfg(feature = "ro_space")]
-        self.ro_space.thread_local_prepare(_tls);
-        #[cfg(feature = "vm_space")]
-        self.vm_space.thread_local_prepare(_tls);
-    }
+    // #[cfg(feature = "thread_local_gc")]
+    // pub fn thread_local_prepare(&self, _tls: u32) {
+    //     #[cfg(feature = "code_space")]
+    //     self.code_space.thread_local_prepare(_tls);
+    //     #[cfg(feature = "code_space")]
+    //     self.code_lo_space.thread_local_prepare(_tls);
+    //     #[cfg(feature = "ro_space")]
+    //     self.ro_space.thread_local_prepare(_tls);
+    //     #[cfg(feature = "vm_space")]
+    //     self.vm_space.thread_local_prepare(_tls);
+    // }
 
-    pub fn thread_local_release(&mut self, _tls: u32) {
-        #[cfg(feature = "code_space")]
-        self.code_space.thread_local_release(_tls);
-        #[cfg(feature = "code_space")]
-        self.code_lo_space.thread_local_release(_tls);
-        #[cfg(feature = "ro_space")]
-        self.ro_space.thread_local_release(_tls);
-        #[cfg(feature = "vm_space")]
-        self.vm_space.thread_local_release(_tls);
-    }
+    // #[cfg(feature = "thread_local_gc")]
+    // pub fn thread_local_release(&self, _tls: u32) {
+    //     #[cfg(feature = "code_space")]
+    //     self.code_space.thread_local_release(_tls);
+    //     #[cfg(feature = "code_space")]
+    //     self.code_lo_space.thread_local_release(_tls);
+    //     #[cfg(feature = "ro_space")]
+    //     self.ro_space.thread_local_release(_tls);
+    //     #[cfg(feature = "vm_space")]
+    //     self.vm_space.thread_local_release(_tls);
+    // }
 
     pub fn set_collection_kind<P: Plan>(&self, plan: &P) {
         self.cur_collection_attempts.store(
@@ -1111,19 +1106,21 @@ impl<VM: VMBinding> CommonPlan<VM> {
         self.base.release(tls, full_heap)
     }
 
-    pub fn thread_local_prepare(&mut self, mutator_id: u32) {
-        self.immortal.thread_local_prepare(mutator_id);
-        self.los.thread_local_prepare(mutator_id);
-        self.nonmoving.thread_local_prepare(mutator_id);
-        self.base.thread_local_release(mutator_id);
-    }
+    // #[cfg(feature = "thread_local_gc")]
+    // pub fn thread_local_prepare(&self, mutator_id: u32) {
+    //     self.immortal.thread_local_prepare(mutator_id);
+    //     self.los.thread_local_prepare(mutator_id);
+    //     self.nonmoving.thread_local_prepare(mutator_id);
+    //     self.base.thread_local_release(mutator_id);
+    // }
 
-    pub fn thread_local_release(&mut self, mutator_id: u32) {
-        self.immortal.thread_local_release(mutator_id);
-        self.los.thread_local_release(mutator_id);
-        self.nonmoving.thread_local_release(mutator_id);
-        self.base.thread_local_release(mutator_id);
-    }
+    // #[cfg(feature = "thread_local_gc")]
+    // pub fn thread_local_release(&self, mutator_id: u32) {
+    //     self.immortal.thread_local_release(mutator_id);
+    //     self.los.thread_local_release(mutator_id);
+    //     self.nonmoving.thread_local_release(mutator_id);
+    //     self.base.thread_local_release(mutator_id);
+    // }
 
     pub fn stacks_prepared(&self) -> bool {
         self.base.stacks_prepared()
@@ -1163,6 +1160,8 @@ impl<VM: VMBinding> CommonPlan<VM> {
         }
         if self.los.in_space(object) {
             trace!("publish_object: object in los");
+            #[cfg(debug_assertions)]
+            info!("publish_object: object in los");
             self.los.publish_object(object);
             return;
         }

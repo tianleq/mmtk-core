@@ -166,9 +166,10 @@ pub trait Allocator<VM: VMBinding>: Downcast {
     fn alloc(&mut self, size: usize, align: usize, offset: usize) -> Address;
 
     #[cfg(feature = "thread_local_gc")]
-    /// An allocation attempt. The implementation of this function depends on the allocator used.
-    /// If an allocator supports thread local allocations, then the allocation will be serviced
-    /// from its TLAB, otherwise it will default to using the slowpath, i.e. [`alloc_slow`](Allocator::alloc_slow).
+    /// An allocation attempt done by the collector as if it is done by the mutator. The implementation of this
+    /// function depends on the allocator used. If an allocator supports thread local allocations,
+    /// then the allocation will be serviced from its TLAB, otherwise it will default to using the slowpath,
+    /// i.e. [`alloc_slow`](Allocator::alloc_slow).
     ///
     /// Note that in the case where the VM is out of memory, we invoke
     /// [`Collection::out_of_memory`] to inform the binding and then return a null pointer back to
@@ -183,7 +184,7 @@ pub trait Allocator<VM: VMBinding>: Downcast {
     /// * `size`: the allocation size in bytes.
     /// * `align`: the required alignment in bytes.
     /// * `offset` the required offset in bytes.
-    fn alloc_local(
+    fn alloc_as_mutator(
         &mut self,
         _mutator_id: u32,
         size: usize,

@@ -142,5 +142,5 @@ pub trait Collection<VM: VMBinding> {
     /// in the instructions.
     /// This function is called prior to doing a thread local gc to make sure all objects are published
     /// properly
-    fn publish_vm_specific_roots(_mutator_id: u32) {}
+    fn publish_vm_specific_roots(_mutator: &'static mut Mutator<VM>) {}
 }

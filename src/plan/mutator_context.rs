@@ -5,6 +5,7 @@ use crate::plan::global::Plan;
 use crate::plan::AllocationSemantics;
 use crate::policy::space::Space;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
+use crate::util::alloc::LargeObjectAllocator;
 use crate::util::{Address, ObjectReference};
 use crate::util::{VMMutatorThread, VMWorkerThread};
 use crate::vm::VMBinding;
@@ -120,6 +121,14 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         }
         #[cfg(feature = "thread_local_gc")]
         if allocator == AllocationSemantics::Los {
+            // store los objects into a local set
+            let allocator = unsafe {
+                self.allocators
+                    .get_allocator_mut(self.config.allocator_mapping[allocator])
+                    .downcast_mut::<LargeObjectAllocator<VM>>()
+                    .unwrap()
+            };
+            allocator.add_los_objects(refer);
             // large object need to record its owner
             let metadata = usize::try_from(self.mutator_id).unwrap();
             unsafe {

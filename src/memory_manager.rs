@@ -969,7 +969,7 @@ pub fn mmtk_publish_object<VM: VMBinding>(
     if object.is_null() || crate::util::public_bit::is_public::<VM>(object) {
         return;
     }
-    // only publish objects of its own
+    // only publish objects of its own (only affect publish vm specific roots)
     if mutator_id.is_some() && mutator_id != mmtk.plan.get_object_owner(object) {
         return;
     }

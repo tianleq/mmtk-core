@@ -30,9 +30,8 @@ pub struct LargeObjectSpace<VM: VMBinding> {
     common: CommonSpace<VM>,
     pr: FreeListPageResource<VM>,
     mark_state: u8,
-    local_mark_state: u8,
     in_nursery_gc: bool,
-    treadmill: TreadMill,
+    treadmill: TreadMill<VM>,
 }
 
 impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
@@ -68,6 +67,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
             Ordering::SeqCst,
         );
         let mut new_value: u8 = (old_value & (!LOS_BIT_MASK)) | self.mark_state;
+        #[cfg(not(feature = "thread_local_gc"))]
         if alloc {
             new_value |= NURSERY_BIT;
         }
@@ -85,6 +85,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
 
         #[cfg(feature = "vo_bit")]
         crate::util::metadata::vo_bit::set_vo_bit::<VM>(object);
+        #[cfg(not(feature = "thread_local_gc"))]
         self.treadmill.add_to_treadmill(object, alloc);
     }
     #[cfg(feature = "is_mmtk_object")]
@@ -187,7 +188,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             pr,
             common,
             mark_state: 0,
-            local_mark_state: 0,
             in_nursery_gc: false,
             treadmill: TreadMill::new(),
         }
@@ -211,14 +211,11 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    pub fn thread_local_prepare(&mut self, _mutator_id: u32) {
-        self.local_mark_state = MARK_BIT - self.local_mark_state;
-        self.in_nursery_gc = false;
-    }
+    pub fn thread_local_prepare(&self, _mutator_id: u32) {}
 
     #[cfg(feature = "thread_local_gc")]
-    pub fn thread_local_release(&mut self, mutator_id: u32) {
-        self.thread_local_sweep_large_pages(mutator_id);
+    pub fn thread_local_release(&self, _mutator_id: u32) {
+        // self.thread_local_sweep_large_pages(mutator_id);
     }
 
     #[cfg(feature = "thread_local_gc")]
@@ -228,9 +225,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         object: ObjectReference,
         _mutator_id: u32,
     ) -> ObjectReference {
-        // thread-local gc does not reclaim los
-        // but it still needs to mark and scan los objects
-        // as they may refer to immix space objects
         if crate::util::public_bit::is_public::<VM>(object) {
             return object;
         }
@@ -240,8 +234,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             _mutator_id,
             Self::get_object_owner(object)
         );
-        if self.thread_local_mark(object, self.local_mark_state) {
-            // self.treadmill.copy(object, nursery_object);
+        if self.thread_local_mark(object, MARK_BIT) {
             queue.enqueue(object);
         }
         object
@@ -262,20 +255,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             object
         );
 
-        #[cfg(feature = "thread_local_gc")]
-        {
-            #[cfg(feature = "debug_publish_object")]
-            unsafe {
-                let metadata: usize =
-                    crate::util::object_extra_header_metadata::get_extra_header_metadata::<VM, usize>(
-                        object,
-                    ) & crate::util::object_extra_header_metadata::BOTTOM_HALF_MASK;
-                let owner =
-                    crate::util::conversions::page_align_down(object.to_object_start::<VM>())
-                        .load::<usize>();
-                debug_assert!(metadata == owner, "metadata: {} owner: {}", metadata, owner);
-            }
-        }
         let nursery_object = self.is_in_nursery(object);
         trace!(
             "LOS object {} {} a nursery object",
@@ -287,11 +266,28 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             // clearing nursery bit/moving objects out of logical nursery
             if self.test_and_mark(object, self.mark_state) {
                 trace!("LOS object {} is being marked now", object);
-                self.treadmill.copy(object, nursery_object);
-                // We just moved the object out of the logical nursery, mark it as unlogged.
-                if nursery_object && self.common.needs_log_bit {
-                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
-                        .mark_as_unlogged::<VM>(object, Ordering::SeqCst);
+                #[cfg(feature = "thread_local_gc")]
+                {
+                    // When enabling thread_local_gc, local/private objects are not in the global tredmill
+                    // So only copy public objects
+                    if crate::util::public_bit::is_public::<VM>(object) {
+                        self.treadmill.copy(object, nursery_object);
+                    }
+
+                    // We just moved the object out of the logical nursery, mark it as unlogged.
+                    if nursery_object && self.common.needs_log_bit {
+                        VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                            .mark_as_unlogged::<VM>(object, Ordering::SeqCst);
+                    }
+                }
+                #[cfg(not(feature = "thread_local_gc"))]
+                {
+                    self.treadmill.copy(object, nursery_object);
+                    // We just moved the object out of the logical nursery, mark it as unlogged.
+                    if nursery_object && self.common.needs_log_bit {
+                        VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                            .mark_as_unlogged::<VM>(object, Ordering::SeqCst);
+                    }
                 }
                 queue.enqueue(object);
             } else {
@@ -325,64 +321,24 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    fn thread_local_sweep_large_pages(&mut self, mutator_id: u32) {
-        let sweep = |object: ObjectReference| {
-            #[cfg(feature = "vo_bit")]
-            crate::util::metadata::vo_bit::unset_vo_bit::<VM>(object);
-            crate::util::public_bit::unset_public_bit::<VM>(object);
+    pub fn thread_local_sweep_large_object(&self, object: ObjectReference) {
+        #[cfg(feature = "vo_bit")]
+        crate::util::metadata::vo_bit::unset_vo_bit::<VM>(object);
+        debug_assert!(
+            !crate::util::public_bit::is_public::<VM>(object),
+            "public object is reclaimed in thread local gc"
+        );
 
-            self.pr
-                .release_pages(get_super_page(object.to_object_start::<VM>()));
-        };
-        let mut dead_nursery_objects = vec![];
-        let mut dead_objects = vec![];
-
-        for object in self.treadmill.thread_local_nursery_objects(|o| {
-            !crate::util::public_bit::is_public::<VM>(*o)
-                && Self::get_object_owner(*o) == mutator_id
-        }) {
-            debug_assert!(
-                Self::get_object_owner(object) == mutator_id,
-                "foreign objects discovered"
-            );
-            debug_assert!(
-                !crate::util::public_bit::is_public::<VM>(object),
-                "public objectc cannot be sweep"
-            );
-            if !self.test_thread_local_mark(object, self.local_mark_state) {
-                sweep(object);
-                dead_nursery_objects.push(object);
-            }
-        }
-
-        for object in self.treadmill.thread_local_objects(|o| {
-            !crate::util::public_bit::is_public::<VM>(*o)
-                && Self::get_object_owner(*o) == mutator_id
-        }) {
-            debug_assert!(
-                Self::get_object_owner(object) == mutator_id,
-                "foreign objects discovered"
-            );
-            debug_assert!(
-                !crate::util::public_bit::is_public::<VM>(object),
-                "public objectc cannot be sweep"
-            );
-            if !self.test_thread_local_mark(object, self.local_mark_state) {
-                sweep(object);
-                dead_objects.push(object);
-            }
-        }
-
-        self.treadmill
-            .thread_local_collect_nursery_objects(dead_nursery_objects);
-        self.treadmill.thread_local_collect_objects(dead_objects);
+        self.pr
+            .release_pages(get_super_page(object.to_object_start::<VM>()));
     }
 
-    /// Allocate an object
+    // /// Allocate an object
     pub fn allocate_pages(&self, tls: VMThread, pages: usize) -> Address {
         self.acquire(tls, pages)
     }
 
+    #[cfg(feature = "thread_local_gc")]
     /// Test if the object's local mark bit is the same as the given value. If it is not the same,
     /// the method will mark the object and return true. Otherwise, it returns false.
     fn thread_local_mark(&self, object: ObjectReference, value: u8) -> bool {
@@ -402,13 +358,32 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             }
         }
     }
-
+    #[cfg(feature = "thread_local_gc")]
     fn test_thread_local_mark(&self, object: ObjectReference, value: u8) -> bool {
         let metaadta_address =
             crate::util::conversions::page_align_down(object.to_object_start::<VM>());
         let metadata = unsafe { metaadta_address.load::<usize>() };
         let local_mark_value = (metadata & TOP_HALF_MASK) >> 32;
         u8::try_from(local_mark_value).unwrap() == value
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn clear_thread_local_mark(&self, object: ObjectReference) {
+        let metaadta_address =
+            crate::util::conversions::page_align_down(object.to_object_start::<VM>());
+        unsafe {
+            let metadata = metaadta_address.load::<usize>();
+            metaadta_address.store::<usize>(metadata & BOTTOM_HALF_MASK)
+        }
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn is_live_in_thread_local_gc(&self, object: ObjectReference) -> bool {
+        let alive = self.test_thread_local_mark(object, MARK_BIT);
+        if alive {
+            self.clear_thread_local_mark(object);
+        }
+        alive
     }
 
     /// Test if the object's mark bit is the same as the given value. If it is not the same,
@@ -468,7 +443,9 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             == NURSERY_BIT
     }
 
-    pub fn publish_object(&self, _object: ObjectReference) {}
+    pub fn publish_object(&self, _object: ObjectReference) {
+        self.treadmill.add_to_treadmill(_object, false);
+    }
 
     pub fn get_object_owner(object: ObjectReference) -> u32 {
         unsafe {

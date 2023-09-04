@@ -1,17 +1,20 @@
 use std::collections::HashSet;
+use std::marker::PhantomData;
 use std::mem::swap;
 use std::sync::Mutex;
 
 use crate::util::ObjectReference;
+use crate::vm::VMBinding;
 
-pub struct TreadMill {
+pub struct TreadMill<VM: VMBinding> {
     from_space: Mutex<HashSet<ObjectReference>>,
     to_space: Mutex<HashSet<ObjectReference>>,
     collect_nursery: Mutex<HashSet<ObjectReference>>,
     alloc_nursery: Mutex<HashSet<ObjectReference>>,
+    phantom: PhantomData<VM>,
 }
 
-impl std::fmt::Debug for TreadMill {
+impl<VM: VMBinding> std::fmt::Debug for TreadMill<VM> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TreadMill")
             .field("from", &self.from_space.lock().unwrap())
@@ -22,13 +25,14 @@ impl std::fmt::Debug for TreadMill {
     }
 }
 
-impl TreadMill {
+impl<VM: VMBinding> TreadMill<VM> {
     pub fn new() -> Self {
         TreadMill {
             from_space: Mutex::new(HashSet::new()),
             to_space: Mutex::new(HashSet::new()),
             collect_nursery: Mutex::new(HashSet::new()),
             alloc_nursery: Mutex::new(HashSet::new()),
+            phantom: PhantomData,
         }
     }
 
@@ -58,61 +62,65 @@ impl TreadMill {
         vals
     }
 
-    #[cfg(feature = "thread_local_gc")]
-    pub fn thread_local_objects<F>(&self, predicate: F) -> Vec<ObjectReference>
-    where
-        F: Fn(&ObjectReference) -> bool + Copy,
-    {
-        let mut local_objects: Vec<ObjectReference> = vec![];
-        {
-            let guard = self.to_space.lock().unwrap();
-            let mut objects = guard
-                .iter()
-                .copied()
-                .filter(predicate)
-                .collect::<Vec<ObjectReference>>();
-            local_objects.append(&mut objects);
-        }
-        local_objects
-    }
+    // #[cfg(feature = "thread_local_gc")]
+    // pub fn thread_local_objects<F>(&self, predicate: F) -> Vec<ObjectReference>
+    // where
+    //     F: Fn(&ObjectReference) -> bool + Copy,
+    // {
+    //     let mut local_objects: Vec<ObjectReference> = vec![];
+    //     {
+    //         let guard = self.to_space.lock().unwrap();
+    //         let mut objects = guard
+    //             .iter()
+    //             .copied()
+    //             .filter(predicate)
+    //             .collect::<Vec<ObjectReference>>();
+    //         local_objects.append(&mut objects);
+    //     }
+    //     local_objects
+    // }
 
-    #[cfg(feature = "thread_local_gc")]
-    pub fn thread_local_nursery_objects<F>(&self, predicate: F) -> Vec<ObjectReference>
-    where
-        F: Fn(&ObjectReference) -> bool + Copy,
-    {
-        let mut local_objects: Vec<ObjectReference> = vec![];
-        {
-            let guard = self.alloc_nursery.lock().unwrap();
-            let mut nursery_objects = guard
-                .iter()
-                .copied()
-                .filter(predicate)
-                .collect::<Vec<ObjectReference>>();
-            local_objects.append(&mut nursery_objects);
-        }
-        local_objects
-    }
+    // #[cfg(feature = "thread_local_gc")]
+    // pub fn thread_local_nursery_objects<F>(&self, predicate: F) -> Vec<ObjectReference>
+    // where
+    //     F: Fn(&ObjectReference) -> bool + Copy,
+    // {
+    //     let mut local_objects: Vec<ObjectReference> = vec![];
+    //     {
+    //         let guard = self.alloc_nursery.lock().unwrap();
+    //         let mut nursery_objects = guard
+    //             .iter()
+    //             .copied()
+    //             .filter(predicate)
+    //             .collect::<Vec<ObjectReference>>();
+    //         local_objects.append(&mut nursery_objects);
+    //     }
+    //     local_objects
+    // }
 
-    #[cfg(feature = "thread_local_gc")]
-    pub fn thread_local_collect_nursery_objects(&self, dead_objects: Vec<ObjectReference>) {
-        let mut guard = self.alloc_nursery.lock().unwrap();
-        for dead_object in dead_objects {
-            guard.remove(&dead_object);
-        }
-    }
+    // #[cfg(feature = "thread_local_gc")]
+    // pub fn thread_local_collect_nursery_objects(&self, dead_objects: Vec<ObjectReference>) {
+    //     let mut guard = self.alloc_nursery.lock().unwrap();
+    //     for dead_object in dead_objects {
+    //         guard.remove(&dead_object);
+    //     }
+    // }
 
-    #[cfg(feature = "thread_local_gc")]
-    pub fn thread_local_collect_objects(&self, dead_objects: Vec<ObjectReference>) {
-        let mut guard = self.to_space.lock().unwrap();
-        for dead_object in dead_objects {
-            guard.remove(&dead_object);
-        }
-    }
+    // #[cfg(feature = "thread_local_gc")]
+    // pub fn thread_local_collect_objects(&self, dead_objects: Vec<ObjectReference>) {
+    //     let mut guard = self.to_space.lock().unwrap();
+    //     for dead_object in dead_objects {
+    //         guard.remove(&dead_object);
+    //     }
+    // }
 
     pub fn copy(&self, object: ObjectReference, is_in_nursery: bool) {
         if is_in_nursery {
             let mut guard = self.collect_nursery.lock().unwrap();
+            #[cfg(feature = "thread_local_gc")]
+            {
+                if !crate::util::public_bit::is_public::<VM>(object) {}
+            }
             debug_assert!(
                 guard.contains(&object),
                 "copy source object ({}) must be in collect_nursery",
@@ -153,7 +161,7 @@ impl TreadMill {
     }
 }
 
-impl Default for TreadMill {
+impl<VM: VMBinding> Default for TreadMill<VM> {
     fn default() -> Self {
         Self::new()
     }

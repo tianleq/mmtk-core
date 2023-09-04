@@ -10,7 +10,8 @@ use crate::policy::gc_work::TraceKind;
 use crate::scheduler::gc_work::PrepareCollector;
 use crate::scheduler::gc_work::PrepareMutator;
 use crate::scheduler::gc_work::ReleaseCollector;
-use crate::scheduler::gc_work::ReleaseMutator;
+// use crate::scheduler::gc_work::ReleaseMutator;
+
 use crate::util::*;
 use crate::vm::edge_shape::Edge;
 use crate::vm::*;
@@ -22,11 +23,11 @@ pub struct ScheduleThreadlocalCollection(pub VMMutatorThread, pub std::time::Ins
 
 impl<VM: VMBinding> GCWork<VM> for ScheduleThreadlocalCollection {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let mutator_id = VM::VMActivePlan::mutator(self.0).mutator_id;
+        let mutator = VM::VMActivePlan::mutator(self.0);
         worker.gc_start = self.1;
         info!(
             "ScheduleThreadlocalCollection {:?} executed by GC Thread {}",
-            mutator_id,
+            mutator.mutator_id,
             crate::scheduler::worker::current_worker_ordinal().unwrap()
         );
 
@@ -38,7 +39,7 @@ impl<VM: VMBinding> GCWork<VM> for ScheduleThreadlocalCollection {
         mmtk.plan.base().gc_trigger.policy.on_gc_start(mmtk);
         // When this gc thread is executing the local gc, it cannot steal work from others' bucket/queue
         worker.disable_steal();
-        VM::VMCollection::publish_vm_specific_roots(mutator_id);
+        VM::VMCollection::publish_vm_specific_roots(mutator);
         mmtk.plan.schedule_thread_local_collection(self.0, worker);
     }
 }
@@ -65,10 +66,6 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for ThreadlocalPrepare<C> {
     fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
         trace!("Prepare Global");
         let mutator = <C::VM as VMBinding>::VMActivePlan::mutator(self.tls);
-        // We assume this is the only running work packet that accesses plan at the point of execution
-        #[allow(clippy::cast_ref_to_mut)]
-        let plan_mut: &mut C::PlanType = unsafe { &mut *(self.plan as *const _ as *mut _) };
-        plan_mut.thread_local_prepare(mutator.mutator_id);
 
         PrepareMutator::<C::VM>::new(mutator).do_work(worker, mmtk);
 
@@ -96,24 +93,12 @@ impl<C: GCWorkContext> ThreadlocalRelease<C> {
 
 impl<C: GCWorkContext + 'static> GCWork<C::VM> for ThreadlocalRelease<C> {
     fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
-        trace!("Release Thread-loal");
+        trace!("Thread local Release");
         let mutator = <C::VM as VMBinding>::VMActivePlan::mutator(self.tls);
-        self.plan.base().gc_trigger.policy.on_gc_release(mmtk);
-
-        // We assume this is the only running work packet that accesses plan at the point of execution
-        #[allow(clippy::cast_ref_to_mut)]
-        let plan_mut: &mut C::PlanType = unsafe { &mut *(self.plan as *const _ as *mut _) };
-        let works = plan_mut.thread_local_release(mutator.mutator_id);
-        for mut w in works {
-            w.do_work(worker, mmtk);
-        }
-
-        ReleaseMutator::<C::VM>::new(mutator).do_work(worker, mmtk);
-
-        // for w in &mmtk.scheduler.worker_group.workers_shared {
-        //     let result = w.designated_work.push(Box::new(ReleaseCollector));
-        //     debug_assert!(result.is_ok());
-        // }
+        // self.plan.base().gc_trigger.policy.on_gc_release(mmtk);
+        // ThreadlocalReleaseMutator::<C::VM>::new(mutator).do_work(worker, mmtk);
+        trace!("Release Mutator");
+        mutator.release(worker.tls);
         ReleaseCollector.do_work(worker, mmtk);
     }
 }
@@ -133,18 +118,13 @@ impl<VM: VMBinding> GCWork<VM> for EndOfThreadLocalGC {
             self.elapsed.as_millis()
         );
 
-        // We assume this is the only running work packet that accesses plan at the point of execution
-        #[allow(clippy::cast_ref_to_mut)]
-        let plan_mut: &mut dyn Plan<VM = VM> = unsafe { &mut *(&*mmtk.plan as *const _ as *mut _) };
-        plan_mut.end_of_thread_local_gc(self.tls, worker.tls);
-
         #[cfg(feature = "extreme_assertions")]
         if crate::util::edge_logger::should_check_duplicate_edges(&*mmtk.plan) {
             // reset the logging info at the end of each GC
             mmtk.edge_logger.reset();
         }
 
-        mmtk.plan.base().set_gc_status(GcStatus::NotInGC);
+        // mmtk.plan.base().set_gc_status(GcStatus::NotInGC);
 
         // Reset the triggering information.
         mmtk.plan.base().reset_collection_trigger();
@@ -258,8 +238,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ThreadlocalScanStackRoot<E> {
             crate::scheduler::worker::current_worker_ordinal().unwrap()
         );
 
-        let base = &mmtk.plan.base();
-        // let mutators = <E::VM as VMBinding>::VMActivePlan::number_of_mutators();
+        // let base = &mmtk.plan.base();
         let factory =
             ThreadlocalProcessEdgesWorkRootsWorkFactory::<E>::new(mmtk, self.0.mutator_tls);
         <E::VM as VMBinding>::VMScanning::thread_local_scan_roots_of_mutator_threads(
@@ -269,13 +248,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ThreadlocalScanStackRoot<E> {
         );
         self.0.flush();
 
-        // if mmtk.plan.base().inform_stack_scanned(mutators) {
-        //     <E::VM as VMBinding>::VMScanning::notify_initial_thread_scan_complete(
-        //         false, worker.tls,
-        //     );
-        //     base.set_gc_status(GcStatus::GcProper);
-        // }
-        base.set_gc_status(GcStatus::GcProper);
+        // base.set_gc_status(GcStatus::GcProper);
     }
 }
 
@@ -293,6 +266,7 @@ impl<C: GCWorkContext> ThreadlocalSentinel<C> {
 impl<C: GCWorkContext + 'static> GCWork<C::VM> for ThreadlocalSentinel<C> {
     fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
         trace!("Thread local Sentinel");
+        #[cfg(debug_assertions)]
         info!(
             "ThreadlocalSentinel executed by GC Thread {}",
             crate::scheduler::worker::current_worker_ordinal().unwrap()

@@ -32,7 +32,7 @@ pub trait SFT {
     }
 
     /// Is the object live, determined by the policy?
-    fn is_live(&self, object: ObjectReference) -> bool;
+    fn is_live(&self, object: ObjectReference) -> bool; // This has an impact on thread-local-gc, as public objects are conservatively treated as live during a local gc
 
     /// Is the object reachable, determined by the policy?
     /// Note: Objects in ImmortalSpace may have `is_live = true` but are actually unreachable.

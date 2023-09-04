@@ -115,7 +115,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         worker: &mut GCWorker<Self::VM>,
     ) {
         self.base().set_collection_kind::<Self>(self);
-        self.base().set_gc_status(GcStatus::GcPrepare);
+        // self.base().set_gc_status(GcStatus::GcPrepare);
         Self::schedule_immix_thread_local_collection::<
             Immix<VM>,
             ImmixGCWorkContext<VM, TRACE_THREAD_LOCAL_FAST>,
@@ -130,19 +130,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     fn prepare(&mut self, tls: VMWorkerThread) {
         self.common.prepare(tls, true);
         self.immix_space.prepare(true);
-    }
-
-    #[cfg(feature = "thread_local_gc")]
-    fn thread_local_prepare(&mut self, mutator_id: u32) {
-        self.common.thread_local_prepare(mutator_id);
-        self.immix_space.thread_local_prepare(mutator_id);
-    }
-
-    #[cfg(feature = "thread_local_gc")]
-    fn thread_local_release(&mut self, mutator_id: u32) -> Vec<Box<dyn GCWork<VM>>> {
-        // at the moment, thread-local gc only reclaiming immix space
-        self.common.thread_local_release(mutator_id);
-        self.immix_space.thread_local_release(mutator_id)
     }
 
     fn release(&mut self, tls: VMWorkerThread) {

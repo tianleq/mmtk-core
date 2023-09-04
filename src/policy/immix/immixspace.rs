@@ -44,7 +44,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     /// A list of all reusable blocks
     pub reusable_blocks: ReusableBlockPool,
     /// Defrag utilities
-    pub(super) defrag: Defrag,
+    pub defrag: Defrag,
     /// How many lines have been consumed since last GC?
     lines_consumed: AtomicUsize,
     /// Object mark state
@@ -527,45 +527,45 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
     }
 
-    #[cfg(feature = "thread_local_gc")]
-    pub fn thread_local_release(&mut self, mutator_id: u32) -> Vec<Box<dyn GCWork<VM>>> {
-        if !super::BLOCK_ONLY {
-            self.line_unavail_state.store(
-                self.line_mark_state.load(Ordering::Acquire),
-                Ordering::Release,
-            );
-            // Clear reusable blocks list
-            self.reusable_blocks.reset();
-        }
-        // Sweep chunks and blocks
-        let work_packets = self.generate_thread_local_sweep_tasks(mutator_id);
+    // #[cfg(feature = "thread_local_gc")]
+    // pub fn thread_local_release(&mut self, mutator_id: u32) -> Vec<Box<dyn GCWork<VM>>> {
+    //     if !super::BLOCK_ONLY {
+    //         self.line_unavail_state.store(
+    //             self.line_mark_state.load(Ordering::Acquire),
+    //             Ordering::Release,
+    //         );
+    //         // Clear reusable blocks list
+    //         self.reusable_blocks.reset();
+    //     }
+    //     // Sweep chunks and blocks
+    //     let work_packets = self.generate_thread_local_sweep_tasks(mutator_id);
 
-        self.lines_consumed.store(0, Ordering::Relaxed);
+    //     self.lines_consumed.store(0, Ordering::Relaxed);
 
-        work_packets
-    }
+    //     work_packets
+    // }
 
-    #[cfg(feature = "thread_local_gc")]
-    fn generate_thread_local_sweep_tasks(&self, mutator_id: u32) -> Vec<Box<dyn GCWork<VM>>> {
-        self.defrag.mark_histograms.lock().clear();
-        // # Safety: ImmixSpace reference is always valid within this collection cycle.
-        let space = unsafe { &*(self as *const Self) };
-        let epilogue = Arc::new(FlushPageResource {
-            space,
-            counter: AtomicUsize::new(0),
-        });
+    // #[cfg(feature = "thread_local_gc")]
+    // fn generate_thread_local_sweep_tasks(&self, mutator_id: u32) -> Vec<Box<dyn GCWork<VM>>> {
+    //     self.defrag.mark_histograms.lock().clear();
+    //     // # Safety: ImmixSpace reference is always valid within this collection cycle.
+    //     let space = unsafe { &*(self as *const Self) };
+    //     let epilogue = Arc::new(FlushPageResource {
+    //         space,
+    //         counter: AtomicUsize::new(0),
+    //     });
 
-        let tasks = self.chunk_map.generate_tasks(|chunk| {
-            Box::new(ThreadLocalSweepChunk {
-                space,
-                chunk,
-                mutator_id,
-                epilogue: epilogue.clone(),
-            })
-        });
-        epilogue.counter.store(tasks.len(), Ordering::SeqCst);
-        tasks
-    }
+    //     let tasks = self.chunk_map.generate_tasks(|chunk| {
+    //         Box::new(ThreadLocalSweepChunk {
+    //             space,
+    //             chunk,
+    //             mutator_id,
+    //             epilogue: epilogue.clone(),
+    //         })
+    //     });
+    //     epilogue.counter.store(tasks.len(), Ordering::SeqCst);
+    //     tasks
+    // }
 
     /// Generate chunk sweep tasks
     fn generate_sweep_tasks(&self) -> Vec<Box<dyn GCWork<VM>>> {
@@ -771,12 +771,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         queue: &mut impl ObjectQueue,
         object: ObjectReference,
     ) -> ObjectReference {
-        #[cfg(feature = "global_alloc_bit")]
-        debug_assert!(
-            crate::util::alloc_bit::is_alloced::<VM>(object),
-            "{:x}: alloc bit not set",
-            object
-        );
         if crate::util::public_bit::is_public::<VM>(object) {
             debug_assert!(
                 Block::containing::<VM>(object).is_block_published(),
@@ -1242,52 +1236,53 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
 }
 
 /// Chunk sweeping work packet.
-struct ThreadLocalSweepChunk<VM: VMBinding> {
-    space: &'static ImmixSpace<VM>,
-    chunk: Chunk,
-    mutator_id: u32,
-    /// A destructor invoked when all `SweepChunk` packets are finished.
-    epilogue: Arc<FlushPageResource<VM>>,
-}
+// struct ThreadLocalSweepChunk<VM: VMBinding> {
+//     space: &'static ImmixSpace<VM>,
+//     chunk: Chunk,
+//     mutator_id: u32,
+//     /// A destructor invoked when all `SweepChunk` packets are finished.
+//     epilogue: Arc<FlushPageResource<VM>>,
+// }
 
-impl<VM: VMBinding> GCWork<VM> for ThreadLocalSweepChunk<VM> {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        let mut histogram = self.space.defrag.new_histogram();
+// impl<VM: VMBinding> GCWork<VM> for ThreadLocalSweepChunk<VM> {
+//     fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+//         let mut histogram = self.space.defrag.new_histogram();
 
-        if self.space.chunk_map.get(self.chunk) == ChunkState::Allocated {
-            let line_mark_state = if super::BLOCK_ONLY {
-                None
-            } else {
-                Some(self.space.line_mark_state.load(Ordering::Acquire))
-            };
+//         if self.space.chunk_map.get(self.chunk) == ChunkState::Allocated {
+//             let line_mark_state = if super::BLOCK_ONLY {
+//                 None
+//             } else {
+//                 Some(self.space.line_mark_state.load(Ordering::Acquire))
+//             };
 
-            // number of allocated blocks.
-            let mut allocated_blocks = 0;
-            let blocks = self
-                .chunk
-                .iter_region::<Block>()
-                .filter(|block| block.get_state() != BlockState::Unallocated)
-                // .filter(|block| block.owner() == self.mutator_id)
-                .collect::<Vec<Block>>();
+//             // number of allocated blocks.
+//             let mut allocated_blocks = 0;
+//             let blocks: Vec<Block> = self
+//                 .chunk
+//                 .iter_region::<Block>()
+//                 .filter(|block| block.get_state() != BlockState::Unallocated)
+//                 .collect::<Vec<Block>>();
+//             let mark_histogram = &mut histogram;
+//             // let mut thread_local_marked_block = 0;
+//             for block in blocks {
+//                 if block.owner() != self.mutator_id {
+//                     allocated_blocks += 1
+//                 } else if block.can_sweep(true, self.space, mark_histogram, line_mark_state) {
+//                     block.thread_local_sweep(self.space, mark_histogram, line_mark_state);
+//                 } else {
+//                     allocated_blocks += 1;
+//                 }
+//             }
 
-            // let mut thread_local_marked_block = 0;
-            for block in blocks {
-                if block.owner() != self.mutator_id {
-                    allocated_blocks += 1
-                } else if !block.thread_local_sweep(self.space, &mut histogram, line_mark_state) {
-                    allocated_blocks += 1;
-                }
-            }
-
-            // Set this chunk as free if there is not live blocks.
-            if allocated_blocks == 0 {
-                self.space.chunk_map.set(self.chunk, ChunkState::Free)
-            }
-        }
-        // self.space.defrag.add_completed_mark_histogram(histogram);
-        self.epilogue.finish_one_work_packet();
-    }
-}
+//             // Set this chunk as free if there is not live blocks.
+//             if allocated_blocks == 0 {
+//                 self.space.chunk_map.set(self.chunk, ChunkState::Free)
+//             }
+//         }
+//         // self.space.defrag.add_completed_mark_histogram(histogram);
+//         self.epilogue.finish_one_work_packet();
+//     }
+// }
 
 /// Count number of remaining work pacets, and flush page resource if all packets are finished.
 struct FlushPageResource<VM: VMBinding> {
@@ -1333,7 +1328,16 @@ impl<VM: VMBinding> PolicyCopyContext for ImmixCopyContext<VM> {
         align: usize,
         offset: usize,
     ) -> Address {
-        self.allocator.alloc(bytes, align, offset)
+        #[cfg(not(feature = "thread_local_gc"))]
+        return self.allocator.alloc(bytes, align, offset);
+        #[cfg(feature = "thread_local_gc")]
+        {
+            // If thread local gc is enabled, objects can only lives in a block of the same owner
+            let mutator_id = Block::containing::<VM>(_original).owner();
+            return self
+                .allocator
+                .alloc_as_mutator(mutator_id, bytes, align, offset);
+        }
     }
     fn post_copy(&mut self, obj: ObjectReference, bytes: usize) {
         self.get_space().post_copy(obj, bytes)

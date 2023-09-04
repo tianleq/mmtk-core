@@ -16,7 +16,7 @@ use crate::vm::*;
 #[repr(C)]
 pub struct ImmixAllocator<VM: VMBinding> {
     pub tls: VMThread,
-    pub mutator_id: u32,
+    mutator_id: u32,
     /// Bump pointer
     cursor: Address,
     /// Limit for bump pointer
@@ -88,6 +88,49 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 self.limit
             );
             result
+        }
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn thread_local_release(&mut self, thread_local_gc_active: bool) {
+        use crate::policy::immix::block::BlockState;
+
+        let mut histogram = self.space.defrag.new_histogram();
+        let line_mark_state = if crate::policy::immix::BLOCK_ONLY {
+            None
+        } else {
+            Some(self.space.line_mark_state.load(atomic::Ordering::Acquire))
+        };
+        let mut current = self.block_header;
+        let mark_hisogram = &mut histogram;
+        while let Some(block) = current {
+            if block.can_sweep(
+                thread_local_gc_active,
+                self.space,
+                mark_hisogram,
+                line_mark_state,
+            ) {
+                // block will be reclaimed, need to remove it from the list
+                current = self.remove_block_from_list(block);
+                if thread_local_gc_active {
+                    #[cfg(debug_assertions)]
+                    info!("A block has been released in a local gc");
+                    block.thread_local_sweep(self.space, mark_hisogram, line_mark_state)
+                }
+            } else {
+                current = self.next_block(block);
+            }
+        }
+        // verify thread local block list
+        #[cfg(debug_assertions)]
+        {
+            let mut current = self.block_header;
+            while let Some(block) = current {
+                debug_assert!(
+                    block.is_block_published() || block.get_state() == BlockState::Marked
+                );
+                current = self.next_block(block);
+            }
         }
     }
 }
@@ -197,9 +240,28 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    fn alloc_local(&mut self, _context: u32, size: usize, align: usize, offset: usize) -> Address {
-        // TODO fix this with the correct semantic
-        self.alloc(size, align, offset)
+    /// This function will maintain the invariant that an object can only lives in
+    /// a block allocated by its owner
+    fn alloc_as_mutator(
+        &mut self,
+        mutator_id: u32,
+        size: usize,
+        align: usize,
+        offset: usize,
+    ) -> Address {
+        // set the mutator id so that if new pages are acquired,
+        // they are associated with the correct mutator
+        self.mutator_id = mutator_id;
+
+        let rtn = self.alloc(size, align, offset);
+        debug_assert!(
+            mutator_id == Block::from_unaligned_address(rtn).owner(),
+            "mutator_id: {} != block owner: {}",
+            mutator_id,
+            Block::from_unaligned_address(rtn).owner()
+        );
+
+        rtn
     }
 }
 
@@ -349,12 +411,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 #[cfg(feature = "thread_local_gc")]
                 {
                     block.set_owner(self.mutator_id);
-                    // maintain the doubly linked list of blocks allocated by this allocator
-                    if let Some(block_header) = self.block_header {
-                        block_header.add_block_to_list(block);
-                        self.block_header = Some(block);
-                    }
-                    self.block_header = Some(block);
+                    // maintain the doubly linked list of blocks
+                    // allocated by this allocator
+                    self.add_block_to_list(block);
                 }
 
                 if self.request_for_large {
@@ -451,6 +510,74 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 old_lg_limit,
                 new_lg_limit,
             );
+        }
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn add_block_to_list(&mut self, block: Block) {
+        use crate::policy::immix::block::BlockListNode;
+
+        unsafe {
+            if let Some(header) = self.block_header {
+                block.start().store(BlockListNode {
+                    prev: 0,
+                    next: header.start().as_usize(),
+                });
+                header.start().store::<usize>(block.start().as_usize())
+            }
+            // block will be the new header
+            self.block_header = Some(block);
+        }
+    }
+
+    pub fn next_block(&self, block: Block) -> Option<Block> {
+        use crate::policy::immix::block::BlockListNode;
+        unsafe {
+            let node = block.start().load::<BlockListNode>();
+            let next_block_address = Address::from_usize(node.next);
+            if next_block_address.is_zero() {
+                None
+            } else {
+                Some(Block::from_aligned_address(next_block_address))
+            }
+        }
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn remove_block_from_list(&mut self, block: Block) -> Option<Block> {
+        use crate::policy::immix::block::BlockListNode;
+        unsafe {
+            let node = block.start().load::<BlockListNode>();
+            let prev_block_address = Address::from_usize(node.prev);
+            let next_block_address = Address::from_usize(node.next);
+            let rtn: Option<Block> = if next_block_address.is_zero() {
+                None
+            } else {
+                Some(Block::from_aligned_address(next_block_address))
+            };
+
+            // delete the header
+            if block == self.block_header.unwrap() {
+                self.block_header = rtn;
+            }
+
+            if !next_block_address.is_zero() {
+                let next_node = next_block_address.load::<BlockListNode>();
+                next_block_address.store(BlockListNode {
+                    prev: node.prev,
+                    next: next_node.next,
+                });
+            }
+
+            if !prev_block_address.is_zero() {
+                let prev_node = prev_block_address.load::<BlockListNode>();
+                prev_block_address.store(BlockListNode {
+                    prev: prev_node.prev,
+                    next: node.next,
+                });
+            }
+
+            rtn
         }
     }
 }

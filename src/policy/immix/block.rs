@@ -65,9 +65,9 @@ impl BlockState {
 
 #[cfg(feature = "thread_local_gc")]
 #[derive(Debug, Clone, Copy)]
-struct BlockListNode {
-    prev: usize,
-    next: usize,
+pub struct BlockListNode {
+    pub prev: usize,
+    pub next: usize,
 }
 
 /// Data structure to reference an immix block.
@@ -358,15 +358,113 @@ impl Block {
         }
     }
 
-    /// Sweep this block.
-    /// Return true if the block is swept.
-    pub fn thread_local_sweep<VM: VMBinding>(
+    #[cfg(feature = "thread_local_gc")]
+    pub fn can_sweep<VM: VMBinding>(
         &self,
+        thread_local: bool,
         space: &ImmixSpace<VM>,
         mark_histogram: &mut Histogram,
         line_mark_state: Option<u8>,
     ) -> bool {
-        self.sweep_impl(space, mark_histogram, line_mark_state, true)
+        if super::BLOCK_ONLY {
+            match self.get_state() {
+                BlockState::Unmarked => {
+                    #[cfg(feature = "vo_bit")]
+                    vo_bit::helper::on_region_swept::<VM, _>(self, false);
+
+                    if thread_local && self.is_block_published() {
+                        // liveness of public block is unknown during thread-local gc
+                        // so conservatively treat it as live
+                        false
+                    } else {
+                        // true if it is private and not marked by the current GC
+                        // or if the current one is a global gc
+                        true
+                    }
+                }
+                BlockState::Marked => {
+                    #[cfg(feature = "vo_bit")]
+                    vo_bit::helper::on_region_swept::<VM, _>(self, true);
+
+                    // The block is live.
+                    false
+                }
+                // BlockState::Unallocated => unreachable!(),
+                _ => unreachable!(),
+            }
+        } else {
+            // Calculate number of marked lines and holes.
+            let mut marked_lines = 0;
+            let mut holes = 0;
+            let mut prev_line_is_marked = true;
+            let line_mark_state = line_mark_state.unwrap();
+
+            for line in self.lines() {
+                if line.is_marked(line_mark_state) {
+                    marked_lines += 1;
+                    prev_line_is_marked = true;
+                } else {
+                    if prev_line_is_marked {
+                        holes += 1;
+                    }
+
+                    #[cfg(feature = "immix_zero_on_release")]
+                    crate::util::memory::zero(line.start(), Line::BYTES);
+
+                    prev_line_is_marked = false;
+                }
+            }
+
+            if marked_lines == 0 {
+                #[cfg(feature = "vo_bit")]
+                vo_bit::helper::on_region_swept::<VM, _>(self, false);
+                // liveness of public block is unknown during thread-local gc
+                // so conservatively treat it as live
+                if self.is_block_published() {
+                    false
+                } else {
+                    self.clear_owner();
+                    space.release_block(*self);
+                    true
+                }
+            } else {
+                // There are some marked lines. Keep the block live.
+                if marked_lines != Block::LINES {
+                    // There are holes. Mark the block as reusable.
+                    self.set_state(BlockState::Reusable {
+                        unavailable_lines: marked_lines as _,
+                    });
+                    space.reusable_blocks.push(*self)
+                } else {
+                    // Clear mark state.
+                    self.set_state(BlockState::Unmarked);
+                }
+                // Update mark_histogram
+                mark_histogram[holes] += marked_lines;
+                // Record number of holes in block side metadata.
+                self.set_holes(holes);
+
+                #[cfg(feature = "vo_bit")]
+                vo_bit::helper::on_region_swept::<VM, _>(self, true);
+
+                false
+            }
+        }
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn thread_local_sweep<VM: VMBinding>(
+        &self,
+        space: &ImmixSpace<VM>,
+        _mark_histogram: &mut Histogram,
+        _line_mark_state: Option<u8>,
+    ) {
+        if super::BLOCK_ONLY {
+            self.clear_owner();
+            space.release_block(*self);
+        } else {
+            unimplemented!()
+        }
     }
 
     /// Sweep this block.
@@ -393,36 +491,6 @@ impl Block {
     #[cfg(feature = "thread_local_gc")]
     pub fn set_owner(&self, owner: u32) {
         Self::OWNER_TABLE.store_atomic::<u32>(self.start(), owner, Ordering::SeqCst)
-    }
-
-    #[cfg(feature = "thread_local_gc")]
-    pub fn add_block_to_list(&self, block: Self) {
-        unsafe {
-            block.start().store(BlockListNode {
-                prev: 0,
-                next: self.start().as_usize(),
-            });
-            self.start().store::<usize>(block.start().as_usize())
-        }
-    }
-
-    #[cfg(feature = "thread_local_gc")]
-    pub fn remove_block_from_list(&self) {
-        unsafe {
-            let node = self.start().load::<BlockListNode>();
-            let prev_block_address = Address::from_usize(node.prev);
-            let next_block_address = Address::from_usize(node.next);
-            let prev_node = prev_block_address.load::<BlockListNode>();
-            let next_node = next_block_address.load::<BlockListNode>();
-            prev_block_address.store(BlockListNode {
-                prev: prev_node.prev,
-                next: node.next,
-            });
-            next_block_address.store(BlockListNode {
-                prev: node.prev,
-                next: next_node.next,
-            });
-        }
     }
 }
 

@@ -1,9 +1,11 @@
+use std::collections::HashSet;
+
 use crate::plan::Plan;
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::Space;
 use crate::util::alloc::{allocator, Allocator};
-use crate::util::Address;
 use crate::util::{conversions, opaque_pointer::*};
+use crate::util::{Address, ObjectReference};
 use crate::vm::VMBinding;
 
 #[cfg(feature = "thread_local_gc")]
@@ -17,6 +19,7 @@ pub struct LargeObjectAllocator<VM: VMBinding> {
     space: &'static LargeObjectSpace<VM>,
     /// [`Plan`] instance that this allocator instance is associated with.
     plan: &'static dyn Plan<VM = VM>,
+    local_los_objects: Box<HashSet<ObjectReference>>,
 }
 
 impl<VM: VMBinding> Allocator<VM> for LargeObjectAllocator<VM> {
@@ -93,7 +96,12 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
         space: &'static LargeObjectSpace<VM>,
         plan: &'static dyn Plan<VM = VM>,
     ) -> Self {
-        LargeObjectAllocator { tls, space, plan }
+        LargeObjectAllocator {
+            tls,
+            space,
+            plan,
+            local_los_objects: Box::new(HashSet::new()),
+        }
     }
 
     fn alloc_impl(&mut self, size: usize, align: usize, offset: usize) -> Address {
@@ -113,5 +121,46 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
         } else {
             cell
         }
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn add_los_objects(&mut self, object: ObjectReference) {
+        self.local_los_objects.insert(object);
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn remove_los_objects(&mut self, object: ObjectReference) {
+        self.local_los_objects.remove(&object);
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn thread_local_release(&mut self, thread_local_gc_active: bool) {
+        use crate::policy::sft::SFT;
+        let mut live_objects = vec![];
+        if thread_local_gc_active {
+            for object in self.local_los_objects.drain() {
+                if crate::util::public_bit::is_public::<VM>(object) {
+                    continue;
+                } else if self.space.is_live_in_thread_local_gc(object) {
+                    live_objects.push(object);
+                } else {
+                    self.space.thread_local_sweep_large_object(object);
+                }
+            }
+        } else {
+            // This is a global gc, needs to remove dead objects from local los objects set
+            for object in self.local_los_objects.drain() {
+                if crate::util::public_bit::is_public::<VM>(object) {
+                    continue;
+                } else if self.space.is_live(object) {
+                    live_objects.push(object);
+                } else {
+                    // local objects also need to be reclaimed in a global gc
+                    self.space.thread_local_sweep_large_object(object);
+                }
+            }
+        }
+
+        self.local_los_objects.extend(live_objects);
     }
 }

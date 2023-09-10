@@ -144,6 +144,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LargeObjec
     }
 }
 
+#[cfg(feature = "thread_local_gc")]
 impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM>
     for LargeObjectSpace<VM>
 {
@@ -447,6 +448,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         self.treadmill.add_to_treadmill(_object, false);
     }
 
+    #[cfg(feature = "thread_local_gc")]
     pub fn get_object_owner(object: ObjectReference) -> u32 {
         unsafe {
             let mutator_id =

@@ -189,7 +189,7 @@ impl<VM: VMBinding> Plan for GenImmix<VM> {
     fn generational(&self) -> Option<&dyn GenerationalPlan<VM = VM>> {
         Some(self)
     }
-
+    #[cfg(feature = "thread_local_gc")]
     fn publish_object(&self, _object: ObjectReference) {}
 }
 

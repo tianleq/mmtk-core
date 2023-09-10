@@ -195,6 +195,7 @@ impl<VM: VMBinding> Plan for StickyImmix<VM> {
         true
     }
 
+    #[cfg(feature = "thread_local_gc")]
     fn publish_object(&self, _object: crate::util::ObjectReference) {}
 }
 

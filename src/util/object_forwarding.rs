@@ -147,6 +147,33 @@ pub fn thread_local_is_forwarded<VM: VMBinding>(object: ObjectReference) -> bool
     }
 }
 
+#[cfg(feature = "thread_local_gc")]
+/// read the forwarding pointer to the new object.
+///
+/// # Arguments:
+///
+/// * `object`: the forwarded/being_forwarded object.
+/// * `forwarding_bits`: the last state of the forwarding bits before calling this function.
+///
+/// Returns a reference to the new object.
+///
+pub fn thread_local_get_forwarded_object<VM: VMBinding>(
+    object: ObjectReference,
+) -> ObjectReference {
+    #[cfg(debug_assertions)]
+    {
+        let forwarding_bits = get_forwarding_status::<VM>(object);
+        assert!(
+            FORWARDED == forwarding_bits,
+            "Invalid/Corrupted forwarding word {:x} for object {}",
+            forwarding_bits,
+            object,
+        );
+    }
+
+    read_forwarding_pointer::<VM>(object)
+}
+
 /// Return the forwarding bits for a given `ObjectReference`.
 pub fn get_forwarding_status<VM: VMBinding>(object: ObjectReference) -> u8 {
     VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC.load_atomic::<VM, u8>(

@@ -116,6 +116,7 @@ pub trait GCTriggerPolicy<VM: VMBinding>: Sync + Send {
         space: Option<&dyn Space<VM>>,
         plan: &dyn Plan<VM = VM>,
     ) -> bool;
+    #[cfg(feature = "thread_local_gc")]
     /// Is a thread-local GC required now?
     fn is_thread_local_gc_required(
         &self,
@@ -159,6 +160,7 @@ impl<VM: VMBinding> GCTriggerPolicy<VM> for FixedHeapSizeTrigger {
         false
     }
 
+    #[cfg(feature = "thread_local_gc")]
     fn is_thread_local_gc_required(
         &self,
         space_full: bool,
@@ -432,6 +434,7 @@ impl<VM: VMBinding> GCTriggerPolicy<VM> for MemBalancerTrigger {
         self.current_heap_pages.load(Ordering::Relaxed) < self.max_heap_pages
     }
 
+    #[cfg(feature = "thread_local_gc")]
     fn is_thread_local_gc_required(
         &self,
         _space_full: bool,

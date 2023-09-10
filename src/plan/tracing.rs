@@ -81,7 +81,7 @@ pub struct ObjectsClosure<'a, E: ProcessEdgesWork> {
     sources: VectorQueue<ObjectReference>,
     worker: &'a mut GCWorker<E::VM>,
     single_thread: bool,
-    mutator_tls: Option<VMMutatorThread>,
+    _mutator_tls: Option<VMMutatorThread>,
 }
 
 impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
@@ -96,7 +96,7 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
             sources: VectorQueue::new(),
             worker,
             single_thread,
-            mutator_tls,
+            _mutator_tls: mutator_tls,
         }
     }
 
@@ -110,7 +110,7 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
                 #[cfg(not(feature = "debug_publish_object"))]
                 self.worker.add_local_work(
                     WorkBucketStage::Unconstrained,
-                    E::new(buf, false, self.worker.mmtk, tls),
+                    E::new(buf, false, self.worker.mmtk, None),
                 );
                 #[cfg(feature = "debug_publish_object")]
                 {
@@ -120,7 +120,7 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
                     );
                     self.worker.add_local_work(
                         WorkBucketStage::Unconstrained,
-                        E::new(sources, buf, false, self.worker.mmtk, self.mutator_tls),
+                        E::new(sources, buf, false, self.worker.mmtk, self._mutator_tls),
                     );
                 }
             } else {
@@ -188,14 +188,14 @@ impl<'a, E: ProcessEdgesWork> Drop for ObjectsClosure<'a, E> {
 }
 
 pub struct MarkingObjectPublicClosure<VM: crate::vm::VMBinding> {
-    mmtk: &'static MMTK<VM>,
+    _mmtk: &'static MMTK<VM>,
     edge_buffer: std::collections::VecDeque<VM::VMEdge>,
 }
 
 impl<VM: crate::vm::VMBinding> MarkingObjectPublicClosure<VM> {
     pub fn new(mmtk: &'static MMTK<VM>) -> Self {
         MarkingObjectPublicClosure {
-            mmtk,
+            _mmtk: mmtk,
             edge_buffer: std::collections::VecDeque::new(),
         }
     }
@@ -210,7 +210,8 @@ impl<VM: crate::vm::VMBinding> MarkingObjectPublicClosure<VM> {
             if !crate::util::public_bit::is_public::<VM>(object) {
                 // set public bit on the object
                 crate::util::public_bit::set_public_bit::<VM>(object);
-                self.mmtk.plan.publish_object(object);
+                #[cfg(feature = "thread_local_gc")]
+                self._mmtk.plan.publish_object(object);
                 VM::VMScanning::scan_object(
                     crate::util::VMWorkerThread(crate::util::VMThread::UNINITIALIZED),
                     object,

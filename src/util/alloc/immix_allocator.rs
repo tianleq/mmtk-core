@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::sync::Mutex;
+
 use super::allocator::{align_allocation_no_fill, fill_alignment_gap};
 use crate::plan::Plan;
 use crate::policy::immix::block::Block;
@@ -11,6 +14,13 @@ use crate::util::opaque_pointer::VMThread;
 use crate::util::rust_util::unlikely;
 use crate::util::Address;
 use crate::vm::*;
+
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ImmixAllocSemantics {
+    Private = 0,
+    Public = 1,
+}
 
 /// Immix allocator
 #[repr(C)]
@@ -37,8 +47,11 @@ pub struct ImmixAllocator<VM: VMBinding> {
     request_for_large: bool,
     /// Hole-searching cursor
     line: Option<Line>,
+    semantic: Option<ImmixAllocSemantics>,
+    pub local_block_map: Option<Box<HashMap<u32, Vec<Block>>>>,
     // header of the block acquired by this allocator
     block_header: Option<Block>,
+    local_map_lock: Option<Box<Mutex<bool>>>,
 }
 
 impl<VM: VMBinding> ImmixAllocator<VM> {
@@ -144,7 +157,6 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
         self.plan
     }
 
-    #[cfg(feature = "thread_local_gc")]
     fn does_thread_local_allocation(&self) -> bool {
         true
     }
@@ -272,8 +284,11 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         space: Option<&'static dyn Space<VM>>,
         plan: &'static dyn Plan<VM = VM>,
         copy: bool,
+        semantic: Option<ImmixAllocSemantics>,
+        local_block_map: Option<Box<HashMap<u32, Vec<Block>>>>,
+        local_map_lock: Option<Box<Mutex<bool>>>,
     ) -> Self {
-        ImmixAllocator {
+        return ImmixAllocator {
             tls,
             mutator_id,
             space: space.unwrap().downcast_ref::<ImmixSpace<VM>>().unwrap(),
@@ -286,8 +301,11 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             large_limit: Address::ZERO,
             request_for_large: false,
             line: None,
+            semantic,
             block_header: None,
-        }
+            local_block_map,
+            local_map_lock,
+        };
     }
 
     pub fn immix_space(&self) -> &'static ImmixSpace<VM> {
@@ -381,7 +399,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     fn acquire_recyclable_block(&mut self) -> bool {
         match self
             .immix_space()
-            .get_reusable_block(self.copy, self.mutator_id)
+            .get_reusable_block(self.copy, self.mutator_id, self.semantic)
         {
             Some(block) => {
                 trace!("{:?}: acquire_recyclable_block -> {:?}", self.tls, block);
@@ -405,7 +423,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     block.end()
                 );
                 #[cfg(not(feature = "thread_local_gc"))]
-                let block_start_offset = 0;
+                let block_start_offset: usize = 0;
                 #[cfg(feature = "thread_local_gc")]
                 let block_start_offset = Block::BLOCK_LINKED_LIST_BYTES;
                 #[cfg(feature = "thread_local_gc")]
@@ -413,7 +431,40 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     block.set_owner(self.mutator_id);
                     // maintain the doubly linked list of blocks
                     // allocated by this allocator
-                    self.add_block_to_list(block);
+
+                    if let Some(s) = self.semantic {
+                        // This is collector
+                        debug_assert!(
+                            !VM::VMActivePlan::is_mutator(self.tls) && self.mutator_id == 0,
+                            "Only collector thread should reach here"
+                        );
+                        match s {
+                            ImmixAllocSemantics::Public => {
+                                block.publish_block();
+                            }
+                            _ => {}
+                        }
+                        let v = self
+                            .local_block_map
+                            .as_deref_mut()
+                            .unwrap()
+                            .get_mut(&self.mutator_id);
+                        if let Some(blocks) = v {
+                            blocks.push(block);
+                        } else {
+                            self.local_block_map
+                                .as_deref_mut()
+                                .unwrap()
+                                .insert(self.mutator_id, vec![block]);
+                        }
+                    } else {
+                        // This is a mutator
+                        debug_assert!(
+                            VM::VMActivePlan::is_mutator(self.tls),
+                            "Only mutator thread should reach here"
+                        );
+                        self.add_block_to_list(block);
+                    }
                 }
 
                 if self.request_for_large {
@@ -530,6 +581,31 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         }
     }
 
+    #[cfg(feature = "thread_local_gc")]
+    // This method should be called by collletor thread only
+    pub fn add_blocks_to_list(&mut self, blocks: &Vec<Block>) {
+        use crate::policy::immix::block::BlockListNode;
+        debug_assert!(
+            !VM::VMActivePlan::is_mutator(self.tls) && self.mutator_id == 0,
+            "Only collector thread should call add_blocks_to_list"
+        );
+        let _guard = self.local_map_lock.as_ref().unwrap().lock();
+        for &block in blocks {
+            unsafe {
+                if let Some(header) = self.block_header {
+                    block.start().store(BlockListNode {
+                        prev: 0,
+                        next: header.start().as_usize(),
+                    });
+                    header.start().store::<usize>(block.start().as_usize())
+                }
+                // block will be the new header
+                self.block_header = Some(block);
+            }
+        }
+    }
+
+    #[cfg(feature = "thread_local_gc")]
     pub fn next_block(&self, block: Block) -> Option<Block> {
         use crate::policy::immix::block::BlockListNode;
         unsafe {

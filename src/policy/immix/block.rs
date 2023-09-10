@@ -117,6 +117,7 @@ impl Block {
     pub const PUBLICATION_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_PUBLICATION;
 
+    #[cfg(feature = "thread_local_gc")]
     pub const BLOCK_LINKED_LIST_BYTES: usize = std::mem::size_of::<BlockListNode>();
 
     /// Get the chunk containing the block.
@@ -237,12 +238,14 @@ impl Block {
                             false
                         } else {
                             // Release the block if it is private and not marked by the current GC.
+                            #[cfg(feature = "thread_local_gc")]
                             self.clear_owner();
                             space.release_block(*self);
                             true
                         }
                     } else {
                         // Release the block if it is allocated but not marked by the current GC.
+                        #[cfg(feature = "thread_local_gc")]
                         self.clear_owner();
                         self.reset_publication();
                         space.release_block(*self);
@@ -291,12 +294,14 @@ impl Block {
                     if self.is_block_published() {
                         false
                     } else {
+                        #[cfg(feature = "thread_local_gc")]
                         self.clear_owner();
                         space.release_block(*self);
                         true
                     }
                 } else {
                     // Release the block if non of its lines are marked.
+                    #[cfg(feature = "thread_local_gc")]
                     self.clear_owner();
                     self.reset_publication();
                     space.release_block(*self);

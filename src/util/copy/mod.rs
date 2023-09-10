@@ -169,6 +169,26 @@ impl<VM: VMBinding> GCWorkerCopyContext<VM> {
         }
     }
 
+    #[cfg(feature = "thread_local_gc")]
+    /// Release the copying allocators.
+    pub fn thread_local_release(&mut self) {
+        // Delegate to release() for each policy copy context
+        for (_, selector) in self.config.copy_mapping.iter() {
+            match selector {
+                CopySelector::CopySpace(index) => {
+                    unsafe { self.copy[*index as usize].assume_init_mut() }.release()
+                }
+                CopySelector::Immix(index) => {
+                    unsafe { self.immix[*index as usize].assume_init_mut() }.release()
+                }
+                CopySelector::ImmixHybrid(index) => {
+                    unsafe { self.immix_hybrid[*index as usize].assume_init_mut() }.release()
+                }
+                CopySelector::Unused => {}
+            }
+        }
+    }
+
     /// Create a GCWorkerCopyContext based on the configuration for a copying plan.
     ///
     /// Arguments:

@@ -36,7 +36,6 @@ impl<VM: VMBinding> Allocator<VM> for LargeObjectAllocator<VM> {
         self.space as &'static dyn Space<VM>
     }
 
-    #[cfg(feature = "thread_local_gc")]
     fn does_thread_local_allocation(&self) -> bool {
         false
     }

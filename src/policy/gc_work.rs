@@ -38,6 +38,7 @@ pub trait PolicyTraceObject<VM: VMBinding> {
     fn may_move_objects<const KIND: TraceKind>() -> bool;
 }
 
+#[cfg(feature = "thread_local_gc")]
 pub trait PolicyThreadlocalTraceObject<VM: VMBinding> {
     /// Trace object in the policy. If the policy copies objects, we should
     /// expect `copy` to be a `Some` value.

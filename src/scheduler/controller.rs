@@ -8,6 +8,7 @@ use std::sync::Arc;
 use crate::plan::gc_requester::GCRequester;
 use crate::scheduler::gc_work::{EndOfGC, ScheduleCollection};
 use crate::scheduler::single_thread_gc_work::ScheduleSingleThreadCollection;
+#[cfg(feature = "thread_local_gc")]
 use crate::scheduler::thread_local_gc_work::ScheduleThreadlocalCollection;
 use crate::scheduler::{GCWork, WorkBucketStage};
 use crate::util::{VMMutatorThread, VMWorkerThread};

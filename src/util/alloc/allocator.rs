@@ -132,7 +132,6 @@ pub trait Allocator<VM: VMBinding>: Downcast {
     /// Return the [`Plan`] instance that this allocator instance is associated with.
     fn get_plan(&self) -> &'static dyn Plan<VM = VM>;
 
-    #[cfg(feature = "thread_local_gc")]
     /// Return if this allocator can do thread local allocation. If an allocator does not do thread
     /// local allocation, each allocation will go to slowpath and will have a check for GC polls.
     fn does_thread_local_allocation(&self) -> bool;

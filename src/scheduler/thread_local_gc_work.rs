@@ -11,7 +11,6 @@ use crate::scheduler::gc_work::PrepareCollector;
 use crate::scheduler::gc_work::PrepareMutator;
 use crate::scheduler::gc_work::ReleaseCollector;
 // use crate::scheduler::gc_work::ReleaseMutator;
-
 use crate::util::*;
 use crate::vm::edge_shape::Edge;
 use crate::vm::*;
@@ -99,7 +98,10 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for ThreadlocalRelease<C> {
         // ThreadlocalReleaseMutator::<C::VM>::new(mutator).do_work(worker, mmtk);
         trace!("Release Mutator");
         mutator.release(worker.tls);
-        ReleaseCollector.do_work(worker, mmtk);
+        // Mutators need to be aware of all memory allocated by the collector
+        // ReleaseCollector.do_work(worker, mmtk);
+        trace!("Release Collector");
+        worker.get_copy_context_mut().thread_local_release();
     }
 }
 
@@ -330,6 +332,7 @@ impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIN
             plan,
             base,
             tls: tls.unwrap(),
+            mutator_id: 0,
         }
     }
     #[cfg(feature = "debug_publish_object")]

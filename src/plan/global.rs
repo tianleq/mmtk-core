@@ -404,14 +404,6 @@ pub trait Plan: 'static + Sync + Downcast {
     fn get_object_owner(&self, _object: ObjectReference) -> Option<u32> {
         Option::None
     }
-
-    // #[cfg(feature = "thread_local_gc")]
-    // fn thread_local_prepare(&mut self, _mutator_id: u32) {}
-
-    // #[cfg(feature = "thread_local_gc")]
-    // fn thread_local_release(&mut self, _mutator_id: u32) -> Vec<Box<dyn GCWork<Self::VM>>> {
-    //     Vec::new()
-    // }
 }
 
 impl_downcast!(Plan assoc VM);
@@ -1001,6 +993,7 @@ impl<VM: VMBinding> BasePlan<VM> {
     }
 }
 
+#[cfg(feature = "thread_local_gc")]
 impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for BasePlan<VM> {
     fn thread_local_trace_object<Q: ObjectQueue, const KIND: TraceKind>(
         &self,
@@ -1160,8 +1153,6 @@ impl<VM: VMBinding> CommonPlan<VM> {
         }
         if self.los.in_space(object) {
             trace!("publish_object: object in los");
-            #[cfg(debug_assertions)]
-            info!("publish_object: object in los");
             self.los.publish_object(object);
             return;
         }
@@ -1174,6 +1165,7 @@ impl<VM: VMBinding> CommonPlan<VM> {
     }
 }
 
+#[cfg(feature = "thread_local_gc")]
 impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
     fn thread_local_trace_object<Q: ObjectQueue, const KIND: TraceKind>(
         &self,
@@ -1236,7 +1228,9 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
             || <BasePlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_may_move_objects::<KIND>()
     }
 }
-use crate::policy::gc_work::{PolicyThreadlocalTraceObject, TraceKind};
+#[cfg(feature = "thread_local_gc")]
+use crate::policy::gc_work::PolicyThreadlocalTraceObject;
+use crate::policy::gc_work::TraceKind;
 use crate::vm::VMBinding;
 
 /// A plan that uses `PlanProcessEdges` needs to provide an implementation for this trait.
@@ -1273,6 +1267,7 @@ pub trait PlanTraceObject<VM: VMBinding> {
     fn may_move_objects<const KIND: TraceKind>() -> bool;
 }
 
+#[cfg(feature = "thread_local_gc")]
 pub trait PlanThreadlocalTraceObject<VM: VMBinding> {
     /// Trace objects in the plan. Generally one needs to figure out
     /// which space an object resides in, and invokes the corresponding policy

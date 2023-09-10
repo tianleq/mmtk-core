@@ -85,6 +85,7 @@ impl<VM: VMBinding> Plan for PageProtect<VM> {
         &self.common
     }
 
+    #[cfg(feature = "thread_local_gc")]
     fn publish_object(&self, _object: crate::util::ObjectReference) {}
 }
 

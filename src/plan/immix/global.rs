@@ -9,15 +9,18 @@ use crate::plan::global::GcStatus;
 use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
+#[cfg(feature = "thread_local_gc")]
 use crate::plan::PlanThreadlocalTraceObject;
+#[cfg(feature = "thread_local_gc")]
 use crate::policy::gc_work::PolicyThreadlocalTraceObject;
 use crate::policy::immix::ImmixSpaceArgs;
-use crate::policy::immix::{
-    TRACE_KIND_DEFRAG, TRACE_KIND_FAST, TRACE_THREAD_LOCAL_DEFRAG, TRACE_THREAD_LOCAL_FAST,
-};
+use crate::policy::immix::{TRACE_KIND_DEFRAG, TRACE_KIND_FAST};
 use crate::policy::space::Space;
+#[cfg(feature = "thread_local_gc")]
 use crate::scheduler::thread_local_gc_work::ScanMutator;
+#[cfg(feature = "thread_local_gc")]
 use crate::scheduler::thread_local_gc_work::ThreadlocalPrepare;
+#[cfg(feature = "thread_local_gc")]
 use crate::scheduler::thread_local_gc_work::ThreadlocalSentinel;
 use crate::scheduler::*;
 use crate::util::alloc::allocators::AllocatorSelector;
@@ -25,7 +28,9 @@ use crate::util::copy::*;
 use crate::util::heap::VMRequest;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSanity;
+#[cfg(feature = "thread_local_gc")]
 use crate::util::ObjectReference;
+#[cfg(feature = "thread_local_gc")]
 use crate::util::VMMutatorThread;
 use crate::vm::VMBinding;
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
@@ -109,11 +114,14 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         >(self, &self.immix_space, scheduler)
     }
 
+    #[cfg(feature = "thread_local_gc")]
     fn schedule_thread_local_collection(
         &'static self,
         tls: VMMutatorThread,
         worker: &mut GCWorker<Self::VM>,
     ) {
+        use crate::policy::immix::{TRACE_THREAD_LOCAL_DEFRAG, TRACE_THREAD_LOCAL_FAST};
+
         self.base().set_collection_kind::<Self>(self);
         // self.base().set_gc_status(GcStatus::GcPrepare);
         Self::schedule_immix_thread_local_collection::<
@@ -159,6 +167,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         &self.common
     }
 
+    #[cfg(feature = "thread_local_gc")]
     fn publish_object(&self, object: ObjectReference) {
         if self.immix_space.in_space(object) {
             self.immix_space.publish_object(object);
@@ -167,6 +176,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         }
     }
 
+    #[cfg(feature = "thread_local_gc")]
     fn get_object_owner(&self, _object: ObjectReference) -> Option<u32> {
         if self.immix_space.in_space(_object) {
             return Some(self.immix_space.get_object_owner(_object));
@@ -248,6 +258,7 @@ impl<VM: VMBinding> Immix<VM> {
         self.last_gc_was_defrag.store(defrag, order)
     }
 
+    #[cfg(feature = "thread_local_gc")]
     pub(crate) fn schedule_immix_thread_local_collection<
         PlanType: Plan<VM = VM>,
         FastContext: 'static + GCWorkContext<VM = VM, PlanType = PlanType>,
@@ -307,6 +318,7 @@ impl<VM: VMBinding> Immix<VM> {
     }
 }
 
+#[cfg(feature = "thread_local_gc")]
 impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for Immix<VM> {
     fn thread_local_post_scan_object(&self, object: ObjectReference) {
         if self.immix_space.in_space(object) {

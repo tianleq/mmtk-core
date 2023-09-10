@@ -9,12 +9,13 @@ use crate::plan::mutator_context::MutatorConfig;
 use crate::plan::mutator_context::ReservedAllocators;
 use crate::plan::AllocationSemantics;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
-use crate::util::alloc::{ImmixAllocator, LargeObjectAllocator};
+use crate::util::alloc::ImmixAllocator;
 use crate::util::opaque_pointer::{VMMutatorThread, VMWorkerThread};
 use crate::vm::VMBinding;
 use crate::MMTK;
 use enum_map::EnumMap;
 
+#[cfg(feature = "thread_local_gc")]
 const THREAD_LOCAL_GC_ACTIVE: u32 = 1;
 
 pub fn immix_mutator_prepare<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {
@@ -29,7 +30,10 @@ pub fn immix_mutator_prepare<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMW
 }
 
 pub fn immix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {
-    let allocators = mutator.allocators.borrow_mut();
+    #[cfg(feature = "thread_local_gc")]
+    use crate::util::alloc::LargeObjectAllocator;
+    let allocators: &mut Allocators<VM> = mutator.allocators.borrow_mut();
+    #[cfg(feature = "thread_local_gc")]
     let thread_local_gc_active = mutator.thread_local_gc_status == THREAD_LOCAL_GC_ACTIVE;
     {
         let immix_allocator = unsafe {

@@ -5,7 +5,6 @@ use crate::plan::global::Plan;
 use crate::plan::AllocationSemantics;
 use crate::policy::space::Space;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
-use crate::util::alloc::LargeObjectAllocator;
 use crate::util::{Address, ObjectReference};
 use crate::util::{VMMutatorThread, VMWorkerThread};
 use crate::vm::VMBinding;
@@ -106,6 +105,8 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         _bytes: usize,
         allocator: AllocationSemantics,
     ) {
+        #[cfg(feature = "thread_local_gc")]
+        use crate::util::alloc::LargeObjectAllocator;
         let space = unsafe {
             self.allocators
                 .get_allocator_mut(self.config.allocator_mapping[allocator])

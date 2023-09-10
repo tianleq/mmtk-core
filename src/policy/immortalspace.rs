@@ -118,6 +118,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmortalSp
     }
 }
 
+#[cfg(feature = "thread_local_gc")]
 impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for ImmortalSpace<VM> {
     fn thread_local_trace_object<Q: ObjectQueue, const KIND: super::gc_work::TraceKind>(
         &self,

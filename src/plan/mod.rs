@@ -25,6 +25,7 @@ pub(crate) use global::create_plan;
 pub use global::AllocationSemantics;
 pub(crate) use global::GcStatus;
 pub use global::Plan;
+#[cfg(feature = "thread_local_gc")]
 pub(crate) use global::PlanThreadlocalTraceObject;
 pub(crate) use global::PlanTraceObject;
 #[cfg(feature = "vm_space")] // This is used for creating VM space

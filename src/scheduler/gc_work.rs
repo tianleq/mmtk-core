@@ -125,6 +125,7 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
             mmtk.scheduler.work_buckets[WorkBucketStage::Release]
                 .add(ReleaseMutator::<C::VM>::new(mutator, counter.clone()));
         }
+
         for w in &mmtk.scheduler.worker_group.workers_shared {
             let result = w.designated_work.push(Box::new(ReleaseCollector));
             debug_assert!(result.is_ok());

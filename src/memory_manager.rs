@@ -18,6 +18,9 @@ use crate::plan::{Mutator, MutatorContext};
 use crate::scheduler::WorkBucketStage;
 use crate::scheduler::{GCController, GCWork, GCWorker};
 use crate::util::alloc::allocators::AllocatorSelector;
+use crate::util::alloc::BumpAllocator;
+use crate::util::alloc::ImmixAllocator;
+use crate::util::alloc::LargeObjectAllocator;
 use crate::util::constants::{LOG_BYTES_IN_PAGE, MIN_OBJECT_SIZE};
 use crate::util::heap::layout::vm_layout_constants::HEAP_END;
 use crate::util::heap::layout::vm_layout_constants::HEAP_START;
@@ -958,6 +961,7 @@ pub fn handle_user_single_thread_collection_request<VM: VMBinding>(
 pub fn mmtk_set_public_bit<VM: VMBinding>(mmtk: &'static MMTK<VM>, object: ObjectReference) {
     debug_assert!(!object.is_null(), "object is null!");
     crate::util::public_bit::set_public_bit::<VM>(object);
+    #[cfg(feature = "thread_local_gc")]
     mmtk.plan.publish_object(object);
 }
 
@@ -969,6 +973,8 @@ pub fn mmtk_publish_object<VM: VMBinding>(
     if object.is_null() || crate::util::public_bit::is_public::<VM>(object) {
         return;
     }
+
+    #[cfg(feature = "thread_local_gc")]
     // only publish objects of its own (only affect publish vm specific roots)
     if mutator_id.is_some() && mutator_id != mmtk.plan.get_object_owner(object) {
         return;
@@ -999,4 +1005,12 @@ pub fn mmtk_handle_user_triggered_local_gc<VM: VMBinding>(mmtk: &MMTK<VM>, tls: 
 
 pub fn mmtk_handle_user_triggered_global_gc<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
     mmtk.plan.handle_user_collection_request(tls, true, false);
+}
+
+pub fn compute_allocator_mem_layout_checksum<VM: VMBinding>() -> usize {
+    return {
+        std::mem::size_of::<ImmixAllocator<VM>>()
+            ^ std::mem::size_of::<BumpAllocator<VM>>()
+            ^ std::mem::size_of::<LargeObjectAllocator<VM>>()
+    };
 }

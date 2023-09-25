@@ -29,7 +29,16 @@ impl Region for Line {
 #[allow(clippy::assertions_on_constants)]
 impl Line {
     pub const RESET_MARK_STATE: u8 = 1;
+    #[cfg(not(feature = "thread_local_gc"))]
     pub const MAX_MARK_STATE: u8 = 127;
+    #[cfg(feature = "thread_local_gc")]
+    pub const MARK_STATE_BITS: u8 = 3;
+    #[cfg(feature = "thread_local_gc")]
+    pub const LOCAL_MARK_STATE_BITS: u8 = 4;
+    #[cfg(feature = "thread_local_gc")]
+    pub const MAX_MARK_STATE: u8 = (1 << Self::MARK_STATE_BITS) - 1;
+    #[cfg(feature = "thread_local_gc")]
+    pub const LOCAL_MAX_MARK_STATE: u8 = (1 << Self::LOCAL_MARK_STATE_BITS) - 1;
 
     /// Line mark table (side)
     pub const MARK_TABLE: SideMetadataSpec =

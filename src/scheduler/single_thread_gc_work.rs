@@ -17,8 +17,6 @@ use crate::vm::*;
 use crate::*;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
-use std::sync::atomic::AtomicUsize;
-use std::sync::Arc;
 
 pub struct ScheduleSingleThreadCollection;
 
@@ -354,11 +352,8 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for SingleThreadRelease<C> {
         let plan_mut: &mut C::PlanType = unsafe { &mut *(self.plan as *const _ as *mut _) };
         plan_mut.release(worker.tls);
 
-        let counter = Arc::new(AtomicUsize::new(
-            <C::VM as VMBinding>::VMActivePlan::number_of_mutators(),
-        ));
         for mutator in <C::VM as VMBinding>::VMActivePlan::mutators() {
-            ReleaseMutator::<C::VM>::new(mutator, counter.clone()).do_work(worker, mmtk);
+            ReleaseMutator::<C::VM>::new(mutator).do_work(worker, mmtk);
         }
         for _w in &mmtk.scheduler.worker_group.workers_shared {
             // let result = w.designated_work.push(Box::new(ReleaseCollector));

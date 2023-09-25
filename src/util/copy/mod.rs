@@ -13,10 +13,10 @@ use crate::util::opaque_pointer::VMWorkerThread;
 use crate::util::{Address, ObjectReference};
 use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
-use std::sync::atomic::Ordering;
-
+use crate::Mutator;
 use enum_map::Enum;
 use enum_map::EnumMap;
+use std::sync::atomic::Ordering;
 
 const MAX_COPYSPACE_COPY_ALLOCATORS: usize = 1;
 const MAX_IMMIX_COPY_ALLOCATORS: usize = 1;
@@ -171,18 +171,44 @@ impl<VM: VMBinding> GCWorkerCopyContext<VM> {
 
     #[cfg(feature = "thread_local_gc")]
     /// Release the copying allocators.
-    pub fn thread_local_release(&mut self) {
+    pub fn thread_local_prepare(&mut self) {
         // Delegate to release() for each policy copy context
+
         for (_, selector) in self.config.copy_mapping.iter() {
             match selector {
                 CopySelector::CopySpace(index) => {
-                    unsafe { self.copy[*index as usize].assume_init_mut() }.release()
+                    unsafe { self.copy[*index as usize].assume_init_mut() }.thread_local_prepare()
                 }
                 CopySelector::Immix(index) => {
-                    unsafe { self.immix[*index as usize].assume_init_mut() }.release()
+                    unsafe { self.immix[*index as usize].assume_init_mut() }.thread_local_prepare()
                 }
                 CopySelector::ImmixHybrid(index) => {
-                    unsafe { self.immix_hybrid[*index as usize].assume_init_mut() }.release()
+                    unsafe { self.immix_hybrid[*index as usize].assume_init_mut() }
+                        .thread_local_prepare()
+                }
+                CopySelector::Unused => {}
+            }
+        }
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    /// Release the copying allocators.
+    pub fn thread_local_release(&mut self, mutator: &'static Mutator<VM>) {
+        // Delegate to release() for each policy copy context
+
+        for (_, selector) in self.config.copy_mapping.iter() {
+            match selector {
+                CopySelector::CopySpace(index) => {
+                    unsafe { self.copy[*index as usize].assume_init_mut() }
+                        .thread_local_release(mutator)
+                }
+                CopySelector::Immix(index) => {
+                    unsafe { self.immix[*index as usize].assume_init_mut() }
+                        .thread_local_release(mutator)
+                }
+                CopySelector::ImmixHybrid(index) => {
+                    unsafe { self.immix_hybrid[*index as usize].assume_init_mut() }
+                        .thread_local_release(mutator)
                 }
                 CopySelector::Unused => {}
             }

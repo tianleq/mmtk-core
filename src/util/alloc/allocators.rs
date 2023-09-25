@@ -126,7 +126,6 @@ impl<VM: VMBinding> Allocators<VM> {
                         false,
                         None,
                         None,
-                        None,
                     ));
                 }
                 AllocatorSelector::FreeList(index) => {

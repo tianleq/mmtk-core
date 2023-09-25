@@ -66,7 +66,10 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
             None,
             Ordering::SeqCst,
         );
+        #[cfg(not(feature = "thread_local_gc"))]
         let mut new_value: u8 = (old_value & (!LOS_BIT_MASK)) | self.mark_state;
+        #[cfg(feature = "thread_local_gc")]
+        let new_value: u8 = (old_value & (!LOS_BIT_MASK)) | self.mark_state;
         #[cfg(not(feature = "thread_local_gc"))]
         if alloc {
             new_value |= NURSERY_BIT;
@@ -305,7 +308,12 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         let sweep = |object: ObjectReference| {
             #[cfg(feature = "vo_bit")]
             crate::util::metadata::vo_bit::unset_vo_bit::<VM>(object);
-            crate::util::public_bit::unset_public_bit::<VM>(object);
+            debug_assert!(crate::util::public_bit::is_public::<VM>(object));
+            // cannot unset public bit here because public objects are still in the thread-local queue
+            // and they need to be removed from the thread-local queue. If unset the public bit,
+            // then those public objects will be treated as private object, causing double free issue
+
+            // crate::util::public_bit::unset_public_bit::<VM>(object);
 
             self.pr
                 .release_pages(get_super_page(object.to_object_start::<VM>()));
@@ -329,7 +337,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             !crate::util::public_bit::is_public::<VM>(object),
             "public object is reclaimed in thread local gc"
         );
-
         self.pr
             .release_pages(get_super_page(object.to_object_start::<VM>()));
     }

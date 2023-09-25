@@ -217,121 +217,6 @@ impl Block {
         RegionIterator::<Line>::new(self.start_line(), self.end_line())
     }
 
-    fn sweep_impl<VM: VMBinding>(
-        &self,
-        space: &ImmixSpace<VM>,
-        mark_histogram: &mut Histogram,
-        line_mark_state: Option<u8>,
-        thread_local: bool,
-    ) -> bool {
-        if super::BLOCK_ONLY {
-            match self.get_state() {
-                BlockState::Unallocated => false,
-                BlockState::Unmarked => {
-                    #[cfg(feature = "vo_bit")]
-                    vo_bit::helper::on_region_swept::<VM, _>(self, false);
-
-                    if thread_local {
-                        if self.is_block_published() {
-                            // liveness of public block is unknown during thread-local gc
-                            // so conservatively treat it as live
-                            false
-                        } else {
-                            // Release the block if it is private and not marked by the current GC.
-                            #[cfg(feature = "thread_local_gc")]
-                            self.clear_owner();
-                            space.release_block(*self);
-                            true
-                        }
-                    } else {
-                        // Release the block if it is allocated but not marked by the current GC.
-                        #[cfg(feature = "thread_local_gc")]
-                        self.clear_owner();
-                        self.reset_publication();
-                        space.release_block(*self);
-                        true
-                    }
-                }
-                BlockState::Marked => {
-                    #[cfg(feature = "vo_bit")]
-                    vo_bit::helper::on_region_swept::<VM, _>(self, true);
-
-                    // The block is live.
-                    false
-                }
-                _ => unreachable!(),
-            }
-        } else {
-            // Calculate number of marked lines and holes.
-            let mut marked_lines = 0;
-            let mut holes = 0;
-            let mut prev_line_is_marked = true;
-            let line_mark_state = line_mark_state.unwrap();
-
-            for line in self.lines() {
-                if line.is_marked(line_mark_state) {
-                    marked_lines += 1;
-                    prev_line_is_marked = true;
-                } else {
-                    if prev_line_is_marked {
-                        holes += 1;
-                    }
-
-                    #[cfg(feature = "immix_zero_on_release")]
-                    crate::util::memory::zero(line.start(), Line::BYTES);
-
-                    prev_line_is_marked = false;
-                }
-            }
-
-            if marked_lines == 0 {
-                #[cfg(feature = "vo_bit")]
-                vo_bit::helper::on_region_swept::<VM, _>(self, false);
-
-                if thread_local {
-                    // liveness of public block is unknown during thread-local gc
-                    // so conservatively treat it as live
-                    if self.is_block_published() {
-                        false
-                    } else {
-                        #[cfg(feature = "thread_local_gc")]
-                        self.clear_owner();
-                        space.release_block(*self);
-                        true
-                    }
-                } else {
-                    // Release the block if non of its lines are marked.
-                    #[cfg(feature = "thread_local_gc")]
-                    self.clear_owner();
-                    self.reset_publication();
-                    space.release_block(*self);
-                    true
-                }
-            } else {
-                // There are some marked lines. Keep the block live.
-                if marked_lines != Block::LINES {
-                    // There are holes. Mark the block as reusable.
-                    self.set_state(BlockState::Reusable {
-                        unavailable_lines: marked_lines as _,
-                    });
-                    space.reusable_blocks.push(*self)
-                } else {
-                    // Clear mark state.
-                    self.set_state(BlockState::Unmarked);
-                }
-                // Update mark_histogram
-                mark_histogram[holes] += marked_lines;
-                // Record number of holes in block side metadata.
-                self.set_holes(holes);
-
-                #[cfg(feature = "vo_bit")]
-                vo_bit::helper::on_region_swept::<VM, _>(self, true);
-
-                false
-            }
-        }
-    }
-
     /// Clear VO bits metadata for unmarked regions.
     /// This is useful for clearing VO bits during nursery GC for StickyImmix
     /// at which time young objects (allocated in unmarked regions) may die
@@ -394,7 +279,6 @@ impl Block {
                     // The block is live.
                     false
                 }
-                // BlockState::Unallocated => unreachable!(),
                 _ => unreachable!(),
             }
         } else {
@@ -458,18 +342,9 @@ impl Block {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    pub fn thread_local_sweep<VM: VMBinding>(
-        &self,
-        space: &ImmixSpace<VM>,
-        _mark_histogram: &mut Histogram,
-        _line_mark_state: Option<u8>,
-    ) {
-        if super::BLOCK_ONLY {
-            self.clear_owner();
-            space.release_block(*self);
-        } else {
-            unimplemented!()
-        }
+    pub fn thread_local_sweep<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
+        self.clear_owner();
+        space.release_block(*self);
     }
 
     /// Sweep this block.
@@ -480,7 +355,88 @@ impl Block {
         mark_histogram: &mut Histogram,
         line_mark_state: Option<u8>,
     ) -> bool {
-        self.sweep_impl(space, mark_histogram, line_mark_state, false)
+        if super::BLOCK_ONLY {
+            match self.get_state() {
+                BlockState::Unallocated => false,
+                BlockState::Unmarked => {
+                    #[cfg(feature = "vo_bit")]
+                    vo_bit::helper::on_region_swept::<VM, _>(self, false);
+
+                    // Release the block if it is allocated but not marked by the current GC.
+                    #[cfg(feature = "thread_local_gc")]
+                    {
+                        self.clear_owner();
+                        self.reset_publication();
+                    }
+                    space.release_block(*self);
+                    true
+                }
+                BlockState::Marked => {
+                    #[cfg(feature = "vo_bit")]
+                    vo_bit::helper::on_region_swept::<VM, _>(self, true);
+
+                    // The block is live.
+                    false
+                }
+                _ => unreachable!(),
+            }
+        } else {
+            // Calculate number of marked lines and holes.
+            let mut marked_lines = 0;
+            let mut holes = 0;
+            let mut prev_line_is_marked = true;
+            let line_mark_state = line_mark_state.unwrap();
+
+            for line in self.lines() {
+                if line.is_marked(line_mark_state) {
+                    marked_lines += 1;
+                    prev_line_is_marked = true;
+                } else {
+                    if prev_line_is_marked {
+                        holes += 1;
+                    }
+
+                    #[cfg(feature = "immix_zero_on_release")]
+                    crate::util::memory::zero(line.start(), Line::BYTES);
+
+                    prev_line_is_marked = false;
+                }
+            }
+
+            if marked_lines == 0 {
+                #[cfg(feature = "vo_bit")]
+                vo_bit::helper::on_region_swept::<VM, _>(self, false);
+                // Release the block if non of its lines are marked.
+                #[cfg(feature = "thread_local_gc")]
+                {
+                    self.clear_owner();
+                    self.reset_publication();
+                }
+                space.release_block(*self);
+                true
+            } else {
+                // There are some marked lines. Keep the block live.
+                if marked_lines != Block::LINES {
+                    // There are holes. Mark the block as reusable.
+                    self.set_state(BlockState::Reusable {
+                        unavailable_lines: marked_lines as _,
+                    });
+                    space.reusable_blocks.push(*self)
+                } else {
+                    // Clear mark state.
+                    self.set_state(BlockState::Unmarked);
+                }
+                // Update mark_histogram
+                mark_histogram[holes] += marked_lines;
+                // Record number of holes in block side metadata.
+                self.set_holes(holes);
+
+                #[cfg(feature = "vo_bit")]
+                vo_bit::helper::on_region_swept::<VM, _>(self, true);
+
+                false
+            }
+        }
     }
 
     #[cfg(feature = "thread_local_gc")]
@@ -537,6 +493,11 @@ impl ReusableBlockPool {
     /// Iterate all the blocks in the queue. Call the visitor for each reported block.
     pub fn iterate_blocks(&self, mut f: impl FnMut(Block)) {
         self.queue.iterate_blocks(&mut f);
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn thread_local_flush(&self, id: usize) {
+        self.queue.flush(id);
     }
 
     /// Flush the block queue

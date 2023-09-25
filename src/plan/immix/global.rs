@@ -33,6 +33,7 @@ use crate::util::ObjectReference;
 #[cfg(feature = "thread_local_gc")]
 use crate::util::VMMutatorThread;
 use crate::vm::VMBinding;
+use crate::Mutator;
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use std::sync::atomic::AtomicBool;
 
@@ -269,14 +270,14 @@ impl<VM: VMBinding> Immix<VM> {
         immix_space: &ImmixSpace<VM>,
         worker: &mut GCWorker<VM>,
     ) {
-        let in_defrag = immix_space.decide_whether_to_defrag(
+        let in_defrag = immix_space.decide_whether_to_defrag_in_thread_local_gc(
             plan.is_emergency_collection(),
             false,
             plan.base().cur_collection_attempts.load(Ordering::SeqCst),
             plan.base().is_user_triggered_collection(),
             *plan.base().options.full_heap_system_gc,
         );
-        assert!(!in_defrag, "defrag has not been implemented");
+
         if in_defrag {
             //Scan mutator
             ScanMutator::<DefragContext::ThreadlocalProcessEdgesWorkType>::new(tls)
@@ -320,16 +321,22 @@ impl<VM: VMBinding> Immix<VM> {
 
 #[cfg(feature = "thread_local_gc")]
 impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for Immix<VM> {
-    fn thread_local_post_scan_object(&self, object: ObjectReference) {
+    fn thread_local_post_scan_object(
+        &self,
+        mutator: &'static Mutator<VM>,
+        object: ObjectReference,
+    ) {
         if self.immix_space.in_space(object) {
             <ImmixSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_post_scan_object(
                 &self.immix_space,
+                mutator,
                 object,
             );
             return;
         }
         <CommonPlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_post_scan_object(
             &self.common,
+            mutator,
             object,
         )
     }

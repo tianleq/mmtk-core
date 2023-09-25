@@ -172,6 +172,11 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         self.block_queue.flush_all()
         // TODO: For 32-bit space, we may want to free some contiguous chunks.
     }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn thread_local_flush(&self, id: usize) {
+        self.block_queue.flush(id);
+    }
 }
 
 /// A block list that supports fast lock-free push/pop operations
@@ -359,7 +364,7 @@ impl<B: Region> BlockPool<B> {
     }
 
     /// Flush a given thread-local queue to the global pool
-    fn flush(&self, id: usize) {
+    pub fn flush(&self, id: usize) {
         if !self.worker_local_freed_blocks[id].is_empty() {
             let queue = self.worker_local_freed_blocks[id].replace(BlockQueue::new());
             if !queue.is_empty() {

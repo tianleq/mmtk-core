@@ -18,6 +18,7 @@ use crate::util::metadata::vo_bit;
 use crate::util::metadata::{self, MetadataSpec};
 use crate::util::object_forwarding as ForwardingWord;
 use crate::util::{Address, ObjectReference};
+use crate::Mutator;
 use crate::{
     plan::ObjectQueue,
     scheduler::{GCWork, GCWorkScheduler, GCWorker, WorkBucketStage},
@@ -26,8 +27,7 @@ use crate::{
 };
 use crate::{vm::*, AllocationSemantics};
 use atomic::Ordering;
-use std::sync::Mutex;
-use std::sync::{atomic::AtomicU8, atomic::AtomicUsize, Arc};
+use std::sync::{atomic::AtomicU8, atomic::AtomicUsize, Arc, RwLock};
 
 pub(crate) const TRACE_KIND_FAST: TraceKind = 0;
 pub(crate) const TRACE_KIND_DEFRAG: TraceKind = 1;
@@ -334,6 +334,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
     }
 
+    #[cfg(feature = "thread_local_gc")]
+    pub fn thread_local_flush_page_resource(&self) {
+        let id = crate::scheduler::current_worker_ordinal().unwrap();
+        self.reusable_blocks.thread_local_flush(id);
+        #[cfg(target_pointer_width = "64")]
+        self.pr.thread_local_flush(id);
+    }
+
     /// Flush the thread-local queues in BlockPageResource
     pub fn flush_page_resource(&self) {
         self.reusable_blocks.flush_all();
@@ -369,6 +377,29 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             full_heap_system_gc,
         );
         self.defrag.in_defrag()
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    /// check if the current GC should do defragmentation.
+    pub fn decide_whether_to_defrag_in_thread_local_gc(
+        &self,
+        _emergency_collection: bool,
+        _collect_whole_heap: bool,
+        _collection_attempts: usize,
+        _user_triggered_collection: bool,
+        _full_heap_system_gc: bool,
+    ) -> bool {
+        // self.defrag.decide_whether_to_defrag(
+        //     emergency_collection,
+        //     collect_whole_heap,
+        //     collection_attempts,
+        //     user_triggered_collection,
+        //     self.reusable_blocks.len() == 0,
+        //     full_heap_system_gc,
+        // );
+        // self.defrag.in_defrag()
+        // true
+        false
     }
 
     /// Get work packet scheduler
@@ -483,47 +514,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         did_defrag
     }
 
-    #[cfg(feature = "thread_local_gc")]
-    pub fn thread_local_prepare(&mut self, mutator_id: u32) {
-        // Update mark_state
-        if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
-            self.mark_state = Self::MARKED_STATE;
-        } else {
-            // For header metadata, we use cyclic mark bits.
-            unimplemented!("cyclic mark bits is not supported at the moment");
-        }
-
-        // Prepare defrag info
-        if super::DEFRAG {
-            self.defrag.prepare(self);
-        }
-        // Prepare each block for GC
-        let threshold = self.defrag.defrag_spill_threshold.load(Ordering::Acquire);
-        // # Safety: ImmixSpace reference is always valid within this collection cycle.
-        let space = unsafe { &*(self as *const Self) };
-        for chunk in self.chunk_map.all_chunks() {
-            ThreadlocalPrepareBlockState {
-                space,
-                chunk,
-                defrag_threshold: if space.in_defrag() {
-                    Some(threshold)
-                } else {
-                    None
-                },
-                mutator_id,
-            }
-            .do_work();
-        }
-
-        if !super::BLOCK_ONLY {
-            self.line_mark_state.fetch_add(1, Ordering::AcqRel);
-            if self.line_mark_state.load(Ordering::Acquire) > Line::MAX_MARK_STATE {
-                self.line_mark_state
-                    .store(Line::RESET_MARK_STATE, Ordering::Release);
-            }
-        }
-    }
-
     /// Generate chunk sweep tasks
     fn generate_sweep_tasks(&self) -> Vec<Box<dyn GCWork<VM>>> {
         self.defrag.mark_histograms.lock().clear();
@@ -532,6 +522,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let epilogue = Arc::new(FlushPageResource {
             space,
             counter: AtomicUsize::new(0),
+            scheduler: self.scheduler.clone(),
         });
         let tasks = self.chunk_map.generate_tasks(|chunk| {
             Box::new(SweepChunk {
@@ -748,6 +739,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         queue: &mut impl ObjectQueue,
         object: ObjectReference,
     ) -> ObjectReference {
+        #[cfg(feature = "vo_bit")]
+        vo_bit::helper::on_trace_object::<VM>(object);
+
         if crate::util::public_bit::is_public::<VM>(object) {
             debug_assert!(
                 Block::containing::<VM>(object).is_block_published(),
@@ -764,9 +758,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             } else {
                 Block::containing::<VM>(object).set_state(BlockState::Marked);
             }
-
-            #[cfg(feature = "vo_bit")]
-            vo_bit::helper::on_object_marked::<VM>(object);
 
             // Visit node
             queue.enqueue(object);
@@ -825,24 +816,24 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             }
             new_object
         } else if self.is_marked(object) {
-            // We won the forwarding race but the object is already marked so we clear the
+            // The object is already marked so we clear the
             // forwarding status and return the unmoved object
             debug_assert!(
                 nursery_collection || self.defrag.space_exhausted() || self.is_pinned(object),
                 "Forwarded object is the same as original object {} even though it should have been copied",
                 object,
             );
-            ForwardingWord::clear_forwarding_bits::<VM>(object);
+            // ForwardingWord::clear_forwarding_bits::<VM>(object);
             object
         } else {
-            // We won the forwarding race; actually forward and copy the object if it is not pinned
+            // actually forward and copy the object if it is not pinned
             // and we have sufficient space in our copy allocator
             let new_object = if self.is_pinned(object)
-                || (!nursery_collection && self.defrag.space_exhausted())
+            // || (!nursery_collection && self.defrag.space_exhausted())
             {
                 // TODO use non-atomic mark
                 self.attempt_mark(object, self.mark_state);
-                ForwardingWord::clear_forwarding_bits::<VM>(object);
+                // ForwardingWord::clear_forwarding_bits::<VM>(object);
                 Block::containing::<VM>(object).set_state(BlockState::Marked);
 
                 #[cfg(feature = "vo_bit")]
@@ -905,7 +896,22 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[allow(clippy::assertions_on_constants)]
     pub fn mark_lines(&self, object: ObjectReference) {
         debug_assert!(!super::BLOCK_ONLY);
+        #[cfg(not(feature = "thread_local_gc"))]
         Line::mark_lines_for_object::<VM>(object, self.line_mark_state.load(Ordering::Acquire));
+        #[cfg(feature = "thread_local_gc")]
+        {
+            let state =
+                (self.line_mark_state.load(Ordering::Acquire)) << Line::LOCAL_MARK_STATE_BITS;
+            Line::mark_lines_for_object::<VM>(object, state);
+        }
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn thread_local_mark_lines(&self, object: ObjectReference, local_state: u8) {
+        debug_assert!(!super::BLOCK_ONLY);
+        let global_state = self.line_mark_state.load(Ordering::Acquire);
+        let state = (global_state << Line::LOCAL_MARK_STATE_BITS) | local_state;
+        Line::mark_lines_for_object::<VM>(object, state);
     }
 
     /// Atomically mark an object.
@@ -960,6 +966,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         false
     }
 
+    #[cfg(not(feature = "thread_local_gc"))]
     /// Hole searching.
     ///
     /// Linearly scan lines in a block to search for the next
@@ -972,6 +979,60 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         debug_assert!(!super::BLOCK_ONLY);
         let unavail_state = self.line_unavail_state.load(Ordering::Acquire);
         let current_state = self.line_mark_state.load(Ordering::Acquire);
+        let block = search_start.block();
+        let mark_data = block.line_mark_table();
+        let start_cursor = search_start.get_index_within_block();
+        let mut cursor = start_cursor;
+        // Find start
+        while cursor < mark_data.len() {
+            let mark = mark_data.get(cursor);
+            if mark != unavail_state && mark != current_state {
+                break;
+            }
+            cursor += 1;
+        }
+        if cursor == mark_data.len() {
+            return None;
+        }
+        let start = search_start.next_nth(cursor - start_cursor);
+        // Find limit
+        while cursor < mark_data.len() {
+            let mark = mark_data.get(cursor);
+            if mark == unavail_state || mark == current_state {
+                break;
+            }
+            cursor += 1;
+        }
+        let end = search_start.next_nth(cursor - start_cursor);
+        debug_assert!(RegionIterator::<Line>::new(start, end)
+            .all(|line| !line.is_marked(unavail_state) && !line.is_marked(current_state)));
+        Some((start, end))
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    /// Hole searching.
+    ///
+    /// Linearly scan lines in a block to search for the next
+    /// hole, starting from the given line. If we find available lines,
+    /// return a tuple of the start line and the end line (non-inclusive).
+    ///
+    /// Returns None if the search could not find any more holes.
+    #[allow(clippy::assertions_on_constants)]
+    pub fn get_next_available_lines(
+        &self,
+        search_start: Line,
+        unavailable_state: Option<u8>,
+        current_mark_state: Option<u8>,
+    ) -> Option<(Line, Line)> {
+        debug_assert!(!super::BLOCK_ONLY);
+        #[cfg(not(feature = "thread_local_gc"))]
+        let unavail_state = self.line_unavail_state.load(Ordering::Acquire);
+        #[cfg(not(feature = "thread_local_gc"))]
+        let current_state = self.line_mark_state.load(Ordering::Acquire);
+        #[cfg(feature = "thread_local_gc")]
+        let unavail_state = unavailable_state.unwrap();
+        #[cfg(feature = "thread_local_gc")]
+        let current_state = current_mark_state.unwrap();
         let block = search_start.block();
         let mark_data = block.line_mark_table();
         let start_cursor = search_start.get_index_within_block();
@@ -1032,11 +1093,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     pub fn publish_object(&self, object: ObjectReference) {
         // Mark block and lines
-        if !super::BLOCK_ONLY {
-            self.mark_lines(object);
-        } else {
-            Block::containing::<VM>(object).publish_block()
-        }
+        // if !super::BLOCK_ONLY {
+        //     self.mark_lines(object);
+        // }
+        Block::containing::<VM>(object).publish_block()
     }
 
     #[cfg(feature = "thread_local_gc")]
@@ -1060,10 +1120,6 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
         } else if KIND == TRACE_THREAD_LOCAL_DEFRAG {
             if Block::containing::<VM>(object).is_defrag_source() {
                 debug_assert!(self.in_defrag());
-                debug_assert!(
-                    !crate::plan::is_nursery_gc(&*worker.mmtk.plan),
-                    "Calling PolicyTraceObject on Immix in nursery GC"
-                );
                 self.thread_local_trace_object_with_opportunistic_copy(
                     queue,
                     object,
@@ -1080,10 +1136,24 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
         }
     }
 
-    fn thread_local_post_scan_object(&self, object: ObjectReference) {
+    fn thread_local_post_scan_object(
+        &self,
+        mutator: &'static Mutator<VM>,
+        object: ObjectReference,
+    ) {
         if super::MARK_LINE_AT_SCAN_TIME && !super::BLOCK_ONLY {
             debug_assert!(self.in_space(object));
-            self.mark_lines(object);
+            // local gc  mark lines differently
+            debug_assert!(false);
+            let immix_allocator = unsafe {
+                mutator
+                    .allocators
+                    .get_allocator(mutator.config.allocator_mapping[AllocationSemantics::Default])
+            }
+            .downcast_ref::<ImmixAllocator<VM>>()
+            .unwrap();
+            let local_state = immix_allocator.local_line_mark_state;
+            self.thread_local_mark_lines(object, local_state);
         }
     }
 
@@ -1135,92 +1205,6 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
             }
             // Check if this block needs to be defragmented.
             let is_defrag_source = if !super::DEFRAG {
-                // Do not set any block as defrag source if it is a public block
-                false
-            } else if super::DEFRAG_EVERY_BLOCK {
-                // Set every block as defrag source if so desired.
-                true
-            } else if let Some(defrag_threshold) = self.defrag_threshold {
-                // This GC is a defrag GC.
-                block.get_holes() > defrag_threshold
-            } else {
-                // Not a defrag GC.
-                false
-            };
-            block.set_as_defrag_source(is_defrag_source);
-            // Clear block mark data.
-            block.set_state(BlockState::Unmarked);
-
-            debug_assert!(!block.get_state().is_reusable());
-            debug_assert_ne!(block.get_state(), BlockState::Marked);
-            // Clear forwarding bits if necessary.
-            if is_defrag_source {
-                // Note that `ImmixSpace::is_live` depends on the fact that we only clear side
-                // forwarding bits for defrag sources.  If we change the code here, we need to
-                // make sure `ImmixSpace::is_live` is fixed, too.
-                if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC {
-                    // Clear on-the-side forwarding bits.
-                    side.bzero_metadata(block.start(), Block::BYTES);
-                }
-            }
-            // NOTE: We don't need to reset the forwarding pointer metadata because it is meaningless
-            // until the forwarding bits are also set, at which time we also write the forwarding
-            // pointer.
-        }
-    }
-}
-
-#[cfg(feature = "thread_local_gc")]
-pub struct ThreadlocalPrepareBlockState<VM: VMBinding> {
-    pub space: &'static ImmixSpace<VM>,
-    pub chunk: Chunk,
-    pub defrag_threshold: Option<usize>,
-    pub mutator_id: u32,
-}
-
-#[cfg(feature = "thread_local_gc")]
-impl<VM: VMBinding> ThreadlocalPrepareBlockState<VM> {
-    /// Clear object mark table
-    fn reset_object_mark(&self, block: Block) {
-        // NOTE: We reset the mark bits because cyclic mark bit is currently not supported, yet.
-        // See `ImmixSpace::prepare`.
-        if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC {
-            side.bzero_metadata(block.start(), Block::BYTES);
-        }
-        if self.space.space_args.reset_log_bit_in_major_gc {
-            if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC {
-                // We zero all the log bits in major GC, and for every object we trace, we will mark the log bit again.
-                side.bzero_metadata(block.start(), Block::BYTES);
-            } else {
-                // If the log bit is not in side metadata, we cannot bulk zero. We can either
-                // clear the bit for dead objects in major GC, or clear the log bit for new
-                // objects. In either cases, we do not need to set log bit at tracing.
-                unimplemented!("We cannot bulk zero unlogged bit.")
-            }
-        }
-    }
-
-    fn do_work(&mut self) {
-        // Clear object mark table for this chunk
-        // self.reset_object_mark();
-        // Iterate over all local blocks in this chunk
-        for block in self
-            .chunk
-            .iter_region::<Block>()
-            .filter(|block| block.owner() == self.mutator_id)
-        {
-            self.reset_object_mark(block);
-            let state = block.get_state();
-            // Skip unallocated blocks.
-            if state == BlockState::Unallocated {
-                continue;
-            }
-            // Check if this block needs to be defragmented.
-            let is_defrag_source = if !super::DEFRAG {
-                // Do not set any block as defrag source if defrag is disabled.
-                false
-            } else if block.is_block_published() {
-                // public block contains public object and cannot be defrag in a local gc
                 false
             } else if super::DEFRAG_EVERY_BLOCK {
                 // Set every block as defrag source if so desired.
@@ -1270,7 +1254,10 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
             let line_mark_state = if super::BLOCK_ONLY {
                 None
             } else {
-                Some(self.space.line_mark_state.load(Ordering::Acquire))
+                // This work packet is only generated during global gc
+                let global_state = self.space.line_mark_state.load(Ordering::Acquire);
+                let state = global_state << Line::LOCAL_MARK_STATE_BITS;
+                Some(state)
             };
             // number of allocated blocks.
             let mut allocated_blocks = 0;
@@ -1299,6 +1286,8 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
 struct FlushPageResource<VM: VMBinding> {
     space: &'static ImmixSpace<VM>,
     counter: AtomicUsize,
+    #[cfg(feature = "thread_local_gc")]
+    scheduler: Arc<GCWorkScheduler<VM>>,
 }
 
 impl<VM: VMBinding> FlushPageResource<VM> {
@@ -1307,7 +1296,15 @@ impl<VM: VMBinding> FlushPageResource<VM> {
         if 1 == self.counter.fetch_sub(1, Ordering::SeqCst) {
             // We've finished releasing all the dead blocks to the BlockPageResource's thread-local queues.
             // Now flush the BlockPageResource.
-            self.space.flush_page_resource()
+            self.space.flush_page_resource();
+            // When local gc is enabled, it keeps track of a local block list
+            // That list needs to be updated after blocks get flushed
+            #[cfg(feature = "thread_local_gc")]
+            for mutator in VM::VMActivePlan::mutators() {
+                self.scheduler.work_buckets[WorkBucketStage::Release].add(
+                    crate::scheduler::gc_work::ReleaseMutator::<VM>::new(mutator),
+                );
+            }
         }
     }
 }
@@ -1330,6 +1327,16 @@ impl<VM: VMBinding> PolicyCopyContext for ImmixCopyContext<VM> {
 
     fn prepare(&mut self) {
         self.allocator.reset();
+        #[cfg(feature = "thread_local_gc")]
+        self.public_object_allocator.reset();
+        debug_assert!(
+            self.allocator.copy,
+            "ImmixCopyContext#allocator is not corrupted. (copy is false)"
+        );
+        debug_assert!(
+            self.public_object_allocator.copy,
+            "ImmixCopyContext#public_object_allocator is not corrupted. (copy is false)"
+        )
     }
     fn release(&mut self) {
         self.allocator.reset();
@@ -1337,41 +1344,13 @@ impl<VM: VMBinding> PolicyCopyContext for ImmixCopyContext<VM> {
         {
             self.public_object_allocator.reset();
             // add blocks to mutator's local list
-        }
-        for mutator in VM::VMActivePlan::mutators() {
-            let private_local_block_map = self.allocator.local_block_map.as_deref_mut().unwrap();
-            let public_local_block_map = self
-                .public_object_allocator
-                .local_block_map
-                .as_deref_mut()
-                .unwrap();
 
-            if let Some(blocks) = private_local_block_map.get(&mutator.mutator_id) {
-                let immix_allocator = unsafe {
-                    mutator.allocators.get_allocator_mut(
-                        mutator.config.allocator_mapping[AllocationSemantics::Default],
-                    )
-                }
-                .downcast_mut::<ImmixAllocator<VM>>()
-                .unwrap();
-                // add blocks to the local linked list
-                immix_allocator.add_blocks_to_list(blocks);
+            // The following is incorrect. There is a race here, mutiple collectors trying to access mutator simutaneously
+            for mutator in VM::VMActivePlan::mutators() {
+                self.thread_local_release(mutator);
             }
-            if let Some(blocks) = public_local_block_map.get(&mutator.mutator_id) {
-                let immix_allocator = unsafe {
-                    mutator.allocators.get_allocator_mut(
-                        mutator.config.allocator_mapping[AllocationSemantics::Default],
-                    )
-                }
-                .downcast_mut::<ImmixAllocator<VM>>()
-                .unwrap();
-                // add blocks to the local linked list
-                immix_allocator.add_blocks_to_list(blocks);
-            }
-
-            private_local_block_map.clear();
-            public_local_block_map.clear();
         }
+
         debug_assert!(
             self.allocator
                 .local_block_map
@@ -1403,10 +1382,18 @@ impl<VM: VMBinding> PolicyCopyContext for ImmixCopyContext<VM> {
             // If thread local gc is enabled, objects can only lives in a block of the same owner
             let block = Block::containing::<VM>(_original);
             let mutator_id = block.owner();
+            let state_map = LOCAL_LINE_MARK_STATES_MAP.read().unwrap();
+            let (local_line_state, local_unavailable_line_state) =
+                state_map.get(&mutator_id).unwrap();
             if crate::util::public_bit::is_public::<VM>(_original) {
+                self.public_object_allocator.local_line_mark_state = *local_line_state;
+                self.public_object_allocator
+                    .local_unavailable_line_mark_state = *local_unavailable_line_state;
                 self.public_object_allocator
                     .alloc_as_mutator(mutator_id, bytes, align, offset)
             } else {
+                self.allocator.local_line_mark_state = *local_line_state;
+                self.allocator.local_unavailable_line_mark_state = *local_unavailable_line_state;
                 self.allocator
                     .alloc_as_mutator(mutator_id, bytes, align, offset)
             }
@@ -1415,10 +1402,54 @@ impl<VM: VMBinding> PolicyCopyContext for ImmixCopyContext<VM> {
     fn post_copy(&mut self, obj: ObjectReference, bytes: usize) {
         self.get_space().post_copy(obj, bytes)
     }
+
     #[cfg(feature = "thread_local_gc")]
-    fn thread_local_release(&mut self) {
+    fn thread_local_prepare(&mut self) {
         self.allocator.reset();
         self.public_object_allocator.reset();
+        // in a thread local gc, the allocator should have the same behavior as the mutator
+        self.allocator.copy = false;
+        self.public_object_allocator.copy = false;
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn thread_local_release(&mut self, mutator: &'static Mutator<VM>) {
+        self.allocator.reset();
+        self.public_object_allocator.reset();
+        self.allocator.copy = true;
+        self.public_object_allocator.copy = true;
+        let private_local_block_map = self.allocator.local_block_map.as_deref_mut().unwrap();
+        let public_local_block_map = self
+            .public_object_allocator
+            .local_block_map
+            .as_deref_mut()
+            .unwrap();
+
+        if let Some(blocks) = private_local_block_map.get(&mutator.mutator_id) {
+            let immix_allocator = unsafe {
+                mutator
+                    .allocators
+                    .get_allocator(mutator.config.allocator_mapping[AllocationSemantics::Default])
+            }
+            .downcast_ref::<ImmixAllocator<VM>>()
+            .unwrap();
+            // add blocks to the local linked list
+            immix_allocator.add_blocks_to_list(blocks);
+        }
+        if let Some(blocks) = public_local_block_map.get(&mutator.mutator_id) {
+            let immix_allocator = unsafe {
+                mutator
+                    .allocators
+                    .get_allocator(mutator.config.allocator_mapping[AllocationSemantics::Default])
+            }
+            .downcast_ref::<ImmixAllocator<VM>>()
+            .unwrap();
+            // add blocks to the local linked list
+            immix_allocator.add_blocks_to_list(blocks);
+        }
+
+        private_local_block_map.clear();
+        public_local_block_map.clear();
     }
 }
 
@@ -1437,7 +1468,6 @@ impl<VM: VMBinding> ImmixCopyContext<VM> {
                 true,
                 Some(ImmixAllocSemantics::Private),
                 Some(Box::new(std::collections::HashMap::new())),
-                Some(Box::new(Mutex::new(true))),
             ),
             #[cfg(feature = "thread_local_gc")]
             public_object_allocator: ImmixAllocator::new(
@@ -1448,13 +1478,9 @@ impl<VM: VMBinding> ImmixCopyContext<VM> {
                 true,
                 Some(ImmixAllocSemantics::Public),
                 Some(Box::new(std::collections::HashMap::new())),
-                Some(Box::new(Mutex::new(true))),
             ),
         }
     }
-
-    // #[cfg(feature = "thread_local_gc")]
-    pub fn thread_local_release(&mut self) {}
 
     fn get_space(&self) -> &ImmixSpace<VM> {
         self.allocator.immix_space()
@@ -1505,26 +1531,8 @@ impl<VM: VMBinding> ImmixHybridCopyContext<VM> {
         space: &'static ImmixSpace<VM>,
     ) -> Self {
         ImmixHybridCopyContext {
-            copy_allocator: ImmixAllocator::new(
-                tls.0,
-                0,
-                Some(space),
-                plan,
-                false,
-                None,
-                None,
-                None,
-            ),
-            defrag_allocator: ImmixAllocator::new(
-                tls.0,
-                0,
-                Some(space),
-                plan,
-                true,
-                None,
-                None,
-                None,
-            ),
+            copy_allocator: ImmixAllocator::new(tls.0, 0, Some(space), plan, false, None, None),
+            defrag_allocator: ImmixAllocator::new(tls.0, 0, Some(space), plan, true, None, None),
         }
     }
 
@@ -1537,6 +1545,12 @@ impl<VM: VMBinding> ImmixHybridCopyContext<VM> {
         // Just get the space from either allocator
         self.defrag_allocator.immix_space()
     }
+}
+
+#[cfg(feature = "thread_local_gc")]
+lazy_static! {
+    pub static ref LOCAL_LINE_MARK_STATES_MAP: RwLock<std::collections::HashMap<u32, (u8, u8)>> =
+        RwLock::new(std::collections::HashMap::new());
 }
 
 #[cfg(feature = "vo_bit")]

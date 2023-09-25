@@ -8,6 +8,7 @@ use crate::plan::mutator_context::Mutator;
 use crate::plan::mutator_context::MutatorConfig;
 use crate::plan::mutator_context::ReservedAllocators;
 use crate::plan::AllocationSemantics;
+use crate::policy::immix::line::Line;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
 use crate::util::alloc::ImmixAllocator;
 use crate::util::opaque_pointer::{VMMutatorThread, VMWorkerThread};
@@ -27,6 +28,21 @@ pub fn immix_mutator_prepare<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMW
     .downcast_mut::<ImmixAllocator<VM>>()
     .unwrap();
     immix_allocator.reset();
+    #[cfg(feature = "thread_local_gc")]
+    {
+        let thread_local_gc_active = mutator.thread_local_gc_status == THREAD_LOCAL_GC_ACTIVE;
+        if thread_local_gc_active {
+            immix_allocator.thread_local_prepare();
+        } else {
+            immix_allocator.prepare();
+        }
+    }
+    // immix_allocator.prepare();
+    // #[cfg(feature = "thread_local_gc")]
+    // let thread_local_gc_active = mutator.thread_local_gc_status == THREAD_LOCAL_GC_ACTIVE;
+    // if thread_local_gc_active {
+    //     immix_allocator.thread_local_prepare();
+    // }
 }
 
 pub fn immix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {
@@ -45,9 +61,13 @@ pub fn immix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMW
         immix_allocator.reset();
         #[cfg(feature = "thread_local_gc")]
         // For a thread local gc, it needs to sweep blocks
-        // A global gc has dedicated work packets of sweeping blocks,
+        // A global gc has dedicated work packets(SweepChunk) of sweeping blocks,
         // so no need to do it here
-        immix_allocator.thread_local_release(thread_local_gc_active);
+        if thread_local_gc_active {
+            immix_allocator.thread_local_release();
+        } else {
+            immix_allocator.release();
+        }
     }
     #[cfg(feature = "thread_local_gc")]
     {
@@ -56,7 +76,11 @@ pub fn immix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMW
         }
         .downcast_mut::<LargeObjectAllocator<VM>>()
         .unwrap();
-        los_allocator.thread_local_release(thread_local_gc_active);
+        if thread_local_gc_active {
+            los_allocator.thread_local_release();
+        } else {
+            los_allocator.release();
+        }
     }
 }
 
@@ -90,6 +114,13 @@ pub fn create_immix_mutator<VM: VMBinding>(
         release_func: &immix_mutator_release,
     };
     let mutator_id = crate::util::MUTATOR_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);
+    #[cfg(feature = "thread_local_gc")]
+    {
+        let mut state_map = crate::policy::immix::LOCAL_LINE_MARK_STATES_MAP
+            .write()
+            .unwrap();
+        state_map.insert(mutator_id, (Line::RESET_MARK_STATE, Line::RESET_MARK_STATE));
+    }
     Mutator {
         allocators: Allocators::<VM>::new(mutator_tls, mutator_id, plan, &config.space_mapping),
         barrier: Box::new(PublicObjectMarkingBarrier::new(

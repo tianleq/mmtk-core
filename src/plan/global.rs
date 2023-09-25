@@ -1005,7 +1005,12 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for BasePlan<VM> {
         object
     }
 
-    fn thread_local_post_scan_object(&self, _object: ObjectReference) {}
+    fn thread_local_post_scan_object(
+        &self,
+        _mutator: &'static Mutator<VM>,
+        _object: ObjectReference,
+    ) {
+    }
 
     fn thread_local_may_move_objects<const KIND: TraceKind>() -> bool {
         false
@@ -1212,9 +1217,13 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
         )
     }
 
-    fn thread_local_post_scan_object(&self, object: ObjectReference) {
+    fn thread_local_post_scan_object(
+        &self,
+        mutator: &'static Mutator<VM>,
+        object: ObjectReference,
+    ) {
         <BasePlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_post_scan_object(
-            &self.base, object,
+            &self.base, mutator, object,
         )
     }
 
@@ -1290,7 +1299,7 @@ pub trait PlanThreadlocalTraceObject<VM: VMBinding> {
     /// If a plan does not have any policy that needs post scan, this method can be implemented as empty.
     /// If a plan has a policy that has some policy specific behaviors for scanning (e.g. mark lines in Immix),
     /// this method should also invoke those policy specific methods for objects in that space.
-    fn thread_local_post_scan_object(&self, object: ObjectReference);
+    fn thread_local_post_scan_object(&self, mutator: &'static Mutator<VM>, object: ObjectReference);
 
     /// Whether objects in this plan may move. If any of the spaces used by the plan may move objects, this should
     /// return true.

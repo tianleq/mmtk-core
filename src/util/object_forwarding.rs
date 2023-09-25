@@ -111,7 +111,7 @@ pub fn thread_local_forward_object<VM: VMBinding>(
     crate::util::metadata::vo_bit::set_vo_bit::<VM>(new_object);
     debug_assert!(
         !crate::util::public_bit::is_public::<VM>(object),
-        "thread local gc touch public object"
+        "thread local gc move public object"
     );
     if let Some(shift) = forwarding_bits_offset_in_forwarding_pointer::<VM>() {
         // no race since exactly one gc thread doing the work

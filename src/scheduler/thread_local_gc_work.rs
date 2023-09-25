@@ -7,10 +7,9 @@ use crate::plan::GcStatus;
 use crate::plan::PlanThreadlocalTraceObject;
 use crate::plan::VectorObjectQueue;
 use crate::policy::gc_work::TraceKind;
-use crate::scheduler::gc_work::PrepareCollector;
+// use crate::scheduler::gc_work::PrepareCollector;
 use crate::scheduler::gc_work::PrepareMutator;
-use crate::scheduler::gc_work::ReleaseCollector;
-// use crate::scheduler::gc_work::ReleaseMutator;
+// use crate::scheduler::gc_work::ReleaseCollector;
 use crate::util::*;
 use crate::vm::edge_shape::Edge;
 use crate::vm::*;
@@ -68,7 +67,10 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for ThreadlocalPrepare<C> {
 
         PrepareMutator::<C::VM>::new(mutator).do_work(worker, mmtk);
 
-        PrepareCollector.do_work(worker, mmtk);
+        // PrepareCollector.do_work(worker, mmtk);
+        trace!("Prepare Collector");
+        worker.get_copy_context_mut().thread_local_prepare();
+        mmtk.plan.prepare_worker(worker);
     }
 }
 
@@ -91,17 +93,17 @@ impl<C: GCWorkContext> ThreadlocalRelease<C> {
 }
 
 impl<C: GCWorkContext + 'static> GCWork<C::VM> for ThreadlocalRelease<C> {
-    fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
+    fn do_work(&mut self, worker: &mut GCWorker<C::VM>, _mmtk: &'static MMTK<C::VM>) {
         trace!("Thread local Release");
         let mutator = <C::VM as VMBinding>::VMActivePlan::mutator(self.tls);
         // self.plan.base().gc_trigger.policy.on_gc_release(mmtk);
-        // ThreadlocalReleaseMutator::<C::VM>::new(mutator).do_work(worker, mmtk);
+
         trace!("Release Mutator");
         mutator.release(worker.tls);
         // Mutators need to be aware of all memory allocated by the collector
-        // ReleaseCollector.do_work(worker, mmtk);
+
         trace!("Release Collector");
-        worker.get_copy_context_mut().thread_local_release();
+        worker.get_copy_context_mut().thread_local_release(mutator);
     }
 }
 
@@ -507,7 +509,8 @@ impl<E: ProcessEdgesWork, P: Plan<VM = E::VM> + PlanThreadlocalTraceObject<E::VM
     }
 
     fn post_scan_object(&self, object: ObjectReference) {
-        self.plan.thread_local_post_scan_object(object);
+        let mutator = <E::VM as VMBinding>::VMActivePlan::mutator(self.tls);
+        self.plan.thread_local_post_scan_object(mutator, object);
     }
 
     fn make_another(&self, buffer: Vec<ObjectReference>) -> Self {

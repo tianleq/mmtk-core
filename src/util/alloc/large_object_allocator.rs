@@ -133,6 +133,17 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
     }
 
     #[cfg(feature = "thread_local_gc")]
+    pub fn prepare(&mut self) {
+        self.local_los_objects
+            .retain(|object| !crate::util::public_bit::is_public::<VM>(*object))
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn thread_local_prepare(&mut self) {
+        self.prepare();
+    }
+
+    #[cfg(feature = "thread_local_gc")]
     pub fn release(&mut self) {
         // This is a global gc, needs to remove dead objects from local los objects set
         use crate::policy::sft::SFT;
@@ -141,8 +152,7 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
             if self.space.is_live(object) {
                 live_objects.push(object);
             } else if crate::util::public_bit::is_public::<VM>(object) {
-                // dead public objects have been recycled, here simply needs to clear the public bit
-                crate::util::public_bit::unset_public_bit::<VM>(object);
+                debug_assert!(false, "public object found in local los set");
             } else {
                 // local/private objects also need to be reclaimed in a global gc
                 self.space.thread_local_sweep_large_object(object);
@@ -156,8 +166,11 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
         let mut live_objects = vec![];
         for object in self.local_los_objects.drain() {
             if crate::util::public_bit::is_public::<VM>(object) {
+                debug_assert!(false, "public object found in local los set");
                 continue;
             } else if self.space.is_live_in_thread_local_gc(object) {
+                // clear the local mark state
+                self.space.clear_thread_local_mark(object);
                 live_objects.push(object);
             } else {
                 self.space.thread_local_sweep_large_object(object);

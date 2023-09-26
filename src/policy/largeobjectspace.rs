@@ -309,11 +309,8 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             #[cfg(feature = "vo_bit")]
             crate::util::metadata::vo_bit::unset_vo_bit::<VM>(object);
             debug_assert!(crate::util::public_bit::is_public::<VM>(object));
-            // cannot unset public bit here because public objects are still in the thread-local queue
-            // and they need to be removed from the thread-local queue. If unset the public bit,
-            // then those public objects will be treated as private object, causing double free issue
 
-            // crate::util::public_bit::unset_public_bit::<VM>(object);
+            crate::util::public_bit::unset_public_bit::<VM>(object);
 
             self.pr
                 .release_pages(get_super_page(object.to_object_start::<VM>()));
@@ -324,7 +321,9 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             }
         } else {
             for object in self.treadmill.collect() {
-                sweep(object)
+                sweep(object);
+                #[cfg(debug_assertions)]
+                info!("sweep public los object: {:?}", object);
             }
         }
     }
@@ -376,7 +375,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    fn clear_thread_local_mark(&self, object: ObjectReference) {
+    pub fn clear_thread_local_mark(&self, object: ObjectReference) {
         let metaadta_address =
             crate::util::conversions::page_align_down(object.to_object_start::<VM>());
         unsafe {
@@ -388,9 +387,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     #[cfg(feature = "thread_local_gc")]
     pub fn is_live_in_thread_local_gc(&self, object: ObjectReference) -> bool {
         let alive = self.test_thread_local_mark(object, MARK_BIT);
-        if alive {
-            self.clear_thread_local_mark(object);
-        }
         alive
     }
 
@@ -452,6 +448,8 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     }
 
     pub fn publish_object(&self, _object: ObjectReference) {
+        #[cfg(debug_assertions)]
+        info!("publish los object: {:?}", _object);
         self.treadmill.add_to_treadmill(_object, false);
     }
 

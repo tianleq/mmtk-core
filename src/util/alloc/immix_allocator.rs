@@ -77,27 +77,25 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         }
         let blocks = std::mem::replace(&mut self.local_blocks, Box::new(SegQueue::new()));
         for block in blocks.into_iter() {
+            info!("add {:?} into local block list", block);
             self.add_block_to_list(block);
         }
     }
 
     #[cfg(feature = "thread_local_gc")]
     pub fn thread_local_prepare(&mut self) {
-        // if !self.local_blocks.is_empty() {
-        //     let blocks = std::mem::replace(&mut self.local_blocks, Box::new(SegQueue::new()));
-        //     for block in blocks.into_iter() {
-        //         self.add_block_to_list(block);
-        //     }
-        // }
-
         self.prepare();
         // A local gc does not have PrepareBlockState work packets
         // So resetting the satete manually
         let mut current = self.block_header;
         while let Some(block) = current {
+            // local list should not contain unallocated blocks
+            // it may contain unmarked blocks(newly allocated)
             debug_assert!(
-                block.get_state() != BlockState::Unallocated
-                    && block.get_state() != BlockState::Unmarked
+                block.get_state() != BlockState::Unallocated,
+                "block: {:?} state: {:?}",
+                block,
+                block.get_state()
             );
             block.set_state(BlockState::Unmarked);
             // in a local gc, always do the defrag if it is a private block
@@ -205,9 +203,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     block.owner()
                 );
                 current = self.remove_block_from_list(block);
-                info!("{:?} block: {:?} removed", block.get_state(), block);
+                // info!("{:?} block: {:?} removed", block.get_state(), block);
             } else {
-                info!("{:?} block: {:?} found", block.get_state(), block);
+                // info!("{:?} block: {:?} found", block.get_state(), block);
                 current = self.next_block(block);
             }
         }

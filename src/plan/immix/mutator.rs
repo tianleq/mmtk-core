@@ -20,10 +20,14 @@ use enum_map::EnumMap;
 const THREAD_LOCAL_GC_ACTIVE: u32 = 1;
 
 pub fn immix_mutator_prepare<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {
+    #[cfg(feature = "thread_local_gc")]
+    use crate::util::alloc::LargeObjectAllocator;
+    let allocators: &mut Allocators<VM> = mutator.allocators.borrow_mut();
+    #[cfg(feature = "thread_local_gc")]
+    let thread_local_gc_active = mutator.thread_local_gc_status == THREAD_LOCAL_GC_ACTIVE;
+
     let immix_allocator = unsafe {
-        mutator
-            .allocators
-            .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
+        allocators.get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
     }
     .downcast_mut::<ImmixAllocator<VM>>()
     .unwrap();
@@ -37,12 +41,19 @@ pub fn immix_mutator_prepare<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMW
             immix_allocator.prepare();
         }
     }
-    // immix_allocator.prepare();
-    // #[cfg(feature = "thread_local_gc")]
-    // let thread_local_gc_active = mutator.thread_local_gc_status == THREAD_LOCAL_GC_ACTIVE;
-    // if thread_local_gc_active {
-    //     immix_allocator.thread_local_prepare();
-    // }
+    #[cfg(feature = "thread_local_gc")]
+    {
+        let los_allocator: &mut LargeObjectAllocator<VM> = unsafe {
+            allocators.get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Los])
+        }
+        .downcast_mut::<LargeObjectAllocator<VM>>()
+        .unwrap();
+        if thread_local_gc_active {
+            los_allocator.thread_local_prepare();
+        } else {
+            los_allocator.prepare();
+        }
+    }
 }
 
 pub fn immix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {

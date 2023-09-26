@@ -38,10 +38,8 @@ impl<VM: VMBinding> TreadMill<VM> {
 
     pub fn add_to_treadmill(&self, object: ObjectReference, nursery: bool) {
         if nursery {
-            // println!("+ an {}", cell);
             self.alloc_nursery.lock().unwrap().insert(object);
         } else {
-            // println!("+ ts {}", cell);
             self.to_space.lock().unwrap().insert(object);
         }
     }

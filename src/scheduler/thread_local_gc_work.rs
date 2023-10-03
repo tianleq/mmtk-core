@@ -63,13 +63,14 @@ impl<C: GCWorkContext> ThreadlocalPrepare<C> {
 impl<C: GCWorkContext + 'static> GCWork<C::VM> for ThreadlocalPrepare<C> {
     fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
         trace!("Prepare Global");
+        {
+            let mutator = <C::VM as VMBinding>::VMActivePlan::mutator(self.tls);
+            PrepareMutator::<C::VM>::new(mutator).do_work(worker, mmtk);
+        }
         let mutator = <C::VM as VMBinding>::VMActivePlan::mutator(self.tls);
-
-        PrepareMutator::<C::VM>::new(mutator).do_work(worker, mmtk);
-
         // PrepareCollector.do_work(worker, mmtk);
         trace!("Prepare Collector");
-        worker.get_copy_context_mut().thread_local_prepare();
+        worker.get_copy_context_mut().thread_local_prepare(mutator);
         mmtk.plan.prepare_worker(worker);
     }
 }

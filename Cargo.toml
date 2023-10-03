@@ -103,7 +103,7 @@ extra_header = []
 debug_publish_object = ["extra_header"]
 
 #Enable thread local gc
-thread_local_gc = ["immix_non_moving"]
+thread_local_gc = []
 
 # The following two features are useful for using Immix for VMs that do not support moving GC.
 

@@ -134,6 +134,9 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
 
     #[cfg(feature = "thread_local_gc")]
     pub fn prepare(&mut self) {
+        // Remove public los objects from local los set
+        // Those public los objects have been added to the global tredmill
+        // and are managed there.
         self.local_los_objects
             .retain(|object| !crate::util::public_bit::is_public::<VM>(*object))
     }
@@ -155,6 +158,8 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
                 debug_assert!(false, "public object found in local los set");
             } else {
                 // local/private objects also need to be reclaimed in a global gc
+                // #[cfg(debug_assertions)]
+                // info!("A private los object is released in global gc");
                 self.space.thread_local_sweep_large_object(object);
             }
         }
@@ -173,6 +178,8 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
                 self.space.clear_thread_local_mark(object);
                 live_objects.push(object);
             } else {
+                #[cfg(debug_assertions)]
+                info!("A private los object is released in local gc");
                 self.space.thread_local_sweep_large_object(object);
             }
         }

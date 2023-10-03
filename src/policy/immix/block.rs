@@ -249,7 +249,7 @@ impl Block {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    pub fn can_sweep<VM: VMBinding>(
+    pub fn thread_local_can_sweep<VM: VMBinding>(
         &self,
         thread_local: bool,
         space: &ImmixSpace<VM>,
@@ -288,6 +288,12 @@ impl Block {
             let mut prev_line_is_marked = true;
             let line_mark_state = line_mark_state.unwrap();
 
+            let conservative_marking = !self.start_line().is_marked(line_mark_state);
+            // The first 16 bytes of a block(first line) contain the prev and the next pointers
+            // So the first line is conservatively marked, and if none of the lines get marked other
+            // than the first line(conservatively), the block can be swept
+            self.start_line().mark(line_mark_state);
+
             for line in self.lines() {
                 if line.is_marked(line_mark_state) {
                     marked_lines += 1;
@@ -304,7 +310,7 @@ impl Block {
                 }
             }
 
-            if marked_lines == 0 {
+            if conservative_marking && marked_lines == 1 {
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_region_swept::<VM, _>(self, false);
                 // liveness of public block is unknown during thread-local gc
@@ -368,6 +374,7 @@ impl Block {
                         self.clear_owner();
                         self.reset_publication();
                     }
+                    // release_block will set the block state to BlockState::Unallocated
                     space.release_block(*self);
                     true
                 }
@@ -386,7 +393,13 @@ impl Block {
             let mut holes = 0;
             let mut prev_line_is_marked = true;
             let line_mark_state = line_mark_state.unwrap();
-
+            #[cfg(feature = "thread_local_gc")]
+            let conservative_marking = !self.start_line().is_marked(line_mark_state);
+            // The first 16 bytes of a block(first line) contain the prev and the next pointers
+            // So the first line is conservatively marked, and if none of the lines get marked other
+            // than the first line(conservatively), the block can be swept
+            #[cfg(feature = "thread_local_gc")]
+            self.start_line().mark(line_mark_state);
             for line in self.lines() {
                 if line.is_marked(line_mark_state) {
                     marked_lines += 1;
@@ -403,7 +416,11 @@ impl Block {
                 }
             }
 
-            if marked_lines == 0 {
+            #[cfg(not(feature = "thread_local_gc"))]
+            let can_sweep = marked_lines == 0;
+            #[cfg(feature = "thread_local_gc")]
+            let can_sweep = conservative_marking && marked_lines == 1;
+            if can_sweep {
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_region_swept::<VM, _>(self, false);
                 // Release the block if non of its lines are marked.
@@ -413,6 +430,7 @@ impl Block {
                     self.reset_publication();
                 }
                 space.release_block(*self);
+
                 true
             } else {
                 // There are some marked lines. Keep the block live.
@@ -421,7 +439,7 @@ impl Block {
                     self.set_state(BlockState::Reusable {
                         unavailable_lines: marked_lines as _,
                     });
-                    space.reusable_blocks.push(*self)
+                    space.reusable_blocks.push(*self);
                 } else {
                     // Clear mark state.
                     self.set_state(BlockState::Unmarked);

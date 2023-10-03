@@ -171,20 +171,22 @@ impl<VM: VMBinding> GCWorkerCopyContext<VM> {
 
     #[cfg(feature = "thread_local_gc")]
     /// Release the copying allocators.
-    pub fn thread_local_prepare(&mut self) {
+    pub fn thread_local_prepare(&mut self, mutator: &'static Mutator<VM>) {
         // Delegate to release() for each policy copy context
 
         for (_, selector) in self.config.copy_mapping.iter() {
             match selector {
                 CopySelector::CopySpace(index) => {
-                    unsafe { self.copy[*index as usize].assume_init_mut() }.thread_local_prepare()
+                    unsafe { self.copy[*index as usize].assume_init_mut() }
+                        .thread_local_prepare(mutator)
                 }
                 CopySelector::Immix(index) => {
-                    unsafe { self.immix[*index as usize].assume_init_mut() }.thread_local_prepare()
+                    unsafe { self.immix[*index as usize].assume_init_mut() }
+                        .thread_local_prepare(mutator)
                 }
                 CopySelector::ImmixHybrid(index) => {
                     unsafe { self.immix_hybrid[*index as usize].assume_init_mut() }
-                        .thread_local_prepare()
+                        .thread_local_prepare(mutator)
                 }
                 CopySelector::Unused => {}
             }

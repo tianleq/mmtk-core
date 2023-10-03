@@ -8,7 +8,6 @@ use crate::plan::mutator_context::Mutator;
 use crate::plan::mutator_context::MutatorConfig;
 use crate::plan::mutator_context::ReservedAllocators;
 use crate::plan::AllocationSemantics;
-use crate::policy::immix::line::Line;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
 use crate::util::alloc::ImmixAllocator;
 use crate::util::opaque_pointer::{VMMutatorThread, VMWorkerThread};
@@ -125,13 +124,7 @@ pub fn create_immix_mutator<VM: VMBinding>(
         release_func: &immix_mutator_release,
     };
     let mutator_id = crate::util::MUTATOR_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);
-    #[cfg(feature = "thread_local_gc")]
-    {
-        let mut state_map = crate::policy::immix::LOCAL_LINE_MARK_STATES_MAP
-            .write()
-            .unwrap();
-        state_map.insert(mutator_id, (Line::RESET_MARK_STATE, Line::RESET_MARK_STATE));
-    }
+
     Mutator {
         allocators: Allocators::<VM>::new(mutator_tls, mutator_id, plan, &config.space_mapping),
         barrier: Box::new(PublicObjectMarkingBarrier::new(

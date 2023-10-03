@@ -3,7 +3,6 @@
 use crate::plan::barriers::Barrier;
 use crate::plan::global::Plan;
 use crate::plan::AllocationSemantics;
-use crate::policy::immix::LOCAL_LINE_MARK_STATES_MAP;
 use crate::policy::space::Space;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
 use crate::util::{Address, ObjectReference};
@@ -184,11 +183,6 @@ impl<VM: VMBinding> Mutator<VM> {
     pub fn on_destroy(&mut self) {
         for selector in self.get_all_allocator_selectors() {
             unsafe { self.allocators.get_allocator_mut(selector) }.on_mutator_destroy();
-        }
-        #[cfg(feature = "thread_local_gc")]
-        {
-            let mut state_map = LOCAL_LINE_MARK_STATES_MAP.write().unwrap();
-            state_map.remove(&self.mutator_id);
         }
     }
 }

@@ -12,7 +12,7 @@ use crate::util::linear_scan::Region;
 pub const MAX_IMMIX_OBJECT_SIZE: usize = Block::BYTES >> 1;
 
 /// Mark/sweep memory for block-level only
-pub const BLOCK_ONLY: bool = true;
+pub const BLOCK_ONLY: bool = false;
 
 /// Do we allow Immix to do defragmentation?
 pub const DEFRAG: bool = !cfg!(feature = "immix_non_moving"); // defrag if we are allowed to move.

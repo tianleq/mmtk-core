@@ -42,7 +42,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     /// Current line mark state
     pub line_mark_state: AtomicU8,
     /// Line mark state in previous GC
-    line_unavail_state: AtomicU8,
+    pub line_unavail_state: AtomicU8,
     /// A list of all reusable blocks
     pub reusable_blocks: ReusableBlockPool,
     /// Defrag utilities
@@ -655,6 +655,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         #[cfg(feature = "vo_bit")]
         vo_bit::helper::on_trace_object::<VM>(object);
 
+        #[cfg(feature = "thread_local_gc")]
+        let pin_local_objects = !crate::util::public_bit::is_public::<VM>(object);
+        #[cfg(not(feature = "thread_local_gc"))]
+        let pin_local_objects = false;
+
         let forwarding_status = ForwardingWord::attempt_to_forward::<VM>(object);
         if ForwardingWord::state_is_forwarded_or_being_forwarded(forwarding_status) {
             // We lost the forwarding race as some other thread has set the forwarding word; wait
@@ -686,7 +691,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             // We won the forwarding race but the object is already marked so we clear the
             // forwarding status and return the unmoved object
             debug_assert!(
-                nursery_collection || self.defrag.space_exhausted() || self.is_pinned(object),
+                nursery_collection || self.defrag.space_exhausted() || self.is_pinned(object) || pin_local_objects,
                 "Forwarded object is the same as original object {} even though it should have been copied",
                 object,
             );
@@ -697,6 +702,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             // and we have sufficient space in our copy allocator
             let new_object = if self.is_pinned(object)
                 || (!nursery_collection && self.defrag.space_exhausted())
+                || pin_local_objects
             {
                 self.attempt_mark(object, self.mark_state);
                 ForwardingWord::clear_forwarding_bits::<VM>(object);
@@ -718,6 +724,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_object_forwarded::<VM>(new_object);
 
+                #[cfg(feature = "thread_local_gc")]
+                {
+                    if crate::util::public_bit::is_public::<VM>(object) {
+                        // not sure if it is necessary to eagerly clear the public bit
+                        crate::util::public_bit::unset_public_bit::<VM>(object);
+                        crate::util::public_bit::set_public_bit::<VM>(new_object);
+                    }
+                }
                 new_object
             };
             debug_assert_eq!(
@@ -900,8 +914,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         Line::mark_lines_for_object::<VM>(object, self.line_mark_state.load(Ordering::Acquire));
         #[cfg(feature = "thread_local_gc")]
         {
-            let state =
-                (self.line_mark_state.load(Ordering::Acquire)) << Line::LOCAL_MARK_STATE_BITS;
+            let state = self.global_line_mark_state();
+            // #[cfg(debug_assertions)]
+            // info!("mark object: {:?}, state: {}", object, state);
             Line::mark_lines_for_object::<VM>(object, state);
         }
     }
@@ -909,8 +924,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[cfg(feature = "thread_local_gc")]
     pub fn thread_local_mark_lines(&self, object: ObjectReference, local_state: u8) {
         debug_assert!(!super::BLOCK_ONLY);
-        let global_state = self.line_mark_state.load(Ordering::Acquire);
-        let state = (global_state << Line::LOCAL_MARK_STATE_BITS) | local_state;
+        let state = self.global_line_mark_state() | local_state;
         Line::mark_lines_for_object::<VM>(object, state);
     }
 
@@ -1103,6 +1117,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     pub fn get_object_owner(&self, object: ObjectReference) -> u32 {
         Block::containing::<VM>(object).owner()
     }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn global_line_mark_state(&self) -> u8 {
+        self.line_mark_state.load(Ordering::Acquire) << Line::LOCAL_MARK_STATE_BITS
+    }
 }
 
 #[cfg(feature = "thread_local_gc")]
@@ -1255,9 +1274,9 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
                 None
             } else {
                 // This work packet is only generated during global gc
-                let global_state = self.space.line_mark_state.load(Ordering::Acquire);
-                let state = global_state << Line::LOCAL_MARK_STATE_BITS;
-                Some(state)
+                // let global_state = self.space.line_mark_state.load(Ordering::Acquire);
+                // let state = global_state << Line::LOCAL_MARK_STATE_BITS;
+                Some(self.space.global_line_mark_state())
             };
             // number of allocated blocks.
             let mut allocated_blocks = 0;
@@ -1320,6 +1339,10 @@ pub struct ImmixCopyContext<VM: VMBinding> {
     allocator: ImmixAllocator<VM>,
     #[cfg(feature = "thread_local_gc")]
     public_object_allocator: ImmixAllocator<VM>,
+    #[cfg(feature = "thread_local_gc")]
+    local_line_mark_state: Option<u8>,
+    #[cfg(feature = "thread_local_gc")]
+    local_unavailable_line_mark_state: Option<u8>,
 }
 
 impl<VM: VMBinding> PolicyCopyContext for ImmixCopyContext<VM> {
@@ -1345,9 +1368,13 @@ impl<VM: VMBinding> PolicyCopyContext for ImmixCopyContext<VM> {
             self.public_object_allocator.reset();
             // add blocks to mutator's local list
 
-            // The following is incorrect. There is a race here, mutiple collectors trying to access mutator simutaneously
-            for mutator in VM::VMActivePlan::mutators() {
-                self.thread_local_release(mutator);
+            // The following are no longer needed. In a global gc, only public objects get moved
+            // and those public objects are moved to some anonymous blocks
+            {
+                // The following may be incorrect. There is a race here, mutiple collectors trying to access mutator simutaneously
+                // for mutator in VM::VMActivePlan::mutators() {
+                //     self.thread_local_release(mutator);
+                // }
             }
         }
 
@@ -1379,21 +1406,22 @@ impl<VM: VMBinding> PolicyCopyContext for ImmixCopyContext<VM> {
         return self.allocator.alloc(bytes, align, offset);
         #[cfg(feature = "thread_local_gc")]
         {
-            // If thread local gc is enabled, objects can only lives in a block of the same owner
-            let block = Block::containing::<VM>(_original);
-            let mutator_id = block.owner();
-            let state_map = LOCAL_LINE_MARK_STATES_MAP.read().unwrap();
-            let (local_line_state, local_unavailable_line_state) =
-                state_map.get(&mutator_id).unwrap();
+            // println!("#ImmixCopyContext# copy object: {:?}", _original);
+
             if crate::util::public_bit::is_public::<VM>(_original) {
-                self.public_object_allocator.local_line_mark_state = *local_line_state;
-                self.public_object_allocator
-                    .local_unavailable_line_mark_state = *local_unavailable_line_state;
-                self.public_object_allocator
-                    .alloc_as_mutator(mutator_id, bytes, align, offset)
+                let result = self
+                    .public_object_allocator
+                    .alloc_as_collector(bytes, align, offset);
+                Block::from_unaligned_address(result).publish_block();
+                result
             } else {
-                self.allocator.local_line_mark_state = *local_line_state;
-                self.allocator.local_unavailable_line_mark_state = *local_unavailable_line_state;
+                // If thread local gc is enabled, objects can only lives in a block of the same owner
+                let block = Block::containing::<VM>(_original);
+                let mutator_id = block.owner();
+
+                self.allocator.local_line_mark_state = self.local_line_mark_state.unwrap();
+                self.allocator.local_unavailable_line_mark_state =
+                    self.local_unavailable_line_mark_state.unwrap();
                 self.allocator
                     .alloc_as_mutator(mutator_id, bytes, align, offset)
             }
@@ -1404,26 +1432,50 @@ impl<VM: VMBinding> PolicyCopyContext for ImmixCopyContext<VM> {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    fn thread_local_prepare(&mut self) {
+    fn thread_local_prepare(&mut self, mutator: &'static Mutator<VM>) {
         self.allocator.reset();
         self.public_object_allocator.reset();
         // in a thread local gc, the allocator should have the same behavior as the mutator
         self.allocator.copy = false;
         self.public_object_allocator.copy = false;
+        let immix_allocator = unsafe {
+            mutator
+                .allocators
+                .get_allocator(mutator.config.allocator_mapping[AllocationSemantics::Default])
+        }
+        .downcast_ref::<ImmixAllocator<VM>>()
+        .unwrap();
+        self.local_line_mark_state = Some(immix_allocator.local_line_mark_state);
+        self.local_unavailable_line_mark_state =
+            Some(immix_allocator.local_unavailable_line_mark_state);
     }
 
+    /// This will add blocks allocated by the collector thread back to
+    /// mutator's thread-local list
     #[cfg(feature = "thread_local_gc")]
     fn thread_local_release(&mut self, mutator: &'static Mutator<VM>) {
         self.allocator.reset();
         self.public_object_allocator.reset();
+        self.local_line_mark_state = None;
+        self.local_unavailable_line_mark_state = None;
         self.allocator.copy = true;
         self.public_object_allocator.copy = true;
         let private_local_block_map = self.allocator.local_block_map.as_deref_mut().unwrap();
-        let public_local_block_map = self
-            .public_object_allocator
-            .local_block_map
-            .as_deref_mut()
-            .unwrap();
+        // let public_local_block_map = self
+        //     .public_object_allocator
+        //     .local_block_map
+        //     .as_deref_mut()
+        //     .unwrap();
+
+        #[cfg(debug_assertions)]
+        {
+            let public_local_block_map = self
+                .public_object_allocator
+                .local_block_map
+                .as_deref_mut()
+                .unwrap();
+            assert!(public_local_block_map.is_empty());
+        }
 
         if let Some(blocks) = private_local_block_map.get(&mutator.mutator_id) {
             let immix_allocator = unsafe {
@@ -1436,20 +1488,20 @@ impl<VM: VMBinding> PolicyCopyContext for ImmixCopyContext<VM> {
             // add blocks to the local linked list
             immix_allocator.add_blocks_to_list(blocks);
         }
-        if let Some(blocks) = public_local_block_map.get(&mutator.mutator_id) {
-            let immix_allocator = unsafe {
-                mutator
-                    .allocators
-                    .get_allocator(mutator.config.allocator_mapping[AllocationSemantics::Default])
-            }
-            .downcast_ref::<ImmixAllocator<VM>>()
-            .unwrap();
-            // add blocks to the local linked list
-            immix_allocator.add_blocks_to_list(blocks);
-        }
+        // if let Some(blocks) = public_local_block_map.get(&mutator.mutator_id) {
+        //     let immix_allocator = unsafe {
+        //         mutator
+        //             .allocators
+        //             .get_allocator(mutator.config.allocator_mapping[AllocationSemantics::Default])
+        //     }
+        //     .downcast_ref::<ImmixAllocator<VM>>()
+        //     .unwrap();
+        //     // add blocks to the local linked list
+        //     immix_allocator.add_blocks_to_list(blocks);
+        // }
 
         private_local_block_map.clear();
-        public_local_block_map.clear();
+        // public_local_block_map.clear();
     }
 }
 
@@ -1479,6 +1531,8 @@ impl<VM: VMBinding> ImmixCopyContext<VM> {
                 Some(ImmixAllocSemantics::Public),
                 Some(Box::new(std::collections::HashMap::new())),
             ),
+            local_line_mark_state: None,
+            local_unavailable_line_mark_state: None,
         }
     }
 
@@ -1545,12 +1599,6 @@ impl<VM: VMBinding> ImmixHybridCopyContext<VM> {
         // Just get the space from either allocator
         self.defrag_allocator.immix_space()
     }
-}
-
-#[cfg(feature = "thread_local_gc")]
-lazy_static! {
-    pub static ref LOCAL_LINE_MARK_STATES_MAP: RwLock<std::collections::HashMap<u32, (u8, u8)>> =
-        RwLock::new(std::collections::HashMap::new());
 }
 
 #[cfg(feature = "vo_bit")]

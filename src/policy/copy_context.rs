@@ -25,7 +25,7 @@ pub trait PolicyCopyContext: 'static + Send {
     ) -> Address;
     fn post_copy(&mut self, _obj: ObjectReference, _bytes: usize) {}
     #[cfg(feature = "thread_local_gc")]
-    fn thread_local_prepare(&mut self) {}
+    fn thread_local_prepare(&mut self, _mutator: &'static Mutator<Self::VM>) {}
     #[cfg(feature = "thread_local_gc")]
     fn thread_local_release(&mut self, _mutator: &'static Mutator<Self::VM>) {}
 }

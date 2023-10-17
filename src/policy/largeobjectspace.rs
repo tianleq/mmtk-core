@@ -322,8 +322,8 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         } else {
             for object in self.treadmill.collect() {
                 sweep(object);
-                #[cfg(debug_assertions)]
-                info!("sweep public los object: {:?}", object);
+                // #[cfg(debug_assertions)]
+                // info!("sweep public los object: {:?}", object);
             }
         }
     }
@@ -448,8 +448,8 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     }
 
     pub fn publish_object(&self, _object: ObjectReference) {
-        #[cfg(debug_assertions)]
-        info!("publish los object: {:?}", _object);
+        // #[cfg(debug_assertions)]
+        // info!("publish los object: {:?}", _object);
         self.treadmill.add_to_treadmill(_object, false);
     }
 

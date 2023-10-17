@@ -125,7 +125,6 @@ impl<VM: VMBinding> Allocators<VM> {
                         plan,
                         false,
                         None,
-                        None,
                     ));
                 }
                 AllocatorSelector::FreeList(index) => {

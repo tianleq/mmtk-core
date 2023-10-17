@@ -178,8 +178,8 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
                 self.space.clear_thread_local_mark(object);
                 live_objects.push(object);
             } else {
-                #[cfg(debug_assertions)]
-                info!("A private los object is released in local gc");
+                // #[cfg(debug_assertions)]
+                // info!("A private los object is released in local gc");
                 self.space.thread_local_sweep_large_object(object);
             }
         }

@@ -980,7 +980,8 @@ pub fn mmtk_publish_object<VM: VMBinding>(
         return;
     }
 
-    let mut closure = crate::plan::MarkingObjectPublicClosure::<VM>::new(mmtk);
+    let mut closure: crate::plan::MarkingObjectPublicClosure<VM> =
+        crate::plan::MarkingObjectPublicClosure::<VM>::new(mmtk);
     mmtk_set_public_bit(mmtk, object);
     VM::VMScanning::scan_object(
         VMWorkerThread(VMThread::UNINITIALIZED),

@@ -63,13 +63,6 @@ impl BlockState {
     }
 }
 
-#[cfg(feature = "thread_local_gc")]
-#[derive(Debug, Clone, Copy)]
-pub struct BlockListNode {
-    pub prev: usize,
-    pub next: usize,
-}
-
 /// Data structure to reference an immix block.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialOrd, PartialEq)]
@@ -110,15 +103,22 @@ impl Block {
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_MARK;
 
     /// Block owner table (side)
+    #[cfg(feature = "thread_local_gc")]
     pub const OWNER_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_OWNER;
 
     /// Block level public table (side)
-    pub const PUBLICATION_TABLE: SideMetadataSpec =
+    #[cfg(feature = "thread_local_gc")]
+    pub const BLOCK_PUBLICATION_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_PUBLICATION;
 
     #[cfg(feature = "thread_local_gc")]
-    pub const BLOCK_LINKED_LIST_BYTES: usize = std::mem::size_of::<BlockListNode>();
+    pub const BLOCK_LINKED_LIST_PREV_TABLE: SideMetadataSpec =
+        crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_LINKED_LIST_PREV;
+
+    #[cfg(feature = "thread_local_gc")]
+    pub const BLOCK_LINKED_LIST_NEXT_TABLE: SideMetadataSpec =
+        crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_LINKED_LIST_NEXT;
 
     /// Get the chunk containing the block.
     pub fn chunk(&self) -> Chunk {
@@ -144,16 +144,54 @@ impl Block {
         Self::MARK_TABLE.store_atomic::<u8>(self.start(), state, Ordering::SeqCst);
     }
 
-    pub fn publish_block(&self) {
-        Self::PUBLICATION_TABLE.store_atomic::<u8>(self.start(), 1, Ordering::SeqCst);
+    #[cfg(feature = "thread_local_gc")]
+    pub fn publish(&self, publish_lines: bool) {
+        Self::BLOCK_PUBLICATION_TABLE.store_atomic::<u8>(self.start(), 1, Ordering::SeqCst);
+        // Also publish all lines within the block
+        if publish_lines {
+            Line::LINE_PUBLICATION_TABLE.bset_metadata(self.start(), Self::BYTES);
+        }
     }
 
+    #[cfg(feature = "thread_local_gc")]
     pub fn reset_publication(&self) {
-        Self::PUBLICATION_TABLE.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
+        Self::BLOCK_PUBLICATION_TABLE.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
+        // Also rest all lines within the block
+        Line::LINE_PUBLICATION_TABLE.bzero_metadata(self.start(), Self::BYTES);
     }
 
+    #[cfg(feature = "thread_local_gc")]
+    pub fn reset_line_mark_state(&self) {
+        #[cfg(debug_assertions)]
+        {
+            // rest all lines within the block
+            Line::MARK_TABLE.bzero_metadata(self.start(), Self::BYTES);
+        }
+    }
+
+    #[cfg(feature = "thread_local_gc")]
     pub fn is_block_published(&self) -> bool {
-        Self::PUBLICATION_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst) == 1
+        Self::BLOCK_PUBLICATION_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst) == 1
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn verify_lines(&self, state: u8) -> bool {
+        for line in self.lines() {
+            if line.is_marked(state) {
+                return false;
+            }
+        }
+        true
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn is_block_full(&self, state: u8) -> bool {
+        for line in self.lines() {
+            if !line.is_marked(state) {
+                return false;
+            }
+        }
+        true
     }
 
     // Defrag byte
@@ -200,6 +238,14 @@ impl Block {
     pub fn deinit(&self) {
         crate::util::public_bit::bzero_public_bit(self.start(), Self::BYTES);
         self.set_state(BlockState::Unallocated);
+        #[cfg(debug_assertions)]
+        {
+            self.clear_owner();
+            // clear line state
+            for line in self.lines() {
+                line.reset_line_mark_state();
+            }
+        }
     }
 
     pub fn start_line(&self) -> Line {
@@ -251,7 +297,6 @@ impl Block {
     #[cfg(feature = "thread_local_gc")]
     pub fn thread_local_can_sweep<VM: VMBinding>(
         &self,
-        thread_local: bool,
         space: &ImmixSpace<VM>,
         mark_histogram: &mut Histogram,
         line_mark_state: Option<u8>,
@@ -262,7 +307,7 @@ impl Block {
                     #[cfg(feature = "vo_bit")]
                     vo_bit::helper::on_region_swept::<VM, _>(self, false);
 
-                    if thread_local && self.is_block_published() {
+                    if self.is_block_published() {
                         // liveness of public block is unknown during thread-local gc
                         // so conservatively treat it as live
                         false
@@ -287,20 +332,19 @@ impl Block {
             let mut holes = 0;
             let mut prev_line_is_marked = true;
             let line_mark_state = line_mark_state.unwrap();
-
-            let conservative_marking = !self.start_line().is_marked(line_mark_state);
-            // The first 16 bytes of a block(first line) contain the prev and the next pointers
-            // So the first line is conservatively marked, and if none of the lines get marked other
-            // than the first line(conservatively), the block can be swept
-            self.start_line().mark(line_mark_state);
+            let publish_state = Line::public_line_mark_state(line_mark_state);
 
             for line in self.lines() {
-                if line.is_marked(line_mark_state) {
+                if line.is_marked(line_mark_state) || line.is_published(publish_state) {
                     marked_lines += 1;
                     prev_line_is_marked = true;
                 } else {
                     if prev_line_is_marked {
                         holes += 1;
+                    }
+                    #[cfg(debug_assertions)]
+                    {
+                        crate::util::memory::set(line.start(), 0xFF, Line::BYTES);
                     }
 
                     #[cfg(feature = "immix_zero_on_release")]
@@ -310,7 +354,7 @@ impl Block {
                 }
             }
 
-            if conservative_marking && marked_lines == 1 {
+            if marked_lines == 0 {
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_region_swept::<VM, _>(self, false);
                 // liveness of public block is unknown during thread-local gc
@@ -393,15 +437,29 @@ impl Block {
             let mut holes = 0;
             let mut prev_line_is_marked = true;
             let line_mark_state = line_mark_state.unwrap();
-            #[cfg(feature = "thread_local_gc")]
-            let conservative_marking = !self.start_line().is_marked(line_mark_state);
-            // The first 16 bytes of a block(first line) contain the prev and the next pointers
-            // So the first line is conservatively marked, and if none of the lines get marked other
-            // than the first line(conservatively), the block can be swept
-            #[cfg(feature = "thread_local_gc")]
-            self.start_line().mark(line_mark_state);
+            let publish_state = Line::public_line_mark_state(line_mark_state);
+
             for line in self.lines() {
-                if line.is_marked(line_mark_state) {
+                #[cfg(debug_assertions)]
+                {
+                    if line.is_public_line() {
+                        assert!(
+                            line.is_published(publish_state) || line.is_marked(0),
+                            "public line is not marked, owner: {:?}, line mark state: {}",
+                            self.owner(),
+                            line.debug_line_mark_state()
+                        );
+                    } else {
+                        assert!(
+                            !line.is_published(publish_state),
+                            "private line is marked as public, block: {:?}, {:?}",
+                            self.owner(),
+                            self.is_block_published()
+                        );
+                    }
+                }
+
+                if line.is_marked(line_mark_state) || line.is_published(publish_state) {
                     marked_lines += 1;
                     prev_line_is_marked = true;
                 } else {
@@ -416,11 +474,7 @@ impl Block {
                 }
             }
 
-            #[cfg(not(feature = "thread_local_gc"))]
-            let can_sweep = marked_lines == 0;
-            #[cfg(feature = "thread_local_gc")]
-            let can_sweep = conservative_marking && marked_lines == 1;
-            if can_sweep {
+            if marked_lines == 0 {
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_region_swept::<VM, _>(self, false);
                 // Release the block if non of its lines are marked.

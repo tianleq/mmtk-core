@@ -282,29 +282,14 @@ impl<VM: VMBinding> Immix<VM> {
             //Scan mutator
             ScanMutator::<DefragContext::ThreadlocalProcessEdgesWorkType>::new(tls)
                 .do_work(worker, worker.mmtk);
-            // worker.scheduler().work_buckets[WorkBucketStage::Unconstrained].add(ScanMutator::<
-            //     DefragContext::ProcessEdgesWorkType,
-            // >::new(
-            //     mutator_id
-            // ));
 
             // Prepare global/collectors/mutators
             ThreadlocalPrepare::<DefragContext>::new(plan, tls).do_work(worker, worker.mmtk);
-            // worker.scheduler().work_buckets[WorkBucketStage::Prepare].add(ThreadlocalPrepare::<
-            //     DefragContext,
-            // >::new(
-            //     plan, mutator_id
-            // ));
 
             // Release global/collectors/mutators
             worker.scheduler().work_buckets[WorkBucketStage::Unconstrained].set_local_sentinel(
                 Box::new(ThreadlocalSentinel::<DefragContext>::new(plan, tls)),
             );
-            // worker.scheduler().work_buckets[WorkBucketStage::Release].add(ThreadlocalRelease::<
-            //     DefragContext,
-            // >::new(
-            //     plan, mutator_id
-            // ));
         } else {
             //Scan mutator
             ScanMutator::<FastContext::ThreadlocalProcessEdgesWorkType>::new(tls)

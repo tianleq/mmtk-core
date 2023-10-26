@@ -27,5 +27,5 @@ pub trait PolicyCopyContext: 'static + Send {
     #[cfg(feature = "thread_local_gc")]
     fn thread_local_prepare(&mut self, _mutator: &'static Mutator<Self::VM>) {}
     #[cfg(feature = "thread_local_gc")]
-    fn thread_local_release(&mut self, _mutator: &'static Mutator<Self::VM>) {}
+    fn thread_local_release<'a>(&mut self, _mutator: &'a mut Mutator<Self::VM>) {}
 }

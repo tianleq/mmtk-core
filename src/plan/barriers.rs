@@ -12,7 +12,7 @@ use crate::{
 use atomic::Ordering;
 use downcast_rs::Downcast;
 
-use super::tracing::MarkingObjectPublicClosure;
+use super::tracing::PublishObjectClosure;
 
 /// BarrierSelector describes which barrier to use.
 ///
@@ -318,7 +318,9 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
     }
 
     fn trace_public_object(&mut self, _src: ObjectReference, value: ObjectReference) {
-        let mut closure = MarkingObjectPublicClosure::<VM>::new(self.mmtk);
+        let mut closure = PublishObjectClosure::<VM>::new(self.mmtk);
+        // #[cfg(all(debug_assertions, feature = "debug_publish_object"))]
+        // info!("publish root object: {:?}", value);
         set_public_bit::<VM>(value);
         #[cfg(feature = "thread_local_gc")]
         self.mmtk.plan.publish_object(value);

@@ -162,11 +162,8 @@ impl Block {
 
     #[cfg(feature = "thread_local_gc")]
     pub fn reset_line_mark_state(&self) {
-        #[cfg(debug_assertions)]
-        {
-            // rest all lines within the block
-            Line::MARK_TABLE.bzero_metadata(self.start(), Self::BYTES);
-        }
+        // rest all lines within the block
+        Line::MARK_TABLE.bzero_metadata(self.start(), Self::BYTES);
     }
 
     #[cfg(feature = "thread_local_gc")]
@@ -174,7 +171,7 @@ impl Block {
         Self::BLOCK_PUBLICATION_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst) == 1
     }
 
-    #[cfg(feature = "thread_local_gc")]
+    #[cfg(all(feature = "thread_local_gc", debug_assertions))]
     pub fn verify_lines(&self, state: u8) -> bool {
         for line in self.lines() {
             if line.is_marked(state) {
@@ -335,6 +332,26 @@ impl Block {
             let publish_state = Line::public_line_mark_state(line_mark_state);
 
             for line in self.lines() {
+                #[cfg(debug_assertions)]
+                {
+                    if line.is_public_line() {
+                        assert!(
+                            line.is_published(publish_state),
+                            "public line: {:?} is not marked, owner: {:?}, line mark state: {}",
+                            line,
+                            self.owner(),
+                            line.get_line_mark_state()
+                        );
+                    } else {
+                        assert!(
+                            !line.is_published(publish_state),
+                            "private line: {:?} is marked as public, block: {:?}, {:?}",
+                            line,
+                            self.owner(),
+                            self.is_block_published()
+                        );
+                    }
+                }
                 if line.is_marked(line_mark_state) || line.is_published(publish_state) {
                     marked_lines += 1;
                     prev_line_is_marked = true;
@@ -444,15 +461,17 @@ impl Block {
                 {
                     if line.is_public_line() {
                         assert!(
-                            line.is_published(publish_state) || line.is_marked(0),
-                            "public line is not marked, owner: {:?}, line mark state: {}",
+                            line.is_published(publish_state) || line.is_marked(0), // public line bit is bulk set during page allocation, some lines may not have objects, so mark state can be 0
+                            "public line: {:?} is not marked, owner: {:?}, line mark state: {}",
+                            line,
                             self.owner(),
-                            line.debug_line_mark_state()
+                            line.get_line_mark_state()
                         );
                     } else {
                         assert!(
                             !line.is_published(publish_state),
-                            "private line is marked as public, block: {:?}, {:?}",
+                            "private line: {:?} is marked as public, block: {:?}, {:?}",
+                            line,
                             self.owner(),
                             self.is_block_published()
                         );

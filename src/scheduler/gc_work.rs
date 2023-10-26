@@ -678,6 +678,65 @@ pub trait ProcessEdgesWork:
         }
     }
 
+    #[cfg(feature = "debug_publish_object")]
+    fn process_edges(&mut self) {
+        for i in 0..self.edges.len() {
+            #[cfg(debug_assertions)]
+            {
+                if self.roots {
+                    assert!(
+                        self.edges[i].load() == self.sources[i],
+                        "root packets, source object != slot.load()"
+                    );
+                }
+            }
+            // self.process_edge(self.edges[i]);
+            let slot: EdgeOf<Self> = self.edges[i];
+            let object = slot.load();
+            // #[cfg(debug_assertions)]
+            // {
+            //     if !object.is_null() && object.value() < 0x20000000000 {}
+            // }
+            let new_object = self.trace_object(object);
+            #[cfg(feature = "debug_publish_object")]
+            {
+                let source = self.sources[i];
+                if !source.is_null() && crate::util::public_bit::is_public::<Self::VM>(source) {
+                    if !new_object.is_null() {
+                        let valid = crate::util::public_bit::is_public::<Self::VM>(new_object);
+                        if !valid {
+                            let metadata_address =
+                                crate::util::public_bit::public_bit_metadata_address::<Self::VM>(
+                                    new_object,
+                                );
+                            <Self::VM as VMBinding>::VMObjectModel::dump_object(source);
+                            info!("################ {:?} ################", metadata_address);
+                            <Self::VM as VMBinding>::VMObjectModel::dump_object(new_object);
+                        }
+                        debug_assert!(
+                            valid,
+                            "public object: {:?} {:?} points to private object: {:?} {:?}",
+                            source,
+                            crate::util::object_extra_header_metadata::get_extra_header_metadata::<
+                                Self::VM,
+                                usize,
+                            >(source),
+                            new_object,
+                            crate::util::object_extra_header_metadata::get_extra_header_metadata::<
+                                Self::VM,
+                                usize,
+                            >(new_object)
+                        );
+                    }
+                }
+            }
+            if Self::OVERWRITE_REFERENCE {
+                slot.store(new_object);
+            }
+        }
+    }
+
+    #[cfg(not(feature = "debug_publish_object"))]
     fn process_edges(&mut self) {
         for i in 0..self.edges.len() {
             self.process_edge(self.edges[i])

@@ -195,7 +195,7 @@ impl<VM: VMBinding> GCWorkerCopyContext<VM> {
 
     #[cfg(feature = "thread_local_gc")]
     /// Release the copying allocators.
-    pub fn thread_local_release(&mut self, mutator: &'static Mutator<VM>) {
+    pub fn thread_local_release<'a>(&mut self, mutator: &'a mut Mutator<VM>) {
         // Delegate to release() for each policy copy context
 
         for (_, selector) in self.config.copy_mapping.iter() {

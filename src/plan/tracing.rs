@@ -187,14 +187,14 @@ impl<'a, E: ProcessEdgesWork> Drop for ObjectsClosure<'a, E> {
     }
 }
 
-pub struct MarkingObjectPublicClosure<VM: crate::vm::VMBinding> {
+pub struct PublishObjectClosure<VM: crate::vm::VMBinding> {
     _mmtk: &'static MMTK<VM>,
     edge_buffer: std::collections::VecDeque<VM::VMEdge>,
 }
 
-impl<VM: crate::vm::VMBinding> MarkingObjectPublicClosure<VM> {
+impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
     pub fn new(mmtk: &'static MMTK<VM>) -> Self {
-        MarkingObjectPublicClosure {
+        PublishObjectClosure {
             _mmtk: mmtk,
             edge_buffer: std::collections::VecDeque::new(),
         }
@@ -208,6 +208,8 @@ impl<VM: crate::vm::VMBinding> MarkingObjectPublicClosure<VM> {
                 continue;
             }
             if !crate::util::public_bit::is_public::<VM>(object) {
+                // #[cfg(all(debug_assertions, feature = "debug_publish_object"))]
+                // info!("publish descendant object: {:?}", object);
                 // set public bit on the object
                 crate::util::public_bit::set_public_bit::<VM>(object);
                 #[cfg(feature = "thread_local_gc")]
@@ -222,7 +224,7 @@ impl<VM: crate::vm::VMBinding> MarkingObjectPublicClosure<VM> {
     }
 }
 
-impl<VM: crate::vm::VMBinding> EdgeVisitor<VM::VMEdge> for MarkingObjectPublicClosure<VM> {
+impl<VM: crate::vm::VMBinding> EdgeVisitor<VM::VMEdge> for PublishObjectClosure<VM> {
     #[cfg(not(feature = "debug_publish_object"))]
     fn visit_edge(&mut self, edge: VM::VMEdge) {
         self.edge_buffer.push_back(edge);
@@ -234,7 +236,7 @@ impl<VM: crate::vm::VMBinding> EdgeVisitor<VM::VMEdge> for MarkingObjectPublicCl
     }
 }
 
-impl<VM: crate::vm::VMBinding> Drop for MarkingObjectPublicClosure<VM> {
+impl<VM: crate::vm::VMBinding> Drop for PublishObjectClosure<VM> {
     #[inline(always)]
     fn drop(&mut self) {
         assert!(

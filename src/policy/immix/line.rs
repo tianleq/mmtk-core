@@ -89,7 +89,7 @@ impl Line {
 
     #[cfg(debug_assertions)]
     /// Test line publication state.
-    pub fn debug_line_mark_state(&self) -> u8 {
+    pub fn get_line_mark_state(&self) -> u8 {
         unsafe { Self::MARK_TABLE.load::<u8>(self.start()) }
     }
 
@@ -127,7 +127,7 @@ impl Line {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    pub fn mark_lines_for_object<VM: VMBinding>(object: ObjectReference, state: u8) -> usize {
+    pub fn mark_lines_for_object<VM: VMBinding>(object: ObjectReference, state: u8) {
         // debug_assert!(!super::BLOCK_ONLY);
         // let start = object.to_object_start::<VM>();
         // let end = start + VM::VMObjectModel::get_current_size(object);
@@ -145,10 +145,10 @@ impl Line {
         //     line.mark(state)
         // }
         // marked_lines
-        Self::mark_lines_for_object_impl::<VM>(object, state, false)
+        Self::mark_lines_for_object_impl::<VM>(object, state, false);
     }
 
-    #[cfg(feature = "thread_local_gc")]
+    #[cfg(all(feature = "thread_local_gc", debug_assertions))]
     pub fn verify_line_mark_state_of_object<VM: VMBinding>(
         object: ObjectReference,
         state: u8,
@@ -172,21 +172,31 @@ impl Line {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    pub fn publish_lines_for_object<VM: VMBinding>(object: ObjectReference) {
-        let start = object.to_object_start::<VM>();
-        let end = start + VM::VMObjectModel::get_current_size(object);
-        let start_line = Line::from_unaligned_address(start);
-        let mut end_line = Line::from_unaligned_address(end);
-        if !Line::is_aligned(end) {
-            end_line = end_line.next();
-        }
+    pub fn publish_lines_for_object<VM: VMBinding>(object: ObjectReference, state: u8) {
+        // mark line as public
+        let (start_line, end_line) = Self::mark_lines_for_object_impl::<VM>(object, state, false);
+
         // The following is safe because an object can only be published by its owner(exactly one thread will do the publication)
-        let size = end_line.end() - start_line.start();
-        debug_assert!(
-            size % Line::BYTES == 0,
-            "size is not a multiply of line size"
-        );
-        Line::LINE_PUBLICATION_TABLE.bset_metadata(start_line.start(), size);
+        // let size = end_line.end() - start_line.start();
+        // debug_assert!(
+        //     size % Line::BYTES == 0,
+        //     "size is not a multiply of line size"
+        // );
+        // Line::LINE_PUBLICATION_TABLE.bset_metadata(start_line.start(), size);
+
+        let iter = RegionIterator::<Line>::new(start_line, end_line);
+        for line in iter {
+            debug_assert!(
+                line.is_marked(state),
+                "public object: {:?} is not marked properly ({:?})",
+                object,
+                state
+            );
+            unsafe {
+                Line::LINE_PUBLICATION_TABLE.store::<u8>(line.start(), 1);
+            }
+            // info!("Line: {:?} published", line);
+        }
     }
 
     #[cfg(feature = "thread_local_gc")]
@@ -196,14 +206,15 @@ impl Line {
 
     #[cfg(feature = "thread_local_gc")]
     /// Mark all lines the object is spanned to, but keep public lines untouched
-    pub fn thread_local_mark_lines_for_object<VM: VMBinding>(
-        object: ObjectReference,
-        state: u8,
-    ) -> usize {
+    pub fn thread_local_mark_lines_for_object<VM: VMBinding>(object: ObjectReference, state: u8) {
         // It is safe/sound to retain public state because the objects visited
         // here in the local gc are private, other mutator cannot see them. And since
         // the current mutator is stopped, no more private objects will be published
-        Self::mark_lines_for_object_impl::<VM>(object, state, true)
+        debug_assert!(
+            state < 128,
+            "local gc line mark state is incorrect, top bit is set to 1"
+        );
+        Self::mark_lines_for_object_impl::<VM>(object, state, true);
     }
 
     #[cfg(feature = "thread_local_gc")]
@@ -211,26 +222,31 @@ impl Line {
         object: ObjectReference,
         state: u8,
         retain_public_state: bool,
-    ) -> usize {
+    ) -> (Line, Line) {
         debug_assert!(!super::BLOCK_ONLY);
+        #[cfg(not(feature = "debug_publish_object"))]
         let start = object.to_object_start::<VM>();
+        #[cfg(not(feature = "debug_publish_object"))]
         let end = start + VM::VMObjectModel::get_current_size(object);
+        #[cfg(feature = "debug_publish_object")]
+        let start = object.to_object_start::<VM>() - VM::EXTRA_HEADER_BYTES;
+        #[cfg(feature = "debug_publish_object")]
+        let end = start + VM::VMObjectModel::get_current_size(object) + VM::EXTRA_HEADER_BYTES;
         let start_line = Line::from_unaligned_address(start);
         let mut end_line = Line::from_unaligned_address(end);
         if !Line::is_aligned(end) {
             end_line = end_line.next();
         }
-        let mut marked_lines = 0;
+
         let iter = RegionIterator::<Line>::new(start_line, end_line);
         for line in iter {
-            if !line.is_marked(state) {
-                marked_lines += 1;
-            } else if retain_public_state && line.is_published(Self::public_line_mark_state(state))
-            {
+            if retain_public_state && line.is_published(Self::public_line_mark_state(state)) {
                 continue;
             }
-            line.mark(state)
+            // benign race here, as the state is the same,
+            // multiple gc threads are trying to write the same byte value
+            line.mark(state);
         }
-        marked_lines
+        (start_line, end_line)
     }
 }

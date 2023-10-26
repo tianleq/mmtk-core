@@ -64,7 +64,6 @@ pub(crate) mod test_util;
 /// A treadmill implementation.
 pub(crate) mod treadmill;
 
-pub(crate) mod debug_bit;
 pub(crate) mod public_bit;
 
 // #[cfg(feature = "extra_header")]

@@ -960,6 +960,8 @@ pub fn handle_user_single_thread_collection_request<VM: VMBinding>(
 
 pub fn mmtk_set_public_bit<VM: VMBinding>(mmtk: &'static MMTK<VM>, object: ObjectReference) {
     debug_assert!(!object.is_null(), "object is null!");
+    // #[cfg(all(debug_assertions, feature = "debug_publish_object"))]
+    // info!("mmtk_set_public_bit object: {:?}", object);
     crate::util::public_bit::set_public_bit::<VM>(object);
     #[cfg(feature = "thread_local_gc")]
     mmtk.plan.publish_object(object);
@@ -976,12 +978,20 @@ pub fn mmtk_publish_object<VM: VMBinding>(
 
     #[cfg(feature = "thread_local_gc")]
     // only publish objects of its own (only affect publish vm specific roots)
-    if mutator_id.is_some() && mutator_id != mmtk.plan.get_object_owner(object) {
-        return;
+    if mutator_id.is_some() {
+        debug_assert!(
+            crate::util::public_bit::is_public::<VM>(object),
+            "code cache object leaks"
+        );
+        if mutator_id != mmtk.plan.get_object_owner(object) {
+            return;
+        }
     }
 
-    let mut closure: crate::plan::MarkingObjectPublicClosure<VM> =
-        crate::plan::MarkingObjectPublicClosure::<VM>::new(mmtk);
+    let mut closure: crate::plan::PublishObjectClosure<VM> =
+        crate::plan::PublishObjectClosure::<VM>::new(mmtk);
+    // #[cfg(debug_assertions)]
+    // info!("publish root object: {:?}", object);
     mmtk_set_public_bit(mmtk, object);
     VM::VMScanning::scan_object(
         VMWorkerThread(VMThread::UNINITIALIZED),

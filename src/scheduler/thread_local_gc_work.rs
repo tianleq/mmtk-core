@@ -99,12 +99,13 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for ThreadlocalRelease<C> {
         let mutator = <C::VM as VMBinding>::VMActivePlan::mutator(self.tls);
         // self.plan.base().gc_trigger.policy.on_gc_release(mmtk);
 
-        trace!("Release Mutator");
-        mutator.release(worker.tls);
         // Mutators need to be aware of all memory allocated by the collector
-
+        // So collector must be released before mutator
         trace!("Release Collector");
         worker.get_copy_context_mut().thread_local_release(mutator);
+
+        trace!("Release Mutator");
+        mutator.release(worker.tls);
     }
 }
 
@@ -422,23 +423,51 @@ impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIN
     fn _process_edge(&mut self, _source: ObjectReference, slot: EdgeOf<Self>) {
         let object = slot.load();
         let new_object = self.trace_object(object);
-        #[cfg(feature = "extra_header")]
+        #[cfg(feature = "debug_publish_object")]
         {
-            if !object.is_null() && !crate::util::public_bit::is_public::<VM>(object) {
-                let m1 = crate::util::object_extra_header_metadata::get_extra_header_metadata::<
-                    VM,
-                    usize,
-                >(object);
-                let m2 = crate::util::object_extra_header_metadata::get_extra_header_metadata::<
-                    VM,
-                    usize,
-                >(_source);
-                debug_assert!(
-                    (m1 & object_extra_header_metadata::BOTTOM_HALF_MASK)
-                        == (m2 & object_extra_header_metadata::BOTTOM_HALF_MASK),
-                    "object is not published properly."
-                )
+            if !_source.is_null() && crate::util::public_bit::is_public::<VM>(_source) {
+                if !new_object.is_null() {
+                    debug_assert!(
+                        crate::util::public_bit::is_public::<VM>(new_object),
+                        "public object: {:?} {:?} points to private object: {:?} {:?}",
+                        _source,
+                        crate::util::object_extra_header_metadata::get_extra_header_metadata::<
+                            VM,
+                            usize,
+                        >(_source),
+                        new_object,
+                        crate::util::object_extra_header_metadata::get_extra_header_metadata::<
+                            VM,
+                            usize,
+                        >(new_object)
+                    );
+                }
             }
+            // if !object.is_null() {
+            //     if !crate::util::public_bit::is_public::<VM>(object) {
+            //         let m1 = crate::util::object_extra_header_metadata::get_extra_header_metadata::<
+            //             VM,
+            //             usize,
+            //         >(object);
+            //         let m2 = crate::util::object_extra_header_metadata::get_extra_header_metadata::<
+            //             VM,
+            //             usize,
+            //         >(_source);
+            //         debug_assert!(
+            //             (m1 & object_extra_header_metadata::BOTTOM_HALF_MASK)
+            //                 == (m2 & object_extra_header_metadata::BOTTOM_HALF_MASK),
+            //             "object is not published properly. object: {:?}, source: {:?}",
+            //             m1,
+            //             m2
+            //         );
+            //         debug_assert!(
+            //             !crate::util::public_bit::is_public::<VM>(_source),
+            //             "public object: {:?} points a private object: {:?}",
+            //             _source,
+            //             object
+            //         );
+            //     }
+            // }
         }
         if P::thread_local_may_move_objects::<KIND>() {
             slot.store(new_object);

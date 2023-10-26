@@ -66,6 +66,16 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     }
 
     #[cfg(feature = "thread_local_gc")]
+    pub fn set_mutator(&mut self, mutator_id: u32) {
+        self.mutator_id = mutator_id;
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn get_mutator(&self) -> u32 {
+        self.mutator_id
+    }
+
+    #[cfg(feature = "thread_local_gc")]
     pub fn prepare(&mut self) {}
 
     #[cfg(feature = "thread_local_gc")]
@@ -172,6 +182,22 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     }
 
     #[cfg(feature = "thread_local_gc")]
+    pub fn alloc_as_mutator(
+        &mut self,
+        _mutator_id: u32,
+        size: usize,
+        align: usize,
+        offset: usize,
+    ) -> Address {
+        let rtn = self.alloc(size, align, offset);
+        debug_assert!(
+            !rtn.is_zero(),
+            "local gc cannot find space to evacuate private objects"
+        );
+        rtn
+    }
+
+    #[cfg(feature = "thread_local_gc")]
     // This function is only called when moving public objects. It will move public objects to
     // some anonymous block
     pub fn alloc_as_collector(&mut self, size: usize, align: usize, offset: usize) -> Address {
@@ -182,15 +208,38 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             "This is a collector, should not behave like a mutator"
         );
 
-        let rtn = self.alloc_impl(size, align, offset, true);
-        debug_assert!(
-            u32::MAX == Block::from_unaligned_address(rtn).owner(),
-            "mutator_id: {} != block owner: {}",
-            u32::MAX,
-            Block::from_unaligned_address(rtn).owner()
-        );
+        #[cfg(not(feature = "extra_header"))]
+        {
+            let rtn = self.alloc_impl(size, align, offset, true);
+            debug_assert!(
+                u32::MAX == Block::from_unaligned_address(rtn).owner(),
+                "mutator_id: {} != block owner: {}",
+                u32::MAX,
+                Block::from_unaligned_address(rtn).owner()
+            );
 
-        rtn
+            rtn
+        }
+
+        #[cfg(feature = "extra_header")]
+        {
+            let rtn = self.alloc_impl(size + VM::EXTRA_HEADER_BYTES, align, offset, true);
+            debug_assert!(
+                u32::MAX == Block::from_unaligned_address(rtn).owner(),
+                "mutator_id: {} != block owner: {}",
+                u32::MAX,
+                Block::from_unaligned_address(rtn).owner()
+            );
+            if !rtn.is_zero() {
+                debug_assert!(
+                    !crate::util::public_bit::is_public_object(rtn + VM::EXTRA_HEADER_BYTES),
+                    "public bit is not cleared properly"
+                );
+                rtn + VM::EXTRA_HEADER_BYTES
+            } else {
+                rtn
+            }
+        }
     }
 
     // This function is only called after a global gc
@@ -275,21 +324,21 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     /// This is the sweeping blocks work
     pub fn thread_local_release(&mut self) {
         // Update local line_unavail_state for hole searching after this GC.
-        use atomic::Ordering;
         self.local_unavailable_line_mark_state = self.local_line_mark_state;
         self.thread_local_sweep_impl();
 
-        #[cfg(debug_assertions)]
-        info!(
-            "local line mark state: {}, global line mark state: {}",
-            self.local_line_mark_state,
-            self.space.line_mark_state.load(Ordering::Acquire),
-        );
+        // #[cfg(debug_assertions)]
+        // info!(
+        //     "local line mark state: {}, global line mark state: {}",
+        //     self.local_line_mark_state,
+        //     self.space.line_mark_state.load(atomic::Ordering::Acquire),
+        // );
     }
 
     #[cfg(feature = "thread_local_gc")]
     fn thread_local_sweep_impl(&mut self) {
-        let mut histogram = self.space.defrag.new_histogram(); // TODO defrag in local gc is different, needs to be revisited
+        // TODO defrag in local gc is different, needs to be revisited
+        let mut histogram = self.space.defrag.new_histogram();
         let line_mark_state = if crate::policy::immix::BLOCK_ONLY {
             None
         } else {
@@ -303,9 +352,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             if block.thread_local_can_sweep(self.space, mark_hisogram, line_mark_state) {
                 // block will be reclaimed, need to remove it from the list
                 current = self.remove_block_from_list(block);
-
-                // #[cfg(debug_assertions)]
-                // info!("A block has been released in a local gc");
                 block.thread_local_sweep(self.space);
             } else {
                 current = self.next_block(block);
@@ -327,24 +373,15 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 } else {
                     // After a local gc, public block may be BlockState::Unmarked
                     debug_assert!(block.get_state() != BlockState::Unallocated);
+                    debug_assert!(
+                        block.owner() == self.mutator_id,
+                        "local block list is corrupted"
+                    )
                 }
 
                 current = self.next_block(block);
             }
         }
-    }
-
-    #[cfg(feature = "thread_local_gc")]
-    fn line_unavailable_mark_state(&self) -> u8 {
-        // During global gc phase, line_unavailable_state is not the same as line_mark_state.
-        // In all other cases, those two have the same value
-        let global_state = self
-            .space
-            .line_unavail_state
-            .load(atomic::Ordering::Acquire);
-        let state =
-            (global_state << Line::LOCAL_MARK_STATE_BITS) | self.local_unavailable_line_mark_state;
-        state
     }
 }
 
@@ -451,32 +488,32 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
         self.tls
     }
 
-    #[cfg(feature = "thread_local_gc")]
-    /// This function will maintain the invariant that an object can only lives in
-    /// a block allocated by its owner
-    fn alloc_as_mutator(
-        &mut self,
-        mutator_id: u32,
-        size: usize,
-        align: usize,
-        offset: usize,
-    ) -> Address {
-        // set the mutator id so that if new pages are acquired,
-        // they are associated with the correct mutator
-        self.mutator_id = mutator_id;
+    // #[cfg(feature = "thread_local_gc")]
+    // /// This function will maintain the invariant that an object can only lives in
+    // /// a block allocated by its owner
+    // fn alloc_as_mutator(
+    //     &mut self,
+    //     mutator_id: u32,
+    //     size: usize,
+    //     align: usize,
+    //     offset: usize,
+    // ) -> Address {
+    //     // set the mutator id so that if new pages are acquired,
+    //     // they are associated with the correct mutator
+    //     self.mutator_id = mutator_id;
 
-        debug_assert!(self.copy, "This is collector, copy needs to be true");
+    //     debug_assert!(self.copy, "This is collector, copy needs to be true");
 
-        let rtn: Address = self.alloc_impl(size, align, offset, false);
-        debug_assert!(
-            mutator_id == Block::from_unaligned_address(rtn).owner(),
-            "mutator_id: {} != block owner: {}",
-            mutator_id,
-            Block::from_unaligned_address(rtn).owner()
-        );
+    //     let rtn: Address = self.alloc_impl(size, align, offset, false);
+    //     debug_assert!(
+    //         mutator_id == Block::from_unaligned_address(rtn).owner(),
+    //         "mutator_id: {} != block owner: {}",
+    //         mutator_id,
+    //         Block::from_unaligned_address(rtn).owner()
+    //     );
 
-        rtn
-    }
+    //     rtn
+    // }
 }
 
 impl<VM: VMBinding> ImmixAllocator<VM> {
@@ -578,14 +615,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             #[cfg(feature = "thread_local_gc")]
             let local_current_state = Some(self.local_line_mark_state);
 
-            #[cfg(debug_assertions)]
-            debug_assert!(
-                local_unavail_state.unwrap() == local_current_state.unwrap(),
-                "cur: {:?}, unavail: {:?}",
-                local_current_state.unwrap(),
-                local_unavail_state.unwrap()
-            );
-
             if let Some((start_line, end_line)) = self.immix_space().get_next_available_lines(
                 line,
                 local_unavail_state,
@@ -682,10 +711,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                                 block.publish(true);
                             }
                             ImmixAllocSemantics::Private => {
-                                // This only occurs duringa local gc, since global gc leave private objects in-place
+                                // This only occurs during local gc, since global gc leave private objects in-place
                                 // Public objects now are moved to anonymous blocks, they do not belong to any mutator
                                 // So only private blocks (in a local gc) need to be added to mutator's thread-local list
-                                // Add the block to collector's local list first, and before releasing, adding all those
+                                // Add the block to collector's local list first, when releasing the collector, adding all those
                                 // blocks to mutator's local list
                                 self.local_blocks.push(block)
                             }
@@ -819,15 +848,20 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
     #[cfg(feature = "thread_local_gc")]
     // This method should be called by collletor thread only
-    pub fn add_blocks_to_list(&self, blocks: impl IntoIterator<Item = Block>) {
+    pub fn collect_blocks(&mut self, blocks: impl IntoIterator<Item = Block>) {
         for block in blocks {
-            self.local_blocks.push(block);
+            debug_assert!(
+                block.get_state() == BlockState::Marked,
+                "block: {:?} state is {:?}, it should be Marked",
+                block,
+                block.get_state()
+            );
+            self.add_block_to_list(block);
         }
     }
 
     #[cfg(feature = "thread_local_gc")]
     pub fn next_block(&self, block: Block) -> Option<Block> {
-        // use crate::policy::immix::block::BlockListNode;
         unsafe {
             let next_block_address = Address::from_usize(
                 Block::BLOCK_LINKED_LIST_NEXT_TABLE.load::<usize>(block.start()),
@@ -845,7 +879,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
     #[cfg(feature = "thread_local_gc")]
     pub fn remove_block_from_list(&mut self, block: Block) -> Option<Block> {
-        // use crate::policy::immix::block::BlockListNode;
         unsafe {
             // let node = block.start().load::<BlockListNode>();
             // let prev_block_address = Address::from_usize(node.prev);

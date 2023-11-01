@@ -265,6 +265,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 // since a global gc evacuates public objects, local blocks should be private again
                 #[cfg(debug_assertions)]
                 {
+                    #[cfg(not(feature = "immix_non_moving"))]
                     debug_assert!(
                         block
                             .verify_lines(Line::public_line_mark_state(self.local_line_mark_state)),
@@ -273,6 +274,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     if block.get_state() == BlockState::Unmarked
                         && !crate::policy::immix::BLOCK_ONLY
                     {
+                        #[cfg(not(feature = "immix_non_moving"))]
                         // live public objects have been evacuated to anonymous blocks
                         // only private objects left
                         debug_assert!(
@@ -281,6 +283,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         );
                     }
                 }
+                #[cfg(not(feature = "immix_non_moving"))]
                 block.reset_publication();
                 current = self.next_block(block);
             }

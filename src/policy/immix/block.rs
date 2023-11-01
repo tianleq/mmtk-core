@@ -459,6 +459,7 @@ impl Block {
             for line in self.lines() {
                 #[cfg(debug_assertions)]
                 {
+                    #[cfg(not(feature = "immix_non_moving"))]
                     if line.is_public_line() {
                         assert!(
                             line.is_published(publish_state) || line.is_marked(0), // public line bit is bulk set during page allocation, some lines may not have objects, so mark state can be 0

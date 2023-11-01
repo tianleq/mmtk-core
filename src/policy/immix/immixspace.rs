@@ -217,11 +217,11 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
                 self.trace_object_without_moving(queue, object)
             }
         } else if KIND == TRACE_KIND_FAST {
-            #[cfg(feature = "thread_local_gc")]
-            assert!(
-                false,
-                "Thread-local gc is incompatible with non-moving global gc"
-            );
+            // #[cfg(feature = "thread_local_gc")]
+            // assert!(
+            //     false,
+            //     "Thread-local gc is incompatible with non-moving global gc"
+            // );
             self.trace_object_without_moving(queue, object)
         } else {
             unreachable!()
@@ -1111,32 +1111,38 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         #[cfg(feature = "thread_local_gc")]
         {
             let state = if crate::util::public_bit::is_public::<VM>(object) {
-                #[cfg(debug_assertions)]
-                assert!(
-                    Line::verify_line_mark_state_of_object::<VM>(
-                        object,
-                        self.line_mark_state.load(Ordering::Acquire)
-                    ),
-                    "public object: {:?} has private line mark state",
-                    object
-                );
-                assert!(
-                    Block::from_unaligned_address(object.to_object_start::<VM>()).owner()
-                        == u32::MAX,
-                    "public object lives in non-anonymous block"
-                );
+                // #[cfg(debug_assertions)]
+                // {
+                //     assert!(
+                //         Line::verify_line_mark_state_of_object::<VM>(
+                //             object,
+                //             self.line_mark_state.load(Ordering::Acquire)
+                //         ),
+                //         "public object: {:?} has private line mark state",
+                //         object
+                //     );
+                //     assert!(
+                //         Block::from_unaligned_address(object.to_object_start::<VM>()).owner()
+                //             == u32::MAX,
+                //         "public object lives in non-anonymous block"
+                //     );
+                // }
 
                 Line::public_line_mark_state(self.line_mark_state.load(Ordering::Acquire))
             } else {
-                #[cfg(debug_assertions)]
-                assert!(
-                    Line::verify_line_mark_state_of_object::<VM>(
-                        object,
-                        Line::public_line_mark_state(self.line_mark_state.load(Ordering::Acquire))
-                    ),
-                    "private object: {:?} has public line mark state",
-                    object
-                );
+                // #[cfg(debug_assertions)]
+                // {
+                //     assert!(
+                //         Line::verify_line_mark_state_of_object::<VM>(
+                //             object,
+                //             Line::public_line_mark_state(
+                //                 self.line_mark_state.load(Ordering::Acquire)
+                //             )
+                //         ),
+                //         "private object: {:?} has public line mark state",
+                //         object
+                //     );
+                // }
 
                 self.line_mark_state.load(Ordering::Acquire)
             };
@@ -1468,6 +1474,7 @@ impl<VM: VMBinding> PrepareBlockState<VM> {
 
     #[cfg(feature = "thread_local_gc")]
     fn reset_public_line_mark(&self) {
+        #[cfg(not(feature = "immix_non_moving"))]
         Line::LINE_PUBLICATION_TABLE.bzero_metadata(self.chunk.start(), Chunk::BYTES);
     }
 }

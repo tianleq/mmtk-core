@@ -700,9 +700,13 @@ pub trait ProcessEdgesWork:
             let new_object = self.trace_object(object);
             #[cfg(feature = "debug_publish_object")]
             {
-                let source = self.sources[i];
+                // In the case of a root packet, sources[i] might contain a stale object
+                // so use trace_object to get the evacuated/new source object
+                let source = self.trace_object(self.sources[i]);
                 if !source.is_null() && crate::util::public_bit::is_public::<Self::VM>(source) {
                     if !new_object.is_null() {
+                        // source is public, then its child new_object must be public, otherwise, leakage
+                        // occurs
                         let valid = crate::util::public_bit::is_public::<Self::VM>(new_object);
                         if !valid {
                             let metadata_address =
@@ -715,12 +719,13 @@ pub trait ProcessEdgesWork:
                         }
                         debug_assert!(
                             valid,
-                            "public object: {:?} {:?} points to private object: {:?} {:?}",
+                            "public object: {:?} {:?} slot: {:?} points to private object: {:?} {:?}",
                             source,
                             crate::util::object_extra_header_metadata::get_extra_header_metadata::<
                                 Self::VM,
                                 usize,
                             >(source),
+                            slot,
                             new_object,
                             crate::util::object_extra_header_metadata::get_extra_header_metadata::<
                                 Self::VM,

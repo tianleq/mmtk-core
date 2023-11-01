@@ -89,10 +89,5 @@ pub fn is_public_object(address: Address) -> bool {
 }
 
 pub fn bzero_public_bit(start: Address, size: usize) {
-    #[cfg(debug_assertions)]
-    info!(
-        "#### bzero public bit starting from: {:?} size: {:?} ####",
-        start, size
-    );
     PUBLIC_SIDE_METADATA_SPEC.bzero_metadata(start, size);
 }

@@ -145,7 +145,10 @@ impl Line {
         //     line.mark(state)
         // }
         // marked_lines
+        #[cfg(not(feature = "immix_non_moving"))]
         Self::mark_lines_for_object_impl::<VM>(object, state, false);
+        #[cfg(feature = "immix_non_moving")]
+        Self::mark_lines_for_object_impl::<VM>(object, state, true);
     }
 
     #[cfg(all(feature = "thread_local_gc", debug_assertions))]

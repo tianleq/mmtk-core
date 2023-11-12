@@ -184,6 +184,14 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         }
         Option::None
     }
+
+    #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
+    fn get_new_object(&self, object: ObjectReference) -> ObjectReference {
+        if self.immix_space.in_space(object) {
+            return self.immix_space.get_new_object(object);
+        }
+        object
+    }
 }
 
 impl<VM: VMBinding> Immix<VM> {
@@ -341,29 +349,29 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for Immix<VM> {
         const KIND: crate::policy::gc_work::TraceKind,
     >(
         &self,
+        mutator_id: u32,
         queue: &mut Q,
         object: ObjectReference,
-        mutator_id: u32,
         worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
         if self.immix_space.in_space(object) {
-            <ImmixSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<
+            return <ImmixSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<
                 Q,
                 KIND,
             >(
                 &self.immix_space,
+                mutator_id,
                 queue,
                 object,
                 Some(CopySemantics::DefaultCopy),
-                mutator_id,
                 worker,
             );
         }
         <CommonPlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_trace_object::<Q, KIND>(
             &self.common,
+            mutator_id,
             queue,
             object,
-            mutator_id,
             worker,
         )
     }

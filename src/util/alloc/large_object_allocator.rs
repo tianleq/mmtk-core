@@ -155,7 +155,7 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
             if self.space.is_live(object) {
                 live_objects.push(object);
             } else if crate::util::public_bit::is_public::<VM>(object) {
-                debug_assert!(false, "public object found in local los set");
+                debug_assert!(false, "Public Object:{:?} found in local los set", object);
             } else {
                 // local/private objects also need to be reclaimed in a global gc
                 // #[cfg(debug_assertions)]
@@ -171,7 +171,7 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
         let mut live_objects = vec![];
         for object in self.local_los_objects.drain() {
             if crate::util::public_bit::is_public::<VM>(object) {
-                debug_assert!(false, "public object found in local los set");
+                debug_assert!(false, "Public Object:{:?} found in local los set", object);
                 continue;
             } else if self.space.is_live_in_thread_local_gc(object) {
                 // clear the local mark state

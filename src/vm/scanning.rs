@@ -114,6 +114,7 @@ pub trait ObjectTracerContext<VM: VMBinding>: Clone + Send + 'static {
 ///     references to variables with limited lifetime (such as local variables), because
 ///     it needs to be moved between threads.
 pub trait RootsWorkFactory<ES: Edge>: Clone + Send + 'static {
+    #[cfg(not(feature = "debug_publish_object"))]
     /// Create work packets to handle root edges.
     ///
     /// The work packet may update the edges.
@@ -121,6 +122,15 @@ pub trait RootsWorkFactory<ES: Edge>: Clone + Send + 'static {
     /// Arguments:
     /// * `edges`: A vector of edges.
     fn create_process_edge_roots_work(&mut self, edges: Vec<ES>);
+
+    #[cfg(feature = "debug_publish_object")]
+    /// Create work packets to handle root edges.
+    ///
+    /// The work packet may update the edges.
+    ///
+    /// Arguments:
+    /// * `edges`: A vector of edges.
+    fn create_process_edge_roots_work(&mut self, vm_roots: u8, edges: Vec<ES>);
 
     /// Create work packets to handle nodes pointed by root edges.
     ///

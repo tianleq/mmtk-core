@@ -120,7 +120,7 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
                     );
                     self.worker.add_local_work(
                         WorkBucketStage::Unconstrained,
-                        E::new(sources, buf, false, self.worker.mmtk, self._mutator_tls),
+                        E::new(sources, buf, false, 0, self.worker.mmtk, self._mutator_tls),
                     );
                 }
             } else {
@@ -137,7 +137,7 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
                     );
                     self.worker.add_work(
                         WorkBucketStage::Closure,
-                        E::new(sources, buf, false, self.worker.mmtk, Option::None),
+                        E::new(sources, buf, false, 0, self.worker.mmtk, Option::None),
                     );
                 }
             }

@@ -45,10 +45,10 @@ pub trait PolicyThreadlocalTraceObject<VM: VMBinding> {
     /// expect `copy` to be a `Some` value.
     fn thread_local_trace_object<Q: ObjectQueue, const KIND: TraceKind>(
         &self,
+        _mutator_id: u32,
         queue: &mut Q,
         object: ObjectReference,
         copy: Option<CopySemantics>,
-        mutator_id: u32,
         worker: &mut GCWorker<VM>,
     ) -> ObjectReference;
 

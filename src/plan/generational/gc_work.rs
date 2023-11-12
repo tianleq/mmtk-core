@@ -41,10 +41,11 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>> ProcessEdg
         sources: Vec<ObjectReference>,
         edges: Vec<EdgeOf<Self>>,
         roots: bool,
+        vm_roots: u8,
         mmtk: &'static MMTK<VM>,
         _mutator_id: Option<VMMutatorThread>,
     ) -> Self {
-        let base = ProcessEdgesBase::new(sources, edges, roots, mmtk);
+        let base = ProcessEdgesBase::new(sources, edges, roots, vm_roots, mmtk);
         let plan = base.plan().downcast_ref().unwrap();
         Self { plan, base }
     }
@@ -171,6 +172,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessRegionModBuf<E> {
                     edges.iter().map(|&edge| edge.load()).collect(),
                     edges,
                     false,
+                    0,
                     mmtk,
                     Option::None,
                 ),

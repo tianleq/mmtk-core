@@ -154,7 +154,8 @@ impl Line {
     #[cfg(all(feature = "thread_local_gc", debug_assertions))]
     pub fn verify_line_mark_state_of_object<VM: VMBinding>(
         object: ObjectReference,
-        state: u8,
+        forbidden_state: u8,
+        desired_state: Option<u8>,
     ) -> bool {
         debug_assert!(!super::BLOCK_ONLY);
         let start = object.to_object_start::<VM>();
@@ -167,8 +168,13 @@ impl Line {
 
         let iter = RegionIterator::<Line>::new(start_line, end_line);
         for line in iter {
-            if line.is_marked(state) {
+            if line.is_marked(forbidden_state) {
                 return false;
+            }
+            if let Some(state) = desired_state {
+                if !line.is_marked(state) {
+                    return false;
+                }
             }
         }
         true
@@ -210,9 +216,10 @@ impl Line {
     #[cfg(feature = "thread_local_gc")]
     /// Mark all lines the object is spanned to, but keep public lines untouched
     pub fn thread_local_mark_lines_for_object<VM: VMBinding>(object: ObjectReference, state: u8) {
-        // It is safe/sound to retain public state because the objects visited
-        // here in the local gc are private, other mutator cannot see them. And since
-        // the current mutator is stopped, no more private objects will be published
+        // It is safe/sound to retain public state because the lines/memory visited
+        // here in the local gc are private/owned by the current mutator, other mutators cannot
+        // see them. And since the current mutator is stopped, no more private objects will be
+        // published. So there is no race
         debug_assert!(
             state < 128,
             "local gc line mark state is incorrect, top bit is set to 1"

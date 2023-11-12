@@ -136,11 +136,4 @@ pub trait Collection<VM: VMBinding> {
     /// Arguments:
     /// * `tls_worker`: The thread pointer for the worker thread performing this call.
     fn post_forwarding(_tls: VMWorkerThread) {}
-
-    /// The fundamental rule of doing thread local gc is that only mutator itself can publish objects
-    /// However, this may not be true for some VMs. For example, JIT compiler may embed object references
-    /// in the instructions.
-    /// This function is called prior to doing a thread local gc to make sure all objects are published
-    /// properly
-    fn publish_vm_specific_roots(_mutator: &'static mut Mutator<VM>) {}
 }

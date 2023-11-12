@@ -140,7 +140,7 @@ impl Block {
 
     /// Set block mark state.
     pub fn set_state(&self, state: BlockState) {
-        let state = u8::from(state);
+        let state: u8 = u8::from(state);
         Self::MARK_TABLE.store_atomic::<u8>(self.start(), state, Ordering::SeqCst);
     }
 
@@ -172,9 +172,9 @@ impl Block {
     }
 
     #[cfg(all(feature = "thread_local_gc", debug_assertions))]
-    pub fn verify_lines(&self, state: u8) -> bool {
+    pub fn are_lines_valid(&self, forbidden_state: u8) -> bool {
         for line in self.lines() {
-            if line.is_marked(state) {
+            if line.is_marked(forbidden_state) {
                 return false;
             }
         }
@@ -361,7 +361,7 @@ impl Block {
                     }
                     #[cfg(debug_assertions)]
                     {
-                        crate::util::memory::set(line.start(), 0xFF, Line::BYTES);
+                        crate::util::memory::set(line.start(), 0xAB, Line::BYTES);
                     }
 
                     #[cfg(feature = "immix_zero_on_release")]
@@ -379,8 +379,14 @@ impl Block {
                 if self.is_block_published() {
                     false
                 } else {
-                    self.clear_owner();
-                    space.release_block(*self);
+                    #[cfg(all(feature = "debug_publish_object", debug_assertions))]
+                    space.reusable_blocks.iterate_blocks(|block| {
+                        debug_assert!(
+                            self.0 != block.0,
+                            "Block: {:?} is now reclaimed and should not be in the reusable pool",
+                            self
+                        )
+                    });
                     true
                 }
             } else {
@@ -390,7 +396,13 @@ impl Block {
                     self.set_state(BlockState::Reusable {
                         unavailable_lines: marked_lines as _,
                     });
-                    space.reusable_blocks.push(*self)
+                    // local gc should not touch global state
+                    // if adding the blocks to the global reusable block list
+                    // then once the block become free, it has to be removed from
+                    // the global reusable block list, which is hard in local gc
+
+                    // So the following is not needed
+                    // space.reusable_blocks.push(*self)
                 } else {
                     // Clear mark state.
                     self.set_state(BlockState::Unmarked);
@@ -410,6 +422,11 @@ impl Block {
 
     #[cfg(feature = "thread_local_gc")]
     pub fn thread_local_sweep<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
+        #[cfg(feature = "debug_publish_object")]
+        debug_assert!(
+            !self.is_block_published(),
+            "public block cannot be released in local gc"
+        );
         self.clear_owner();
         space.release_block(*self);
     }
@@ -461,8 +478,9 @@ impl Block {
                 {
                     #[cfg(not(feature = "immix_non_moving"))]
                     if line.is_public_line() {
+                        // public line bit is bulk set during page allocation, some lines may not have objects, so mark state can be 0
                         assert!(
-                            line.is_published(publish_state) || line.is_marked(0), // public line bit is bulk set during page allocation, some lines may not have objects, so mark state can be 0
+                            line.is_published(publish_state) || line.is_marked(0),
                             "public line: {:?} is not marked, owner: {:?}, line mark state: {}",
                             line,
                             self.owner(),
@@ -513,6 +531,10 @@ impl Block {
                     self.set_state(BlockState::Reusable {
                         unavailable_lines: marked_lines as _,
                     });
+
+                    // If thread local gc is enabled, looking for reusable blocks
+                    // from local list
+                    #[cfg(not(feature = "thread_local_gc"))]
                     space.reusable_blocks.push(*self);
                 } else {
                     // Clear mark state.
@@ -547,7 +569,7 @@ impl Block {
     }
 }
 
-/// A non-block single-linked list to store blocks.
+/// A non-blocking single-linked list to store blocks.
 pub struct ReusableBlockPool {
     queue: BlockPool<Block>,
     num_workers: usize,

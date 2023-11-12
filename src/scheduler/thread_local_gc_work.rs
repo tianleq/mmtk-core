@@ -37,7 +37,7 @@ impl<VM: VMBinding> GCWork<VM> for ScheduleThreadlocalCollection {
         mmtk.plan.base().gc_trigger.policy.on_gc_start(mmtk);
         // When this gc thread is executing the local gc, it cannot steal work from others' bucket/queue
         worker.disable_steal();
-        VM::VMCollection::publish_vm_specific_roots(mutator);
+
         mmtk.plan.schedule_thread_local_collection(self.0, worker);
     }
 }
@@ -62,14 +62,14 @@ impl<C: GCWorkContext> ThreadlocalPrepare<C> {
 
 impl<C: GCWorkContext + 'static> GCWork<C::VM> for ThreadlocalPrepare<C> {
     fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
-        trace!("Prepare Global");
+        trace!("Thread local Prepare Mutator");
         {
             let mutator = <C::VM as VMBinding>::VMActivePlan::mutator(self.tls);
             PrepareMutator::<C::VM>::new(mutator).do_work(worker, mmtk);
         }
         let mutator = <C::VM as VMBinding>::VMActivePlan::mutator(self.tls);
         // PrepareCollector.do_work(worker, mmtk);
-        trace!("Prepare Collector");
+        trace!("Thread local Prepare Collector");
         worker.get_copy_context_mut().thread_local_prepare(mutator);
         mmtk.plan.prepare_worker(worker);
     }
@@ -101,10 +101,10 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for ThreadlocalRelease<C> {
 
         // Mutators need to be aware of all memory allocated by the collector
         // So collector must be released before mutator
-        trace!("Release Collector");
+        trace!("Thread local Release Collector");
         worker.get_copy_context_mut().thread_local_release(mutator);
 
-        trace!("Release Mutator");
+        trace!("Thread local Release Mutator");
         mutator.release(worker.tls);
     }
 }
@@ -188,6 +188,7 @@ impl<E: ProcessEdgesWork> Clone for ThreadlocalProcessEdgesWorkRootsWorkFactory<
 impl<E: ProcessEdgesWork> RootsWorkFactory<EdgeOf<E>>
     for ThreadlocalProcessEdgesWorkRootsWorkFactory<E>
 {
+    #[cfg(not(feature = "debug_publish_object"))]
     fn create_process_edge_roots_work(&mut self, edges: Vec<EdgeOf<E>>) {
         #[cfg(not(feature = "debug_publish_object"))]
         crate::memory_manager::add_local_work_packet(
@@ -209,12 +210,36 @@ impl<E: ProcessEdgesWork> RootsWorkFactory<EdgeOf<E>>
         );
     }
 
+    #[cfg(feature = "debug_publish_object")]
+    fn create_process_edge_roots_work(&mut self, vm_roots: u8, edges: Vec<EdgeOf<E>>) {
+        #[cfg(not(feature = "debug_publish_object"))]
+        crate::memory_manager::add_local_work_packet(
+            self.mmtk,
+            WorkBucketStage::Unconstrained,
+            E::new(edges, true, self.mmtk, Some(self.tls)),
+        );
+        #[cfg(feature = "debug_publish_object")]
+        crate::memory_manager::add_local_work_packet(
+            self.mmtk,
+            WorkBucketStage::Unconstrained,
+            E::new(
+                edges.iter().map(|&edge| edge.load()).collect(),
+                edges,
+                true,
+                vm_roots,
+                self.mmtk,
+                Some(self.tls),
+            ),
+        );
+    }
+
     fn create_process_node_roots_work(&mut self, nodes: Vec<ObjectReference>) {
         // We want to use E::create_scan_work.
         #[cfg(not(feature = "debug_publish_object"))]
         let process_edges_work = E::new(vec![], true, self.mmtk, Some(self.tls));
         #[cfg(feature = "debug_publish_object")]
-        let process_edges_work = E::new(vec![], vec![], true, self.mmtk, Some(self.tls));
+        debug_assert!(false, "openjdk does not use node enquing");
+        let process_edges_work = E::new(vec![], vec![], true, 0, self.mmtk, Some(self.tls));
         let work = process_edges_work.create_scan_work(nodes, true);
         crate::memory_manager::add_local_work_packet(
             self.mmtk,
@@ -344,10 +369,11 @@ impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIN
         sources: Vec<ObjectReference>,
         edges: Vec<EdgeOf<Self>>,
         roots: bool,
+        vm_roots: u8,
         mmtk: &'static MMTK<VM>,
         tls: Option<VMMutatorThread>,
     ) -> Self {
-        let base = ProcessEdgesBase::new(sources, edges, roots, mmtk);
+        let base = ProcessEdgesBase::new(sources, edges, roots, vm_roots, mmtk);
         let plan = base.plan().downcast_ref::<P>().unwrap();
         let mutator = VM::VMActivePlan::mutator(tls.unwrap());
         Self {
@@ -392,9 +418,9 @@ impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIN
         let mutator_id = self.mutator_id;
         self.plan
             .thread_local_trace_object::<VectorObjectQueue, KIND>(
+                mutator_id,
                 &mut self.base.nodes,
                 object,
-                mutator_id,
                 worker,
             )
     }
@@ -425,6 +451,8 @@ impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIN
         let new_object = self.trace_object(object);
         #[cfg(feature = "debug_publish_object")]
         {
+            // in a local gc, public objects are not moved, so source is
+            // the exact object that needs to be looked at
             if !_source.is_null() && crate::util::public_bit::is_public::<VM>(_source) {
                 if !new_object.is_null() {
                     debug_assert!(
@@ -443,31 +471,6 @@ impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIN
                     );
                 }
             }
-            // if !object.is_null() {
-            //     if !crate::util::public_bit::is_public::<VM>(object) {
-            //         let m1 = crate::util::object_extra_header_metadata::get_extra_header_metadata::<
-            //             VM,
-            //             usize,
-            //         >(object);
-            //         let m2 = crate::util::object_extra_header_metadata::get_extra_header_metadata::<
-            //             VM,
-            //             usize,
-            //         >(_source);
-            //         debug_assert!(
-            //             (m1 & object_extra_header_metadata::BOTTOM_HALF_MASK)
-            //                 == (m2 & object_extra_header_metadata::BOTTOM_HALF_MASK),
-            //             "object is not published properly. object: {:?}, source: {:?}",
-            //             m1,
-            //             m2
-            //         );
-            //         debug_assert!(
-            //             !crate::util::public_bit::is_public::<VM>(_source),
-            //             "public object: {:?} points a private object: {:?}",
-            //             _source,
-            //             object
-            //         );
-            //     }
-            // }
         }
         if P::thread_local_may_move_objects::<KIND>() {
             slot.store(new_object);

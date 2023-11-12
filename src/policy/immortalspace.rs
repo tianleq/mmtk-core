@@ -122,10 +122,10 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmortalSp
 impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for ImmortalSpace<VM> {
     fn thread_local_trace_object<Q: ObjectQueue, const KIND: super::gc_work::TraceKind>(
         &self,
+        _mutator_id: u32,
         queue: &mut Q,
         object: ObjectReference,
         _copy: Option<CopySemantics>,
-        _mutator_id: u32,
         _worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
         self.thread_local_trace_object(queue, object)

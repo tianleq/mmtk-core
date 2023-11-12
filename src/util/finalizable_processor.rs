@@ -183,7 +183,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for Finalization<E> {
         #[cfg(not(feature = "debug_publish_object"))]
         let mut w = E::new(vec![], false, mmtk, self.1);
         #[cfg(feature = "debug_publish_object")]
-        let mut w = E::new(vec![], vec![], false, mmtk, self.1);
+        let mut w = E::new(vec![], vec![], false, 0, mmtk, self.1);
         w.set_worker(worker);
         if let Some(tls) = self.1 {
             let mutator_id = <E::VM as VMBinding>::VMActivePlan::mutator(tls).mutator_id;
@@ -220,7 +220,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ForwardFinalization<E> {
         #[cfg(not(feature = "debug_publish_object"))]
         let mut w = E::new(vec![], false, mmtk, Option::None);
         #[cfg(feature = "debug_publish_object")]
-        let mut w = E::new(vec![], vec![], false, mmtk, Option::None);
+        let mut w = E::new(vec![], vec![], false, 0, mmtk, Option::None);
         w.set_worker(worker);
         finalizable_processor.forward_candidate(&mut w, is_nursery_gc(&*mmtk.plan));
 

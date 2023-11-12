@@ -404,6 +404,11 @@ pub trait Plan: 'static + Sync + Downcast {
     fn get_object_owner(&self, _object: ObjectReference) -> Option<u32> {
         Option::None
     }
+
+    #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
+    fn get_new_object(&self, object: ObjectReference) -> ObjectReference {
+        object
+    }
 }
 
 impl_downcast!(Plan assoc VM);
@@ -997,9 +1002,9 @@ impl<VM: VMBinding> BasePlan<VM> {
 impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for BasePlan<VM> {
     fn thread_local_trace_object<Q: ObjectQueue, const KIND: TraceKind>(
         &self,
+        _mutator_id: u32,
         _queue: &mut Q,
         object: ObjectReference,
-        _mutator_id: u32,
         _worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
         object
@@ -1174,9 +1179,9 @@ impl<VM: VMBinding> CommonPlan<VM> {
 impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
     fn thread_local_trace_object<Q: ObjectQueue, const KIND: TraceKind>(
         &self,
+        mutator_id: u32,
         queue: &mut Q,
         object: ObjectReference,
-        mutator_id: u32,
         worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
         if self.immortal.in_space(object) {
@@ -1185,35 +1190,35 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
                 KIND,
             >(
                 &self.immortal,
+                mutator_id,
                 queue,
                 object,
                 None,
-                mutator_id,
                 worker
             );
         }
         if self.los.in_space(object) {
             return <LargeObjectSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<Q, KIND>(
                 &self.los,
+                mutator_id,
                 queue,
                 object,
                 None,
-                mutator_id,
                 worker
             );
         }
         if self.nonmoving.in_space(object) {
             return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<Q, KIND>(
                 &self.nonmoving,
+                mutator_id,
                 queue,
                 object,
                 None,
-                mutator_id,
                 worker
             );
         }
         <BasePlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_trace_object::<Q, KIND>(
-            &self.base, queue, object, mutator_id, worker,
+            &self.base, mutator_id, queue, object, worker,
         )
     }
 
@@ -1288,9 +1293,9 @@ pub trait PlanThreadlocalTraceObject<VM: VMBinding> {
     /// * `worker`: the GC worker that is tracing this object.
     fn thread_local_trace_object<Q: ObjectQueue, const KIND: TraceKind>(
         &self,
+        mutator_id: u32,
         queue: &mut Q,
         object: ObjectReference,
-        mutator_id: u32,
         worker: &mut GCWorker<VM>,
     ) -> ObjectReference;
 

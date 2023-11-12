@@ -156,6 +156,7 @@ impl<E: ProcessEdgesWork> Clone for SingleThreadProcessEdgesWorkRootsWorkFactory
 impl<E: ProcessEdgesWork> RootsWorkFactory<EdgeOf<E>>
     for SingleThreadProcessEdgesWorkRootsWorkFactory<E>
 {
+    #[cfg(not(feature = "debug_publish_object"))]
     fn create_process_edge_roots_work(&mut self, edges: Vec<EdgeOf<E>>) {
         #[cfg(not(feature = "debug_publish_object"))]
         crate::memory_manager::add_local_work_packet(
@@ -177,13 +178,37 @@ impl<E: ProcessEdgesWork> RootsWorkFactory<EdgeOf<E>>
         );
     }
 
+    #[cfg(feature = "debug_publish_object")]
+    fn create_process_edge_roots_work(&mut self, vm_roots: u8, edges: Vec<EdgeOf<E>>) {
+        #[cfg(not(feature = "debug_publish_object"))]
+        crate::memory_manager::add_local_work_packet(
+            self.mmtk,
+            WorkBucketStage::Unconstrained,
+            E::new(edges, true, self.mmtk, Option::None),
+        );
+        #[cfg(feature = "debug_publish_object")]
+        crate::memory_manager::add_local_work_packet(
+            self.mmtk,
+            WorkBucketStage::Unconstrained,
+            E::new(
+                edges.iter().map(|&edge| edge.load()).collect(),
+                edges,
+                true,
+                vm_roots,
+                self.mmtk,
+                Option::None,
+            ),
+        );
+    }
+
     fn create_process_node_roots_work(&mut self, nodes: Vec<ObjectReference>) {
         #[cfg(not(feature = "debug_publish_object"))]
         // We want to use E::create_scan_work.
         let process_edges_work = E::new(vec![], true, self.mmtk, Option::None);
         #[cfg(feature = "debug_publish_object")]
         // We want to use E::create_scan_work.
-        let process_edges_work = E::new(vec![], vec![], true, self.mmtk, Option::None);
+        debug_assert!(false, "openjdk does not use node enquing");
+        let process_edges_work = E::new(vec![], vec![], true, 0, self.mmtk, Option::None);
         let work = process_edges_work.create_scan_work(nodes, true);
         crate::memory_manager::add_local_work_packet(
             self.mmtk,
@@ -430,10 +455,11 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
         sources: Vec<ObjectReference>,
         edges: Vec<EdgeOf<Self>>,
         roots: bool,
+        vm_roots: u8,
         mmtk: &'static MMTK<Self::VM>,
         _tls: Option<VMMutatorThread>,
     ) -> Self {
-        let base = ProcessEdgesBase::new(sources, edges, roots, mmtk);
+        let base = ProcessEdgesBase::new(sources, edges, roots, vm_roots, mmtk);
         let plan = base.plan().downcast_ref::<P>().unwrap();
         Self { plan, base }
     }

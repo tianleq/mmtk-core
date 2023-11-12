@@ -37,7 +37,7 @@ pub struct ImmixAllocator<VM: VMBinding> {
     /// *unused*
     hot: bool,
     /// Is this a copy allocator?
-    pub copy: bool,
+    copy: bool,
     /// Bump pointer for large objects
     large_cursor: Address,
     /// Limit for bump pointer for large objects
@@ -81,10 +81,17 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     #[cfg(feature = "thread_local_gc")]
     pub fn thread_local_prepare(&mut self) {
         let global_line_state = self.space.line_mark_state.load(atomic::Ordering::Acquire);
-        if self.local_line_mark_state + 1 > global_line_state {
+        if self.local_line_mark_state + 1 >= global_line_state + Line::GLOBAL_RESET_MARK_STATE {
             self.local_line_mark_state = global_line_state;
         }
         self.local_line_mark_state += 1;
+
+        // #[cfg(debug_assertions)]
+        // info!(
+        //     "ImmixAllocator::thread_local_prepare\nglobal line mark state:{:?}\nlocal line mark state: {:?}",
+        //     global_line_state,
+        //     self.local_line_mark_state
+        // );
 
         debug_assert!(
             self.space.line_mark_state.load(atomic::Ordering::Acquire)
@@ -158,7 +165,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             );
             if get_maximum_aligned_size::<VM>(size, align) > Line::BYTES {
                 // Size larger than a line: do large allocation
-                let rtn = self.overflow_alloc(size, align, offset);
+                let rtn = self.overflow_alloc(size, align, offset); // overflow_allow will never use reusable blocks
                 rtn
             } else {
                 // Size smaller than a line: fit into holes
@@ -203,10 +210,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     pub fn alloc_as_collector(&mut self, size: usize, align: usize, offset: usize) -> Address {
         // set the mutator id to u32::MAX, which means this is an anonymous block
         self.mutator_id = u32::MAX;
-        debug_assert!(
-            self.copy,
-            "This is a collector, should not behave like a mutator"
-        );
 
         #[cfg(not(feature = "extra_header"))]
         {
@@ -267,8 +270,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 {
                     #[cfg(not(feature = "immix_non_moving"))]
                     debug_assert!(
-                        block
-                            .verify_lines(Line::public_line_mark_state(self.local_line_mark_state)),
+                        block.are_lines_valid(Line::public_line_mark_state(
+                            self.local_line_mark_state
+                        )),
                         "local block contains public lines after global gc"
                     );
                     if block.get_state() == BlockState::Unmarked
@@ -329,13 +333,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         // Update local line_unavail_state for hole searching after this GC.
         self.local_unavailable_line_mark_state = self.local_line_mark_state;
         self.thread_local_sweep_impl();
-
-        // #[cfg(debug_assertions)]
-        // info!(
-        //     "local line mark state: {}, global line mark state: {}",
-        //     self.local_line_mark_state,
-        //     self.space.line_mark_state.load(atomic::Ordering::Acquire),
-        // );
     }
 
     #[cfg(feature = "thread_local_gc")]
@@ -578,10 +575,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         size: usize,
         align: usize,
         offset: usize,
-        alway_acquire_clean_page: bool,
+        acquire_clean_page_only: bool,
     ) -> Address {
         trace!("{:?}: alloc_slow_hot", self.tls);
-        if !alway_acquire_clean_page && self.acquire_recyclable_lines(size, align, offset) {
+        if !acquire_clean_page_only && self.acquire_recyclable_lines(size, align, offset) {
             // If stress test is active, then we need to go to the slow path instead of directly
             // calling `alloc()`. This is because the `acquire_recyclable_lines()` function
             // manipulates the cursor and limit if a line can be recycled and if we directly call
@@ -656,6 +653,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         false
     }
 
+    #[cfg(not(feature = "thread_local_gc"))]
     /// Get a recyclable block from ImmixSpace.
     fn acquire_recyclable_block(&mut self) -> bool {
         match self
@@ -676,6 +674,37 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             }
             _ => false,
         }
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    /// Get a recyclable block from ImmixSpace.
+    fn acquire_recyclable_block(&mut self) -> bool {
+        // Search the local block list, looking for reusable blocks
+        let mut current = self.block_header;
+        while let Some(block) = current {
+            debug_assert!(
+                self.mutator_id == block.owner(),
+                "local block list is corrupted. Block: {:?} 's owner is {:?}, current mutator: {:?}",
+                block, block.owner(), self.mutator_id
+            );
+
+            if block.get_state().is_reusable() {
+                trace!("{:?}: acquire_recyclable_block -> {:?}", self.tls, block);
+                // Set the hole-searching cursor to the start of this block.
+                self.line = Some(block.start_line());
+                // The following effectively pop the reusable block from the local block list
+                block.set_state(BlockState::Marked);
+                // #[cfg(all(feature = "debug_publish_object", debug_assertions))]
+                // info!(
+                //     "acquire a reusable block: {:?} from local block list.",
+                //     block
+                // );
+                return true;
+            } else {
+                current = self.next_block(block);
+            }
+        }
+        false
     }
 
     // Get a clean block from ImmixSpace.

@@ -235,13 +235,10 @@ impl Block {
     pub fn deinit(&self) {
         crate::util::public_bit::bzero_public_bit(self.start(), Self::BYTES);
         self.set_state(BlockState::Unallocated);
-        #[cfg(debug_assertions)]
+        #[cfg(feature = "thread_local_gc")]
         {
-            self.clear_owner();
             // clear line state
-            for line in self.lines() {
-                line.reset_line_mark_state();
-            }
+            self.reset_line_mark_state();
         }
     }
 

@@ -70,6 +70,11 @@ impl<VM: VMBinding> GCRequester<VM> {
 
     #[cfg(feature = "thread_local_gc")]
     pub fn request_thread_local_gc(&self, tls: VMMutatorThread) {
+        // // If global gc has been requested, then skip the local gc
+        // if self.request_flag.load(Ordering::Relaxed) {
+        //     return;
+        // }
+
         let mut guard = self.request_sync.lock().unwrap();
         let req: GCRequest = GCRequest {
             single_thread: true,

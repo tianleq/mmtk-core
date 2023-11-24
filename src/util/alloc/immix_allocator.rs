@@ -53,6 +53,7 @@ pub struct ImmixAllocator<VM: VMBinding> {
     pub local_line_mark_state: u8,
     pub local_unavailable_line_mark_state: u8,
     semantic: Option<ImmixAllocSemantics>,
+    blocks: Box<Vec<Block>>,
 }
 
 impl<VM: VMBinding> ImmixAllocator<VM> {
@@ -76,7 +77,44 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    pub fn prepare(&mut self) {}
+    pub fn prepare(&mut self) {
+        #[cfg(debug_assertions)]
+        {
+            if let Some(header) = self.block_header {
+                debug_assert!(
+                    unsafe { Block::BLOCK_LINKED_LIST_PREV_TABLE.load::<usize>(header.start()) }
+                        == 0,
+                    "Mutator: {:?} local block list is corrupted",
+                    self.mutator_id
+                );
+            }
+
+            let mut current = self.block_header;
+            while let Some(block) = current {
+                if block.get_state() == BlockState::Unallocated {
+                    debug_assert!(
+                        false,
+                        "Local block: {:?} state is Unallocated before a gc occurs",
+                        block,
+                    );
+                } else {
+                    // since a global gc reset all line state, check the state
+
+                    #[cfg(not(feature = "immix_non_moving"))]
+                    for line in block.lines() {
+                        debug_assert!(
+                            line.get_line_mark_state() == 0,
+                            "local block {:?}'s line: {:?} 's mark state is not cleared properly",
+                            block,
+                            line,
+                        );
+                    }
+
+                    current = self.next_block(block);
+                }
+            }
+        }
+    }
 
     #[cfg(feature = "thread_local_gc")]
     pub fn thread_local_prepare(&mut self) {
@@ -97,6 +135,18 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             self.space.line_mark_state.load(atomic::Ordering::Acquire)
                 == (self.local_line_mark_state & Line::GLOBAL_LINE_MARK_STATE_MASK)
         );
+
+        #[cfg(debug_assertions)]
+        {
+            if let Some(header) = self.block_header {
+                debug_assert!(
+                    unsafe { Block::BLOCK_LINKED_LIST_PREV_TABLE.load::<usize>(header.start()) }
+                        == 0,
+                    "Mutator: {:?} local block list is corrupted",
+                    self.mutator_id
+                );
+            }
+        }
 
         // A local gc does not have PrepareBlockState work packets
         // So resetting the state manually
@@ -295,7 +345,16 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         // verify thread local block list
         #[cfg(debug_assertions)]
         {
+            if let Some(header) = self.block_header {
+                debug_assert!(
+                    unsafe { Block::BLOCK_LINKED_LIST_PREV_TABLE.load::<usize>(header.start()) }
+                        == 0,
+                    "Mutator: {:?} local block list is corrupted",
+                    self.mutator_id
+                );
+            }
             let mut current = self.block_header;
+            let mut local_blocks = Vec::new();
             while let Some(block) = current {
                 if crate::policy::immix::BLOCK_ONLY {
                     // After a global gc, local list should not have blocks whose state
@@ -315,9 +374,20 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         block.get_state()
                     );
                 }
-
+                debug_assert!(
+                    block.owner() == self.mutator_id,
+                    "Block: {:?} owner: {:?} should not in mutator: {:?} 's local list",
+                    block,
+                    block.owner(),
+                    self.mutator_id,
+                );
+                local_blocks.push(block);
                 current = self.next_block(block);
             }
+            for b in self.blocks.iter() {
+                local_blocks.retain(|&block| *b != block);
+            }
+            debug_assert!(local_blocks.is_empty(), "inconsistent local block list");
         }
     }
 
@@ -344,6 +414,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         } else {
             Some(self.local_line_mark_state)
         };
+
         let mut current = self.block_header;
         let mark_hisogram = &mut histogram;
         while let Some(block) = current {
@@ -361,6 +432,14 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         // verify thread local block list
         #[cfg(debug_assertions)]
         {
+            if let Some(header) = self.block_header {
+                debug_assert!(
+                    unsafe { Block::BLOCK_LINKED_LIST_PREV_TABLE.load::<usize>(header.start()) }
+                        == 0,
+                    "Mutator: {:?} local block list is corrupted",
+                    self.mutator_id
+                );
+            }
             let mut current = self.block_header;
             while let Some(block) = current {
                 if crate::policy::immix::BLOCK_ONLY {
@@ -544,6 +623,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             local_blocks: Box::new(SegQueue::new()),
             local_line_mark_state: Line::GLOBAL_RESET_MARK_STATE,
             local_unavailable_line_mark_state: Line::GLOBAL_RESET_MARK_STATE,
+            blocks: Box::new(Vec::new()),
         };
     }
 
@@ -679,6 +759,18 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     #[cfg(feature = "thread_local_gc")]
     /// Get a recyclable block from ImmixSpace.
     fn acquire_recyclable_block(&mut self) -> bool {
+        #[cfg(debug_assertions)]
+        {
+            if let Some(header) = self.block_header {
+                debug_assert!(
+                    unsafe { Block::BLOCK_LINKED_LIST_PREV_TABLE.load::<usize>(header.start()) }
+                        == 0,
+                    "Mutator: {:?} local block list is corrupted",
+                    self.mutator_id
+                );
+            }
+        }
+
         // Search the local block list, looking for reusable blocks
         let mut current = self.block_header;
         while let Some(block) = current {
@@ -862,7 +954,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     pub fn add_block_to_list(&mut self, block: Block) {
         unsafe {
             if let Some(header) = self.block_header {
-                Block::BLOCK_LINKED_LIST_PREV_TABLE.store::<usize>(block.start(), 0);
                 Block::BLOCK_LINKED_LIST_NEXT_TABLE
                     .store::<usize>(block.start(), header.start().as_usize());
                 // block.start().store(BlockListNode {
@@ -872,9 +963,24 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 // header.start().store::<usize>(block.start().as_usize());
                 Block::BLOCK_LINKED_LIST_PREV_TABLE
                     .store::<usize>(header.start(), block.start().as_usize())
+            } else {
+                Block::BLOCK_LINKED_LIST_NEXT_TABLE.store::<usize>(block.start(), 0);
             }
+            // set header.prev to null
+            Block::BLOCK_LINKED_LIST_PREV_TABLE.store::<usize>(block.start(), 0);
             // block will be the new header
             self.block_header = Some(block);
+        }
+        #[cfg(debug_assertions)]
+        {
+            debug_assert!(
+                block.owner() == self.mutator_id,
+                "block: {:?} of {:?} is added to mutator {:?}",
+                block,
+                block.owner(),
+                self.mutator_id
+            );
+            self.blocks.push(block);
         }
     }
 
@@ -887,6 +993,13 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 "block: {:?} state is {:?}, it should be Marked",
                 block,
                 block.get_state()
+            );
+            debug_assert!(
+                block.owner() == self.mutator_id,
+                "block: {:?} owner: {:}, mutator: {:?}",
+                block,
+                block.owner(),
+                self.mutator_id
             );
             self.add_block_to_list(block);
         }
@@ -932,8 +1045,14 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             };
 
             // delete the header
-            if block == self.block_header.unwrap() {
-                self.block_header = rtn;
+            if let Some(header) = self.block_header {
+                if block == header {
+                    if let Some(new_header) = rtn {
+                        // set new_header.prev to null
+                        Block::BLOCK_LINKED_LIST_PREV_TABLE.store::<usize>(new_header.start(), 0);
+                    }
+                    self.block_header = rtn;
+                }
             }
 
             if !next_block_address.is_zero() {
@@ -956,6 +1075,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 //     prev: prev_node.prev,
                 //     next: node.next,
                 // });
+            }
+            #[cfg(debug_assertions)]
+            {
+                self.blocks.retain(|&b| b != block);
             }
             rtn
         }

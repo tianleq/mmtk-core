@@ -57,6 +57,8 @@ pub struct ImmixSpace<VM: VMBinding> {
     space_args: ImmixSpaceArgs,
     #[cfg(feature = "thread_local_gc")]
     bytes_published: AtomicUsize,
+    #[cfg(feature = "thread_local_gc")]
+    objects_traced: AtomicUsize,
 }
 
 /// Some arguments for Immix Space.
@@ -390,6 +392,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             scheduler: scheduler.clone(),
             space_args,
             bytes_published: AtomicUsize::new(0),
+            objects_traced: AtomicUsize::new(0),
         }
     }
 
@@ -582,9 +585,15 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.defrag.release(self);
         }
 
+        info!(
+            "objects scanned in this gc: {}",
+            self.objects_traced.load(Ordering::SeqCst)
+        );
         self.lines_consumed.store(0, Ordering::Relaxed);
         // clear published bytes
         self.bytes_published.store(0, Ordering::Relaxed);
+
+        self.objects_traced.store(0, Ordering::Relaxed);
 
         did_defrag
     }
@@ -834,6 +843,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             ForwardingWord::clear_forwarding_bits::<VM>(object);
             object
         } else {
+            self.objects_traced.fetch_add(1, Ordering::SeqCst);
             // We won the forwarding race; actually forward and copy the object if it is not pinned
             // and we have sufficient space in our copy allocator
             let new_object = if self.is_pinned(object)

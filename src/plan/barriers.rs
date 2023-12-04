@@ -417,7 +417,7 @@ impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM>
     ) {
         // publish all objects in the src slice
         for slot in src.iter_edges() {
-            info!("array_copy_slow:: slot: {:?}", slot);
+            // info!("array_copy_slow:: slot: {:?}", slot);
             let object = slot.load();
             // although src array is private, it may contain
             // public objects, so need to rule out those public

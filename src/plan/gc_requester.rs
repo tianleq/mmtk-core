@@ -1,5 +1,5 @@
 use crate::util::{VMMutatorThread, VMThread};
-use crate::vm::VMBinding;
+use crate::vm::{Collection, VMBinding};
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
@@ -26,6 +26,8 @@ pub struct GCRequester<VM: VMBinding> {
     request_sync: Mutex<RequestSync>,
     request_condvar: Condvar,
     request_flag: AtomicBool,
+    #[cfg(feature = "thread_local_gc")]
+    global_gc_requested: AtomicBool,
     phantom: PhantomData<VM>,
 }
 
@@ -50,6 +52,8 @@ impl<VM: VMBinding> GCRequester<VM> {
             }),
             request_condvar: Condvar::new(),
             request_flag: AtomicBool::new(false),
+            #[cfg(feature = "thread_local_gc")]
+            global_gc_requested: AtomicBool::new(false),
             phantom: PhantomData,
         }
     }
@@ -58,8 +62,13 @@ impl<VM: VMBinding> GCRequester<VM> {
         if self.request_flag.load(Ordering::Relaxed) {
             return;
         }
+        #[cfg(feature = "thread_local_gc")]
+        {
+            self.global_gc_requested.store(true, Ordering::Release);
+            VM::VMCollection::wait_for_thread_local_gc_to_finish();
+        }
 
-        let mut guard = self.request_sync.lock().unwrap();
+        let mut guard: std::sync::MutexGuard<'_, RequestSync> = self.request_sync.lock().unwrap();
         if !self.request_flag.load(Ordering::Relaxed) {
             self.request_flag.store(true, Ordering::Relaxed);
             guard.request_count += 1;
@@ -71,7 +80,9 @@ impl<VM: VMBinding> GCRequester<VM> {
     #[cfg(feature = "thread_local_gc")]
     pub fn request_thread_local_gc(&self, tls: VMMutatorThread) -> bool {
         // If global gc has been requested, then skip the local gc
-        if self.request_flag.load(Ordering::Relaxed) {
+        if self.request_flag.load(Ordering::Relaxed)
+            || self.global_gc_requested.load(Ordering::Acquire)
+        {
             return false;
         }
 
@@ -92,6 +103,11 @@ impl<VM: VMBinding> GCRequester<VM> {
         if self.request_flag.load(Ordering::Relaxed) {
             return;
         }
+        #[cfg(feature = "thread_local_gc")]
+        {
+            self.global_gc_requested.store(true, Ordering::Release);
+            VM::VMCollection::wait_for_thread_local_gc_to_finish();
+        }
 
         let mut guard = self.request_sync.lock().unwrap();
         if !self.request_flag.load(Ordering::Relaxed) {
@@ -105,7 +121,8 @@ impl<VM: VMBinding> GCRequester<VM> {
     pub fn clear_request(&self) {
         let guard = self.request_sync.lock().unwrap();
         self.request_flag.store(false, Ordering::Relaxed);
-
+        #[cfg(feature = "thread_local_gc")]
+        self.global_gc_requested.store(false, Ordering::Relaxed);
         drop(guard);
     }
 

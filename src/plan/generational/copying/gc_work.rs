@@ -13,8 +13,8 @@ impl<VM: VMBinding> crate::scheduler::GCWorkContext for GenCopyNurseryGCWorkCont
     type ProcessEdgesWorkType = GenNurseryProcessEdges<Self::VM, Self::PlanType>;
 
     type SingleThreadProcessEdgesWorkType = GenNurseryProcessEdges<Self::VM, Self::PlanType>;
-    #[cfg(feature = "thread_local_gc")]
-    type ThreadlocalProcessEdgesWorkType = GenNurseryProcessEdges<Self::VM, Self::PlanType>;
+    // #[cfg(feature = "thread_local_gc")]
+    // type ThreadlocalProcessEdgesWorkType = GenNurseryProcessEdges<Self::VM, Self::PlanType>;
 }
 
 pub struct GenCopyGCWorkContext<VM: VMBinding>(std::marker::PhantomData<VM>);
@@ -26,7 +26,7 @@ impl<VM: VMBinding> crate::scheduler::GCWorkContext for GenCopyGCWorkContext<VM>
     type SingleThreadProcessEdgesWorkType =
         SingleThreadPlanProcessEdges<Self::VM, GenCopy<VM>, DEFAULT_TRACE>;
 
-    #[cfg(feature = "thread_local_gc")]
-    type ThreadlocalProcessEdgesWorkType =
-        SingleThreadPlanProcessEdges<Self::VM, GenCopy<VM>, DEFAULT_TRACE>;
+    // #[cfg(feature = "thread_local_gc")]
+    // type ThreadlocalProcessEdgesWorkType =
+    //     SingleThreadPlanProcessEdges<Self::VM, GenCopy<VM>, DEFAULT_TRACE>;
 }

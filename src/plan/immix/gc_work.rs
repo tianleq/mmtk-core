@@ -2,8 +2,8 @@ use super::global::Immix;
 use crate::policy::gc_work::TraceKind;
 use crate::scheduler::gc_work::PlanProcessEdges;
 use crate::scheduler::single_thread_gc_work::SingleThreadPlanProcessEdges;
-#[cfg(feature = "thread_local_gc")]
-use crate::scheduler::thread_local_gc_work::PlanThreadlocalProcessEdges;
+// #[cfg(feature = "thread_local_gc")]
+// use crate::scheduler::thread_local_gc_work::PlanThreadlocalProcessEdges;
 use crate::vm::VMBinding;
 
 pub(super) struct ImmixGCWorkContext<VM: VMBinding, const KIND: TraceKind>(
@@ -17,6 +17,6 @@ impl<VM: VMBinding, const KIND: TraceKind> crate::scheduler::GCWorkContext
     type ProcessEdgesWorkType = PlanProcessEdges<VM, Immix<VM>, KIND>;
 
     type SingleThreadProcessEdgesWorkType = SingleThreadPlanProcessEdges<VM, Immix<VM>, KIND>;
-    #[cfg(feature = "thread_local_gc")]
-    type ThreadlocalProcessEdgesWorkType = PlanThreadlocalProcessEdges<VM, Immix<VM>, KIND>;
+    //     #[cfg(feature = "thread_local_gc")]
+    //     type ThreadlocalProcessEdgesWorkType = PlanThreadlocalProcessEdges<VM, Immix<VM>, KIND>;
 }

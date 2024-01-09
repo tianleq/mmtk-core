@@ -27,6 +27,7 @@ use crate::util::heap::layout::vm_layout_constants::HEAP_START;
 use crate::util::opaque_pointer::*;
 use crate::util::{Address, ObjectReference};
 use crate::vm::edge_shape::MemorySlice;
+use crate::vm::Finalizable;
 use crate::vm::ReferenceGlue;
 use crate::vm::Scanning;
 use crate::vm::VMBinding;
@@ -426,7 +427,9 @@ pub fn gc_poll<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
     );
 
     let plan = mmtk.get_plan();
-    if plan.should_trigger_gc_when_heap_is_full() && plan.base().gc_trigger.poll(false, None, tls) {
+    if plan.should_trigger_gc_when_heap_is_full()
+        && plan.base().gc_trigger.poll(false, None, tls).is_some()
+    {
         debug!("Collection required");
         assert!(plan.is_initialized(), "GC is not allowed here: collection is not initialized (did you call initialize_collection()?).");
         VM::VMCollection::block_for_gc(tls);
@@ -760,17 +763,14 @@ pub fn harness_end<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
 /// * `object`: The object that has a finalizer
 pub fn add_finalizer<VM: VMBinding>(
     mmtk: &'static MMTK<VM>,
-    _mutator_id: u32,
+    mutator: &'static mut Mutator<VM>,
     object: <VM::VMReferenceGlue as ReferenceGlue<VM>>::FinalizableType,
 ) {
     if *mmtk.options.no_finalizer {
         warn!("add_finalizer() is called when no_finalizer = true");
     }
+    mutator.finalizable_candidates.push(object);
     // mmtk.finalizable_processor.lock().unwrap().add(object);
-    mmtk.finalizable_processor
-        .lock()
-        .unwrap()
-        .add(_mutator_id, object);
 }
 
 /// Pin an object. MMTk will make sure that the object does not move

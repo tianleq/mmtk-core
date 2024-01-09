@@ -13,8 +13,8 @@ impl<VM: VMBinding> crate::scheduler::GCWorkContext for GenImmixNurseryGCWorkCon
 
     type SingleThreadProcessEdgesWorkType = GenNurseryProcessEdges<VM, Self::PlanType>;
 
-    #[cfg(feature = "thread_local_gc")]
-    type ThreadlocalProcessEdgesWorkType = GenNurseryProcessEdges<VM, Self::PlanType>;
+    // #[cfg(feature = "thread_local_gc")]
+    // type ThreadlocalProcessEdgesWorkType = GenNurseryProcessEdges<VM, Self::PlanType>;
 }
 
 pub(super) struct GenImmixMatureGCWorkContext<VM: VMBinding, const KIND: TraceKind>(
@@ -29,6 +29,6 @@ impl<VM: VMBinding, const KIND: TraceKind> crate::scheduler::GCWorkContext
 
     type SingleThreadProcessEdgesWorkType = SingleThreadPlanProcessEdges<VM, GenImmix<VM>, KIND>;
 
-    #[cfg(feature = "thread_local_gc")]
-    type ThreadlocalProcessEdgesWorkType = SingleThreadPlanProcessEdges<VM, GenImmix<VM>, KIND>;
+    // #[cfg(feature = "thread_local_gc")]
+    // type ThreadlocalProcessEdgesWorkType = SingleThreadPlanProcessEdges<VM, GenImmix<VM>, KIND>;
 }

@@ -8,7 +8,7 @@ use crate::util::metadata::mark_bit::MarkState;
 
 use crate::util::{metadata, ObjectReference};
 
-use crate::plan::{ObjectQueue, VectorObjectQueue};
+use crate::plan::{ObjectQueue, ThreadlocalTracedObjectType, VectorObjectQueue};
 
 use crate::policy::sft::GCWorkerMutRef;
 use crate::vm::{ObjectModel, VMBinding};
@@ -120,15 +120,14 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmortalSp
 
 #[cfg(feature = "thread_local_gc")]
 impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for ImmortalSpace<VM> {
-    fn thread_local_trace_object<Q: ObjectQueue, const KIND: super::gc_work::TraceKind>(
+    fn thread_local_trace_object<const KIND: super::gc_work::TraceKind>(
         &self,
         _mutator_id: u32,
-        queue: &mut Q,
         object: ObjectReference,
         _copy: Option<CopySemantics>,
         _worker: &mut GCWorker<VM>,
-    ) -> ObjectReference {
-        self.thread_local_trace_object(queue, object)
+    ) -> ThreadlocalTracedObjectType {
+        self.thread_local_trace_object(object)
     }
 
     fn thread_local_may_move_objects<const KIND: super::gc_work::TraceKind>() -> bool {
@@ -221,11 +220,10 @@ impl<VM: VMBinding> ImmortalSpace<VM> {
         object
     }
 
-    pub fn thread_local_trace_object<Q: ObjectQueue>(
+    pub fn thread_local_trace_object(
         &self,
-        queue: &mut Q,
         object: ObjectReference,
-    ) -> ObjectReference {
+    ) -> ThreadlocalTracedObjectType {
         #[cfg(feature = "vo_bit")]
         debug_assert!(
             crate::util::metadata::vo_bit::is_vo_bit_set::<VM>(object),
@@ -233,12 +231,12 @@ impl<VM: VMBinding> ImmortalSpace<VM> {
             object
         );
         if crate::util::public_bit::is_public::<VM>(object) {
-            return object;
+            return ThreadlocalTracedObjectType::Scanned(object);
         }
         if self.mark_state.test_and_mark::<VM>(object) {
-            queue.enqueue(object);
+            return ThreadlocalTracedObjectType::ToBeScanned(object);
         }
-        object
+        ThreadlocalTracedObjectType::Scanned(object)
     }
 
     pub fn publish_object(&self, _object: ObjectReference) {}

@@ -73,6 +73,8 @@ pub struct Mutator<VM: VMBinding> {
     pub config: MutatorConfig<VM>,
     pub thread_local_gc_status: u32,
     pub mutator_id: u32,
+    pub finalizable_candidates:
+        Box<Vec<<VM::VMReferenceGlue as crate::vm::ReferenceGlue<VM>>::FinalizableType>>,
 }
 
 impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {

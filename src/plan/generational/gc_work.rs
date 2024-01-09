@@ -174,7 +174,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessRegionModBuf<E> {
                     false,
                     0,
                     mmtk,
-                    Option::None,
+                    None,
                 ),
                 worker,
                 mmtk,

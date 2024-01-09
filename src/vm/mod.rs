@@ -31,6 +31,8 @@ pub use self::object_model::ObjectModel;
 pub use self::reference_glue::Finalizable;
 pub use self::reference_glue::ReferenceGlue;
 pub use self::scanning::EdgeVisitor;
+#[cfg(feature = "thread_local_gc")]
+pub use self::scanning::ObjectGraphTraversal;
 pub use self::scanning::ObjectTracer;
 pub use self::scanning::ObjectTracerContext;
 pub use self::scanning::RootsWorkFactory;

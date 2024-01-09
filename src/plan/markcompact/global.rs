@@ -139,16 +139,12 @@ impl<VM: VMBinding> Plan for MarkCompact<VM> {
             // finalization
             // treat finalizable objects as roots and perform a closure (marking)
             // must be done before calculating forwarding pointers
-            scheduler.work_buckets[WorkBucketStage::FinalRefClosure].add(Finalization::<
-                MarkingProcessEdges<VM>,
-            >::new(
-                Option::None
-            ));
+            scheduler.work_buckets[WorkBucketStage::FinalRefClosure]
+                .add(Finalization::<MarkingProcessEdges<VM>>::new());
             // update finalizable object references
             // must be done before compacting
-            scheduler.work_buckets[WorkBucketStage::FinalizableForwarding].add(
-                ForwardFinalization::<ForwardingProcessEdges<VM>>::new(Option::None),
-            );
+            scheduler.work_buckets[WorkBucketStage::FinalizableForwarding]
+                .add(ForwardFinalization::<ForwardingProcessEdges<VM>>::new());
         }
 
         // VM-specific weak ref processing

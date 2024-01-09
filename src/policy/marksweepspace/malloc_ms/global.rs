@@ -332,6 +332,7 @@ impl<VM: VMBinding> MallocSpace<VM> {
         if self
             .get_gc_trigger()
             .poll(false, Some(self), VMMutatorThread(tls))
+            .is_some()
         {
             assert!(VM::VMActivePlan::is_mutator(tls), "Polling in GC worker");
             VM::VMCollection::block_for_gc(VMMutatorThread(tls));

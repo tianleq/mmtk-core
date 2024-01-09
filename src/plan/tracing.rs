@@ -137,7 +137,7 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
                     );
                     self.worker.add_work(
                         WorkBucketStage::Closure,
-                        E::new(sources, buf, false, 0, self.worker.mmtk, Option::None),
+                        E::new(sources, buf, false, 0, self.worker.mmtk, None),
                     );
                 }
             }
@@ -208,8 +208,6 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
                 continue;
             }
             if !crate::util::public_bit::is_public::<VM>(object) {
-                // #[cfg(all(debug_assertions, feature = "debug_publish_object"))]
-                // info!("publish descendant object: {:?}", object);
                 // set public bit on the object
                 crate::util::public_bit::set_public_bit::<VM>(object);
                 #[cfg(feature = "thread_local_gc")]

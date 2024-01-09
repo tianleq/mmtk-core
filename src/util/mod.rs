@@ -87,3 +87,9 @@ pub use self::opaque_pointer::*;
 pub use self::reference_processor::ReferenceProcessor;
 
 pub(crate) static MUTATOR_ID_GENERATOR: AtomicU32 = AtomicU32::new(1);
+
+#[cfg(all(feature = "thread_local_gc", debug_assertions))]
+lazy_static! {
+    pub(crate) static ref LOCAL_TRANSITIVE_CLOSURE_WORK_DEBUG_INFO: std::sync::Mutex<std::collections::HashMap<u32, u32>> =
+        std::sync::Mutex::new(std::collections::HashMap::<u32, u32>::new());
+}

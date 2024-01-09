@@ -9,6 +9,12 @@ use crate::MMTK;
 use std::mem::MaybeUninit;
 use std::sync::atomic::AtomicUsize;
 
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum GCKind {
+    GLOBAL,
+    LOCAL,
+}
+
 /// GCTrigger is responsible for triggering GCs based on the given policy.
 /// All the decisions about heap limit and GC triggering should be resolved here.
 /// Depending on the actual policy, we may either forward the calls either to the plan
@@ -55,7 +61,7 @@ impl<VM: VMBinding> GCTrigger<VM> {
         space_full: bool,
         space: Option<&dyn Space<VM>>,
         tls: VMMutatorThread,
-    ) -> bool {
+    ) -> Option<GCKind> {
         let plan = unsafe { self.plan.assume_init() };
         if self.policy.is_gc_required(space_full, space, plan) {
             info!(
@@ -71,17 +77,22 @@ impl<VM: VMBinding> GCTrigger<VM> {
             );
 
             plan.base().gc_requester.request();
-            return true;
+            return Some(GCKind::GLOBAL);
         }
         #[cfg(feature = "thread_local_gc")]
         if self
             .policy
             .is_thread_local_gc_required(space_full, space, plan)
         {
-            plan.base().gc_requester.request_thread_local_gc(tls);
-            return true;
+            // TODO need a way to tell whether this is a global gc or local gc
+            let result = plan.base().gc_requester.request_thread_local_gc(tls);
+            if result {
+                return Some(GCKind::LOCAL);
+            } else {
+                return Some(GCKind::GLOBAL);
+            }
         }
-        false
+        None
     }
 
     /// Check if the heap is full
@@ -124,6 +135,10 @@ pub trait GCTriggerPolicy<VM: VMBinding>: Sync + Send {
         space: Option<&dyn Space<VM>>,
         plan: &dyn Plan<VM = VM>,
     ) -> bool;
+    #[cfg(feature = "thread_local_gc")]
+    fn on_thread_local_gc_start(&self, _mmtk: &'static MMTK<VM>) {}
+    #[cfg(feature = "thread_local_gc")]
+    fn on_thread_local_gc_end(&self, _mmtk: &'static MMTK<VM>) {}
     /// Is current heap full?
     fn is_heap_full(&self, plan: &'static dyn Plan<VM = VM>) -> bool;
     /// Return the current heap size (in pages)

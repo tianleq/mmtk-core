@@ -49,15 +49,41 @@ impl<VM: VMBinding> GCController<VM> {
         // GCWorker so we manually initialize the worker here.
         self.coordinator_worker.tls = tls;
 
+        #[cfg(all(feature = "thread_local_gc", debug_assertions))]
+        let mut thread_local_gc_requested;
+        #[cfg(all(feature = "thread_local_gc", debug_assertions))]
+        let mut global_gc_requested;
         loop {
             debug!("[STWController: Waiting for request...]");
             let requests = self.requester.wait_for_request();
             debug!("[STWController: Request recieved.]");
+            #[cfg(all(feature = "thread_local_gc", debug_assertions))]
+            {
+                thread_local_gc_requested = false;
+                global_gc_requested = false;
+            }
             #[cfg(feature = "thread_local_gc")]
             for req in requests {
                 if req.thread_local {
+                    #[cfg(debug_assertions)]
+                    {
+                        debug_assert!(
+                            !global_gc_requested,
+                            "local gc and global gc should be mutually exclusive"
+                        );
+                        thread_local_gc_requested = true;
+                    }
                     self.do_thread_local_gc_until_completion(req.tls);
                 } else {
+                    #[cfg(debug_assertions)]
+                    {
+                        debug_assert!(
+                            !thread_local_gc_requested,
+                            "local gc and global gc should be mutually exclusive"
+                        );
+                        global_gc_requested = true;
+                    }
+
                     debug_assert!(!req.thread_local, "This should be a global gc");
                     self.do_gc_until_completion(req.single_thread);
                 }
@@ -169,23 +195,5 @@ impl<VM: VMBinding> GCController<VM> {
         // Notify only one worker at this time because there is only one work packet,
         // namely `ScheduleCollection`.
         self.scheduler.worker_monitor.resume(false);
-
-        // // Gradually open more buckets as workers stop each time they drain all open bucket.
-        // loop {
-        //     // Workers should only transition to the `Sleeping` state when all open buckets have
-        //     // been drained.
-        //     self.scheduler.assert_all_activated_buckets_are_empty();
-
-        //     let new_work_available = self.find_more_work_for_workers();
-
-        //     // GC finishes if there is no new work to do.
-        //     if !new_work_available {
-        //         break;
-        //     }
-
-        //     // Notify all workers because there should be many work packets available in the newly
-        //     // opened bucket(s).
-        //     self.scheduler.worker_monitor.resume_and_wait(true);
-        // }
     }
 }

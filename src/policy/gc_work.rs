@@ -4,7 +4,7 @@ pub(crate) type TraceKind = u8;
 
 pub const DEFAULT_TRACE: u8 = u8::MAX;
 
-use crate::plan::ObjectQueue;
+use crate::plan::{ObjectQueue, ThreadlocalTracedObjectType};
 use crate::scheduler::GCWorker;
 use crate::util::copy::CopySemantics;
 use crate::Mutator;
@@ -43,14 +43,13 @@ pub trait PolicyTraceObject<VM: VMBinding> {
 pub trait PolicyThreadlocalTraceObject<VM: VMBinding> {
     /// Trace object in the policy. If the policy copies objects, we should
     /// expect `copy` to be a `Some` value.
-    fn thread_local_trace_object<Q: ObjectQueue, const KIND: TraceKind>(
+    fn thread_local_trace_object<const KIND: TraceKind>(
         &self,
         _mutator_id: u32,
-        queue: &mut Q,
         object: ObjectReference,
         copy: Option<CopySemantics>,
         worker: &mut GCWorker<VM>,
-    ) -> ObjectReference;
+    ) -> ThreadlocalTracedObjectType;
 
     /// Policy-specific post-scan-object hook.  It is called after scanning
     /// each object in this space.

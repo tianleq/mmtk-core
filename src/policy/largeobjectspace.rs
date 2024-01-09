@@ -1,6 +1,7 @@
 use atomic::Ordering;
 
 use crate::plan::ObjectQueue;
+use crate::plan::ThreadlocalTracedObjectType;
 use crate::plan::VectorObjectQueue;
 use crate::policy::sft::GCWorkerMutRef;
 use crate::policy::sft::SFT;
@@ -151,16 +152,15 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LargeObjec
 impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM>
     for LargeObjectSpace<VM>
 {
-    fn thread_local_trace_object<Q: ObjectQueue, const KIND: super::gc_work::TraceKind>(
+    fn thread_local_trace_object<const KIND: super::gc_work::TraceKind>(
         &self,
         mutator_id: u32,
-        queue: &mut Q,
         object: ObjectReference,
         _copy: Option<CopySemantics>,
         _worker: &mut GCWorker<VM>,
-    ) -> ObjectReference {
+    ) -> ThreadlocalTracedObjectType {
         #[cfg(feature = "thread_local_gc")]
-        return self.thread_local_trace_object(queue, object, mutator_id);
+        return self.thread_local_trace_object(object, mutator_id);
         #[cfg(not(feature = "thread_local_gc"))]
         return object;
     }
@@ -225,12 +225,11 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     #[cfg(feature = "thread_local_gc")]
     fn thread_local_trace_object(
         &self,
-        queue: &mut impl ObjectQueue,
         object: ObjectReference,
         _mutator_id: u32,
-    ) -> ObjectReference {
+    ) -> ThreadlocalTracedObjectType {
         if crate::util::public_bit::is_public::<VM>(object) {
-            return object;
+            return ThreadlocalTracedObjectType::Scanned(object);
         }
         debug_assert!(
             Self::get_object_owner(object) == _mutator_id,
@@ -239,9 +238,9 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             Self::get_object_owner(object)
         );
         if self.thread_local_mark(object, MARK_BIT) {
-            queue.enqueue(object);
+            return ThreadlocalTracedObjectType::ToBeScanned(object);
         }
-        object
+        ThreadlocalTracedObjectType::Scanned(object)
     }
 
     // Allow nested-if for this function to make it clear that test_and_mark() is only executed

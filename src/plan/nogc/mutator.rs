@@ -74,5 +74,6 @@ pub fn create_nogc_mutator<VM: VMBinding>(
         plan,
         thread_local_gc_status: 0,
         mutator_id: 0,
+        finalizable_candidates: Box::new(Vec::new()),
     }
 }

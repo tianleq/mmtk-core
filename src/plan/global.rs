@@ -27,7 +27,7 @@ use crate::util::options::PlanSelector;
 use crate::util::statistics::stats::Stats;
 use crate::util::ObjectReference;
 use crate::util::{VMMutatorThread, VMWorkerThread};
-use crate::vm::*;
+use crate::vm::{ActivePlan, Collection, VMBinding};
 use downcast_rs::Downcast;
 use enum_map::EnumMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -638,8 +638,13 @@ impl<VM: VMBinding> BasePlan<VM> {
     pub fn handle_thread_local_collection(&self, tls: VMMutatorThread) {
         self.user_triggered_collection
             .store(true, Ordering::Relaxed);
-        self.gc_requester.request_thread_local_gc(tls);
-        VM::VMCollection::block_for_thread_local_gc(tls);
+        if self.gc_requester.request_thread_local_gc(tls) {
+            VM::VMCollection::block_for_thread_local_gc(tls);
+        } else {
+            // A global gc has already been triggered, so cannot do local gc,
+            // instead, block and wait for global gc to finish
+            VM::VMCollection::block_for_gc(tls);
+        }
     }
 
     /// MMTK has requested stop-the-world activity (e.g., stw within a concurrent gc).
@@ -1000,14 +1005,57 @@ impl<VM: VMBinding> BasePlan<VM> {
 
 #[cfg(feature = "thread_local_gc")]
 impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for BasePlan<VM> {
-    fn thread_local_trace_object<Q: ObjectQueue, const KIND: TraceKind>(
+    fn thread_local_trace_object<const KIND: TraceKind>(
         &self,
         _mutator_id: u32,
-        _queue: &mut Q,
         object: ObjectReference,
         _worker: &mut GCWorker<VM>,
-    ) -> ObjectReference {
-        object
+    ) -> ThreadlocalTracedObjectType {
+        #[cfg(feature = "code_space")]
+        if self.code_space.in_space(object) {
+            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+                &self.code_space,
+                _mutator_id,
+                object,
+                None,
+                _worker
+            );
+        }
+
+        #[cfg(feature = "code_space")]
+        if self.code_lo_space.in_space(object) {
+            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+                &self.code_lo_space,
+                _mutator_id,
+                object,
+                None,
+                _worker
+            );
+        }
+
+        #[cfg(feature = "ro_space")]
+        if self.ro_space.in_space(object) {
+            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+                &self.ro_space,
+                _mutator_id,
+                object,
+                None,
+                _worker
+            );
+        }
+
+        #[cfg(feature = "vm_space")]
+        if self.vm_space.in_space(object) {
+            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+                &self.vm_space,
+                _mutator_id,
+                object,
+                None,
+                _worker
+            );
+        }
+
+        ThreadlocalTracedObjectType::Scanned(object)
     }
 
     fn thread_local_post_scan_object(
@@ -1177,48 +1225,44 @@ impl<VM: VMBinding> CommonPlan<VM> {
 
 #[cfg(feature = "thread_local_gc")]
 impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
-    fn thread_local_trace_object<Q: ObjectQueue, const KIND: TraceKind>(
+    fn thread_local_trace_object<const KIND: TraceKind>(
         &self,
         mutator_id: u32,
-        queue: &mut Q,
         object: ObjectReference,
         worker: &mut GCWorker<VM>,
-    ) -> ObjectReference {
+    ) -> ThreadlocalTracedObjectType {
         if self.immortal.in_space(object) {
             return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<
-                Q,
                 KIND,
             >(
                 &self.immortal,
                 mutator_id,
-                queue,
                 object,
                 None,
                 worker
             );
         }
         if self.los.in_space(object) {
-            return <LargeObjectSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<Q, KIND>(
+            return <LargeObjectSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
                 &self.los,
                 mutator_id,
-                queue,
                 object,
                 None,
                 worker
             );
         }
         if self.nonmoving.in_space(object) {
-            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<Q, KIND>(
+            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
                 &self.nonmoving,
                 mutator_id,
-                queue,
+
                 object,
                 None,
                 worker
             );
         }
-        <BasePlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_trace_object::<Q, KIND>(
-            &self.base, mutator_id, queue, object, worker,
+        <BasePlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+            &self.base, mutator_id, object, worker,
         )
     }
 
@@ -1245,7 +1289,6 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
 #[cfg(feature = "thread_local_gc")]
 use crate::policy::gc_work::PolicyThreadlocalTraceObject;
 use crate::policy::gc_work::TraceKind;
-use crate::vm::VMBinding;
 
 /// A plan that uses `PlanProcessEdges` needs to provide an implementation for this trait.
 /// Generally a plan does not need to manually implement this trait. Instead, we provide
@@ -1288,16 +1331,15 @@ pub trait PlanThreadlocalTraceObject<VM: VMBinding> {
     /// trace object method.
     ///
     /// Arguments:
-    /// * `trace`: the current transitive closure
+    /// * `mutator_id`: the current thread's id
     /// * `object`: the object to trace. This is a non-nullable object reference.
     /// * `worker`: the GC worker that is tracing this object.
-    fn thread_local_trace_object<Q: ObjectQueue, const KIND: TraceKind>(
+    fn thread_local_trace_object<const KIND: TraceKind>(
         &self,
         mutator_id: u32,
-        queue: &mut Q,
         object: ObjectReference,
         worker: &mut GCWorker<VM>,
-    ) -> ObjectReference;
+    ) -> ThreadlocalTracedObjectType;
 
     /// Post-scan objects in the plan. Each object is scanned by `VM::VMScanning::scan_object()`, and this function
     /// will be called after the `VM::VMScanning::scan_object()` as a hook to invoke possible policy post scan method.
@@ -1340,4 +1382,10 @@ pub enum AllocationSemantics {
     LargeCode = 5,
     /// Non moving objects will not be moved by GC.
     NonMoving = 6,
+}
+
+#[cfg(feature = "thread_local_gc")]
+pub enum ThreadlocalTracedObjectType {
+    Scanned(ObjectReference),
+    ToBeScanned(ObjectReference),
 }

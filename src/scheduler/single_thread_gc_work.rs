@@ -162,7 +162,7 @@ impl<E: ProcessEdgesWork> RootsWorkFactory<EdgeOf<E>>
         crate::memory_manager::add_local_work_packet(
             self.mmtk,
             WorkBucketStage::Unconstrained,
-            E::new(edges, true, self.mmtk, Option::None),
+            E::new(edges, true, self.mmtk, None, None),
         );
         #[cfg(feature = "debug_publish_object")]
         crate::memory_manager::add_local_work_packet(
@@ -173,7 +173,7 @@ impl<E: ProcessEdgesWork> RootsWorkFactory<EdgeOf<E>>
                 edges,
                 true,
                 self.mmtk,
-                Option::None,
+                None,
             ),
         );
     }
@@ -184,7 +184,7 @@ impl<E: ProcessEdgesWork> RootsWorkFactory<EdgeOf<E>>
         crate::memory_manager::add_local_work_packet(
             self.mmtk,
             WorkBucketStage::Unconstrained,
-            E::new(edges, true, self.mmtk, Option::None),
+            E::new(edges, true, self.mmtk, None, None),
         );
         #[cfg(feature = "debug_publish_object")]
         crate::memory_manager::add_local_work_packet(
@@ -196,7 +196,7 @@ impl<E: ProcessEdgesWork> RootsWorkFactory<EdgeOf<E>>
                 true,
                 vm_roots,
                 self.mmtk,
-                Option::None,
+                None,
             ),
         );
     }
@@ -208,7 +208,7 @@ impl<E: ProcessEdgesWork> RootsWorkFactory<EdgeOf<E>>
         #[cfg(feature = "debug_publish_object")]
         // We want to use E::create_scan_work.
         debug_assert!(false, "openjdk does not use node enquing");
-        let process_edges_work = E::new(vec![], vec![], true, 0, self.mmtk, Option::None);
+        let process_edges_work = E::new(vec![], vec![], true, 0, self.mmtk, None);
         let work = process_edges_work.create_scan_work(nodes, true);
         crate::memory_manager::add_local_work_packet(
             self.mmtk,
@@ -410,11 +410,10 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for SingleThreadSentinel<C> {
         if !*self.plan.base().options.no_finalizer {
             use crate::util::finalizable_processor::{Finalization, ForwardFinalization};
             // finalization
-            Finalization::<C::ProcessEdgesWorkType>::new(Option::None).do_work(worker, mmtk);
+            Finalization::<C::ProcessEdgesWorkType>::new().do_work(worker, mmtk);
             // forward refs
             if self.plan.constraints().needs_forward_after_liveness {
-                ForwardFinalization::<C::ProcessEdgesWorkType>::new(Option::None)
-                    .do_work(worker, mmtk);
+                ForwardFinalization::<C::ProcessEdgesWorkType>::new().do_work(worker, mmtk);
             }
         }
         SingleThreadRelease::<C>::new(self.plan).do_work(worker, mmtk);
@@ -620,7 +619,7 @@ impl<E: ProcessEdgesWork, P: Plan<VM = E::VM> + PlanTraceObject<E::VM>> GCWork<E
 {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         trace!("PlanScanObjects");
-        self.do_work_common(&self.buffer, worker, mmtk, true, Option::None);
+        self.do_work_common(&self.buffer, worker, mmtk, true, None);
         trace!("PlanScanObjects End");
     }
 }

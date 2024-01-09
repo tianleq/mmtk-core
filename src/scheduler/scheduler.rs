@@ -165,16 +165,12 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         if !*plan.base().options.no_finalizer {
             use crate::util::finalizable_processor::{Finalization, ForwardFinalization};
             // finalization
-            self.work_buckets[WorkBucketStage::FinalRefClosure].add(Finalization::<
-                C::ProcessEdgesWorkType,
-            >::new(
-                Option::None
-            ));
+            self.work_buckets[WorkBucketStage::FinalRefClosure]
+                .add(Finalization::<C::ProcessEdgesWorkType>::new());
             // forward refs
             if plan.constraints().needs_forward_after_liveness {
-                self.work_buckets[WorkBucketStage::FinalizableForwarding].add(
-                    ForwardFinalization::<C::ProcessEdgesWorkType>::new(Option::None),
-                );
+                self.work_buckets[WorkBucketStage::FinalizableForwarding]
+                    .add(ForwardFinalization::<C::ProcessEdgesWorkType>::new());
             }
         }
 

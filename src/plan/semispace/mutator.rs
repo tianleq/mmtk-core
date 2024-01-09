@@ -79,5 +79,6 @@ pub fn create_ss_mutator<VM: VMBinding>(
         plan,
         thread_local_gc_status: 0,
         mutator_id,
+        finalizable_candidates: Box::new(Vec::new()),
     }
 }

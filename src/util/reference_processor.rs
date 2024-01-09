@@ -481,7 +481,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for SoftRefProcessing<E> {
         #[cfg(not(feature = "debug_publish_object"))]
         let mut w = E::new(vec![], false, mmtk, Option::None);
         #[cfg(feature = "debug_publish_object")]
-        let mut w = E::new(vec![], vec![], false, 0, mmtk, Option::None);
+        let mut w = E::new(vec![], vec![], false, 0, mmtk, None);
         w.set_worker(worker);
         mmtk.reference_processors.scan_soft_refs(&mut w, mmtk);
         w.flush();
@@ -500,7 +500,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for WeakRefProcessing<E> {
         #[cfg(not(feature = "debug_publish_object"))]
         let mut w = E::new(vec![], false, mmtk, Option::None);
         #[cfg(feature = "debug_publish_object")]
-        let mut w = E::new(vec![], vec![], false, 0, mmtk, Option::None);
+        let mut w = E::new(vec![], vec![], false, 0, mmtk, None);
         w.set_worker(worker);
         mmtk.reference_processors.scan_weak_refs(&mut w, mmtk);
         w.flush();
@@ -519,7 +519,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for PhantomRefProcessing<E> {
         #[cfg(not(feature = "debug_publish_object"))]
         let mut w = E::new(vec![], false, mmtk, Option::None);
         #[cfg(feature = "debug_publish_object")]
-        let mut w = E::new(vec![], vec![], false, 0, mmtk, Option::None);
+        let mut w = E::new(vec![], vec![], false, 0, mmtk, None);
         w.set_worker(worker);
         mmtk.reference_processors.scan_phantom_refs(&mut w, mmtk);
         w.flush();
@@ -538,7 +538,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for RefForwarding<E> {
         #[cfg(not(feature = "debug_publish_object"))]
         let mut w = E::new(vec![], false, mmtk, Option::None);
         #[cfg(feature = "debug_publish_object")]
-        let mut w = E::new(vec![], vec![], false, 0, mmtk, Option::None);
+        let mut w = E::new(vec![], vec![], false, 0, mmtk, None);
         w.set_worker(worker);
         mmtk.reference_processors.forward_refs(&mut w, mmtk);
         w.flush();

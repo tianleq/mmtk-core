@@ -1,6 +1,7 @@
 use std::mem::MaybeUninit;
 
 use crate::plan::Plan;
+use crate::policy::immix::ImmixSpace;
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::marksweepspace::malloc_ms::MallocSpace;
 use crate::policy::marksweepspace::native_ms::MarkSweepSpace;
@@ -121,7 +122,7 @@ impl<VM: VMBinding> Allocators<VM> {
                     ret.immix[index as usize].write(ImmixAllocator::new(
                         mutator_tls.0,
                         mutator_id,
-                        Some(space),
+                        space.downcast_ref::<ImmixSpace<VM>>().unwrap(),
                         plan,
                         false,
                         None,

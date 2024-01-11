@@ -27,7 +27,6 @@ use crate::util::heap::layout::vm_layout_constants::HEAP_START;
 use crate::util::opaque_pointer::*;
 use crate::util::{Address, ObjectReference};
 use crate::vm::edge_shape::MemorySlice;
-use crate::vm::Finalizable;
 use crate::vm::ReferenceGlue;
 use crate::vm::Scanning;
 use crate::vm::VMBinding;

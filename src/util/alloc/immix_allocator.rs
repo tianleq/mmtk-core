@@ -53,6 +53,7 @@ pub struct ImmixAllocator<VM: VMBinding> {
     pub local_line_mark_state: u8,
     pub local_unavailable_line_mark_state: u8,
     semantic: Option<ImmixAllocSemantics>,
+    #[cfg(all(debug_assertions, feature = "debug_publish_object"))]
     blocks: Box<Vec<Block>>,
 }
 
@@ -566,49 +567,24 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
     fn get_tls(&self) -> VMThread {
         self.tls
     }
-
-    // #[cfg(feature = "thread_local_gc")]
-    // /// This function will maintain the invariant that an object can only lives in
-    // /// a block allocated by its owner
-    // fn alloc_as_mutator(
-    //     &mut self,
-    //     mutator_id: u32,
-    //     size: usize,
-    //     align: usize,
-    //     offset: usize,
-    // ) -> Address {
-    //     // set the mutator id so that if new pages are acquired,
-    //     // they are associated with the correct mutator
-    //     self.mutator_id = mutator_id;
-
-    //     debug_assert!(self.copy, "This is collector, copy needs to be true");
-
-    //     let rtn: Address = self.alloc_impl(size, align, offset, false);
-    //     debug_assert!(
-    //         mutator_id == Block::from_unaligned_address(rtn).owner(),
-    //         "mutator_id: {} != block owner: {}",
-    //         mutator_id,
-    //         Block::from_unaligned_address(rtn).owner()
-    //     );
-
-    //     rtn
-    // }
 }
 
 impl<VM: VMBinding> ImmixAllocator<VM> {
     pub fn new(
         tls: VMThread,
         mutator_id: u32,
-        space: Option<&'static dyn Space<VM>>,
+        space: &'static ImmixSpace<VM>,
         plan: &'static dyn Plan<VM = VM>,
         copy: bool,
         semantic: Option<ImmixAllocSemantics>,
-        // local_block_map: Option<Box<HashMap<u32, Vec<Block>>>>,
     ) -> Self {
+        // Local line mark state has to be in line with global line mark state, cannot use the default
+        // value GLOBAL_RESET_MARK_STATE as mutator threads can be spawned at any time
+        let global_line_mark_state = space.line_mark_state.load(atomic::Ordering::Acquire);
         return ImmixAllocator {
             tls,
             mutator_id,
-            space: space.unwrap().downcast_ref::<ImmixSpace<VM>>().unwrap(),
+            space,
             plan,
             cursor: Address::ZERO,
             limit: Address::ZERO,
@@ -621,8 +597,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             semantic,
             block_header: None,
             local_blocks: Box::new(SegQueue::new()),
-            local_line_mark_state: Line::GLOBAL_RESET_MARK_STATE,
-            local_unavailable_line_mark_state: Line::GLOBAL_RESET_MARK_STATE,
+            local_line_mark_state: global_line_mark_state,
+            local_unavailable_line_mark_state: global_line_mark_state,
             blocks: Box::new(Vec::new()),
         };
     }
@@ -835,7 +811,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                                 block.publish(true);
                             }
                             ImmixAllocSemantics::Private => {
-                                // This only occurs during local gc, since global gc leave private objects in-place
+                                // This only occurs during a local gc, since a global gc leaves private objects in-place
                                 // Public objects now are moved to anonymous blocks, they do not belong to any mutator
                                 // So only private blocks (in a local gc) need to be added to mutator's thread-local list
                                 // Add the block to collector's local list first, when releasing the collector, adding all those

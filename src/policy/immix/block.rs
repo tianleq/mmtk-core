@@ -384,6 +384,8 @@ impl Block {
                             self
                         )
                     });
+                    // #[cfg(debug_assertions)]
+                    // info!("block: {:?} released in local gc", self);
                     true
                 }
             } else {
@@ -393,11 +395,18 @@ impl Block {
                     self.set_state(BlockState::Reusable {
                         unavailable_lines: marked_lines as _,
                     });
+                    // #[cfg(debug_assertions)]
+                    // info!(
+                    //     "block: {:?} has {} free lines ",
+                    //     self,
+                    //     Block::LINES - marked_lines
+                    // );
+
                     // local gc should not touch global state
                     // if adding the blocks to the global reusable block list
-                    // then once the block become free, it has to be removed from
-                    // the global reusable block list, which is hard in local gc
-
+                    // then once the block becomes free, it has to be removed
+                    // from the global reusable block list, which is hard in
+                    // a local gc
                     // So the following is not needed
                     // space.reusable_blocks.push(*self)
                 } else {

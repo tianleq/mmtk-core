@@ -1782,7 +1782,7 @@ impl<VM: VMBinding> ImmixCopyContext<VM> {
             allocator: ImmixAllocator::new(
                 tls.0,
                 u32::MAX,
-                Some(space),
+                space,
                 plan,
                 true,
                 Some(ImmixAllocSemantics::Private),
@@ -1791,7 +1791,7 @@ impl<VM: VMBinding> ImmixCopyContext<VM> {
             public_object_allocator: ImmixAllocator::new(
                 tls.0,
                 u32::MAX,
-                Some(space),
+                space,
                 plan,
                 true,
                 Some(ImmixAllocSemantics::Public),
@@ -1850,8 +1850,8 @@ impl<VM: VMBinding> ImmixHybridCopyContext<VM> {
         space: &'static ImmixSpace<VM>,
     ) -> Self {
         ImmixHybridCopyContext {
-            copy_allocator: ImmixAllocator::new(tls.0, 0, Some(space), plan, false, None),
-            defrag_allocator: ImmixAllocator::new(tls.0, 0, Some(space), plan, true, None),
+            copy_allocator: ImmixAllocator::new(tls.0, 0, space, plan, false, None),
+            defrag_allocator: ImmixAllocator::new(tls.0, 0, space, plan, true, None),
         }
     }
 

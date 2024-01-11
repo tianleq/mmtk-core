@@ -41,8 +41,7 @@ pub use plan_constraints::DEFAULT_PLAN_CONSTRAINTS;
 
 mod tracing;
 pub use tracing::{
-    /*MarkingObjectPublicWithAssertClosure, */ ObjectQueue, ObjectsClosure,
-    PublishObjectClosure, VectorObjectQueue, VectorQueue,
+    ObjectQueue, ObjectsClosure, PublishObjectClosure, VectorObjectQueue, VectorQueue,
 };
 
 /// Generational plans (with a copying nursery)

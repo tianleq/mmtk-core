@@ -4,12 +4,14 @@ pub(crate) type TraceKind = u8;
 
 pub const DEFAULT_TRACE: u8 = u8::MAX;
 
-use crate::plan::{ObjectQueue, ThreadlocalTracedObjectType};
+use crate::plan::ObjectQueue;
+#[cfg(feature = "thread_local_gc")]
+use crate::plan::ThreadlocalTracedObjectType;
 use crate::scheduler::GCWorker;
 use crate::util::copy::CopySemantics;
-use crate::Mutator;
-
 use crate::util::ObjectReference;
+#[cfg(feature = "thread_local_gc")]
+use crate::Mutator;
 
 use crate::vm::VMBinding;
 

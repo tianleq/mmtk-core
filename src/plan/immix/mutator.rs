@@ -124,17 +124,29 @@ pub fn create_immix_mutator<VM: VMBinding>(
         release_func: &immix_mutator_release,
     };
     let mutator_id = crate::util::MUTATOR_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);
-
+    #[cfg(feature = "public_bit")]
+    let barrier = Box::new(PublicObjectMarkingBarrier::new(
+        PublicObjectMarkingBarrierSemantics::new(mmtk),
+    ));
+    #[cfg(not(feature = "public_bit"))]
+    let barrier = Box::new(NoBarrier);
     Mutator {
         allocators: Allocators::<VM>::new(mutator_tls, mutator_id, plan, &config.space_mapping),
-        barrier: Box::new(PublicObjectMarkingBarrier::new(
-            PublicObjectMarkingBarrierSemantics::new(mmtk),
-        )),
+        barrier,
         mutator_tls,
         config,
         plan,
+        #[cfg(feature = "thread_local_gc")]
         thread_local_gc_status: 0,
+        #[cfg(feature = "thread_local_gc")]
         mutator_id,
+        #[cfg(feature = "thread_local_gc")]
         finalizable_candidates: Box::new(Vec::new()),
+        #[cfg(feature = "public_object_analysis")]
+        allocation_count: 0,
+        #[cfg(feature = "public_object_analysis")]
+        bytes_allocated: 0,
+        #[cfg(feature = "public_object_analysis")]
+        request_id: 0,
     }
 }

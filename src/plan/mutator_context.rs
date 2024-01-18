@@ -5,7 +5,7 @@ use crate::plan::global::Plan;
 use crate::plan::AllocationSemantics;
 use crate::policy::space::Space;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
-use crate::util::{Address, ObjectReference};
+use crate::util::{object_extra_header_metadata, Address, ObjectReference};
 use crate::util::{VMMutatorThread, VMWorkerThread};
 use crate::vm::VMBinding;
 
@@ -71,10 +71,19 @@ pub struct Mutator<VM: VMBinding> {
     pub mutator_tls: VMMutatorThread,
     pub plan: &'static dyn Plan<VM = VM>,
     pub config: MutatorConfig<VM>,
+    #[cfg(feature = "thread_local_gc")]
     pub thread_local_gc_status: u32,
+    #[cfg(feature = "thread_local_gc")]
     pub mutator_id: u32,
+    #[cfg(feature = "thread_local_gc")]
     pub finalizable_candidates:
         Box<Vec<<VM::VMReferenceGlue as crate::vm::ReferenceGlue<VM>>::FinalizableType>>,
+    #[cfg(feature = "public_object_analysis")]
+    pub allocation_count: usize,
+    #[cfg(feature = "public_object_analysis")]
+    pub bytes_allocated: usize,
+    #[cfg(feature = "public_object_analysis")]
+    pub request_id: usize,
 }
 
 impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
@@ -91,11 +100,11 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         size: usize,
         align: usize,
         offset: usize,
-        allocator: AllocationSemantics,
+        semantics: AllocationSemantics,
     ) -> Address {
         unsafe {
             self.allocators
-                .get_allocator_mut(self.config.allocator_mapping[allocator])
+                .get_allocator_mut(self.config.allocator_mapping[semantics])
         }
         .alloc(size, align, offset)
     }
@@ -105,29 +114,25 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         &mut self,
         refer: ObjectReference,
         _bytes: usize,
-        allocator: AllocationSemantics,
+        semantics: AllocationSemantics,
     ) {
         #[cfg(feature = "thread_local_gc")]
         use crate::util::alloc::LargeObjectAllocator;
         let space = unsafe {
             self.allocators
-                .get_allocator_mut(self.config.allocator_mapping[allocator])
+                .get_allocator_mut(self.config.allocator_mapping[semantics])
         }
         .get_space();
         space.initialize_object_metadata(refer, true);
-        #[cfg(feature = "debug_publish_object")]
-        {
-            let metadata: usize = usize::try_from(self.mutator_id).unwrap();
-            crate::util::object_extra_header_metadata::store_extra_header_metadata::<VM, usize>(
-                refer, metadata,
-            );
-        }
+
+        // Large object allocation always go through the slow-path, so it is fine to
+        // do the following book-keeping in post_alloc(only executed in slow-path)
         #[cfg(feature = "thread_local_gc")]
-        if allocator == AllocationSemantics::Los {
+        if semantics == AllocationSemantics::Los {
             // store los objects into a local set
             let allocator = unsafe {
                 self.allocators
-                    .get_allocator_mut(self.config.allocator_mapping[allocator])
+                    .get_allocator_mut(self.config.allocator_mapping[semantics])
                     .downcast_mut::<LargeObjectAllocator<VM>>()
                     .unwrap()
             };
@@ -136,18 +141,41 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
             let metadata = usize::try_from(self.mutator_id).unwrap();
             unsafe {
                 #[cfg(feature = "extra_header")]
-                let offset = 16;
-                #[cfg(not(feature = "extra_header"))]
                 let offset = 8;
-                crate::util::conversions::page_align_down(refer.to_object_start::<VM>())
-                    .store(metadata);
+                #[cfg(not(feature = "extra_header"))]
+                let offset = 0;
+                let metadata_address =
+                    crate::util::conversions::page_align_down(refer.to_object_start::<VM>());
+                metadata_address.store(metadata);
+                // Store request_id|mutator_id into the extra header
+                #[cfg(feature = "public_object_analysis")]
+                ((metadata_address + offset) as Address)
+                    .store(metadata | self.request_id << object_extra_header_metadata::SHIFT);
                 debug_assert!(
                     crate::util::conversions::is_page_aligned(Address::from_usize(
-                        refer.to_object_start::<VM>().as_usize() - offset
+                        refer.to_object_start::<VM>().as_usize() - offset - 8
                     )),
                     "los object is not aligned"
                 );
             }
+        } else {
+            #[cfg(feature = "debug_publish_object")]
+            {
+                #[cfg(not(feature = "public_object_analysis"))]
+                let metadata: usize = usize::try_from(self.mutator_id).unwrap();
+                #[cfg(feature = "public_object_analysis")]
+                let metadata: usize = usize::try_from(self.mutator_id).unwrap()
+                    | self.request_id << object_extra_header_metadata::SHIFT;
+                crate::util::object_extra_header_metadata::store_extra_header_metadata::<VM, usize>(
+                    refer, metadata,
+                );
+            }
+        }
+
+        #[cfg(feature = "public_object_analysis")]
+        {
+            self.allocation_count += 1;
+            self.bytes_allocated += _bytes;
         }
     }
 

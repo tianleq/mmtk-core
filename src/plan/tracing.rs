@@ -6,6 +6,7 @@ use crate::scheduler::{GCWorker, WorkBucketStage};
 use crate::util::{ObjectReference, VMMutatorThread};
 use crate::vm::edge_shape::Edge;
 use crate::vm::EdgeVisitor;
+use crate::vm::ObjectModel;
 use crate::vm::Scanning;
 use crate::MMTK;
 
@@ -190,6 +191,10 @@ impl<'a, E: ProcessEdgesWork> Drop for ObjectsClosure<'a, E> {
 pub struct PublishObjectClosure<VM: crate::vm::VMBinding> {
     _mmtk: &'static MMTK<VM>,
     edge_buffer: std::collections::VecDeque<VM::VMEdge>,
+    #[cfg(feature = "public_object_analysis")]
+    number_of_objects_published: usize,
+    #[cfg(feature = "public_object_analysis")]
+    number_of_bytes_published: usize,
 }
 
 impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
@@ -197,6 +202,10 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
         PublishObjectClosure {
             _mmtk: mmtk,
             edge_buffer: std::collections::VecDeque::new(),
+            #[cfg(feature = "public_object_analysis")]
+            number_of_objects_published: 0,
+            #[cfg(feature = "public_object_analysis")]
+            number_of_bytes_published: 0,
         }
     }
 
@@ -217,8 +226,23 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
                     object,
                     self,
                 );
+                #[cfg(feature = "public_object_analysis")]
+                {
+                    self.number_of_objects_published += 1;
+                    self.number_of_bytes_published += VM::VMObjectModel::get_current_size(object);
+                }
             }
         }
+    }
+
+    #[cfg(feature = "public_object_analysis")]
+    pub fn get_number_of_objects_published(&self) -> usize {
+        self.number_of_objects_published
+    }
+
+    #[cfg(feature = "public_object_analysis")]
+    pub fn get_number_of_bytes_published(&self) -> usize {
+        self.number_of_bytes_published
     }
 }
 

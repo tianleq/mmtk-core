@@ -384,8 +384,7 @@ impl Block {
                             self
                         )
                     });
-                    // #[cfg(debug_assertions)]
-                    // info!("block: {:?} released in local gc", self);
+
                     true
                 }
             } else {
@@ -477,10 +476,11 @@ impl Block {
             let mut holes = 0;
             let mut prev_line_is_marked = true;
             let line_mark_state = line_mark_state.unwrap();
+            #[cfg(feature = "thread_local_gc")]
             let publish_state = Line::public_line_mark_state(line_mark_state);
 
             for line in self.lines() {
-                #[cfg(debug_assertions)]
+                #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
                 {
                     #[cfg(not(feature = "immix_non_moving"))]
                     if line.is_public_line() {
@@ -503,7 +503,12 @@ impl Block {
                     }
                 }
 
-                if line.is_marked(line_mark_state) || line.is_published(publish_state) {
+                #[cfg(feature = "thread_local_gc")]
+                let is_line_published = line.is_published(publish_state);
+                #[cfg(not(feature = "thread_local_gc"))]
+                let is_line_published = false;
+
+                if line.is_marked(line_mark_state) || is_line_published {
                     marked_lines += 1;
                     prev_line_is_marked = true;
                 } else {

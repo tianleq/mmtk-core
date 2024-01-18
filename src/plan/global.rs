@@ -404,11 +404,6 @@ pub trait Plan: 'static + Sync + Downcast {
     fn get_object_owner(&self, _object: ObjectReference) -> Option<u32> {
         Option::None
     }
-
-    #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
-    fn get_new_object(&self, object: ObjectReference) -> ObjectReference {
-        object
-    }
 }
 
 impl_downcast!(Plan assoc VM);

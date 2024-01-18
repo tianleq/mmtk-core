@@ -54,14 +54,17 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Prepare<C> {
             mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
                 .add(PrepareMutator::<C::VM>::new(mutator));
         }
-        // move finalizable candidates from local buffer to the global buffer
-        // rust's borrow checker is not happy if put the following in the previous loop
-        // it is safe because those two mutable operations are doing different things
-        for mutator in <C::VM as VMBinding>::VMActivePlan::mutators() {
-            mmtk.finalizable_processor
-                .lock()
-                .unwrap()
-                .add_candidates(mutator.finalizable_candidates.drain(0..))
+        #[cfg(feature = "thread_local_gc")]
+        {
+            // move finalizable candidates from local buffer to the global buffer
+            // rust's borrow checker is not happy if put the following in the previous loop
+            // it is safe because those two mutable operations are doing different things
+            for mutator in <C::VM as VMBinding>::VMActivePlan::mutators() {
+                mmtk.finalizable_processor
+                    .lock()
+                    .unwrap()
+                    .add_candidates(mutator.finalizable_candidates.drain(0..))
+            }
         }
         for w in &mmtk.scheduler.worker_group.workers_shared {
             let result = w.designated_work.push(Box::new(PrepareCollector));
@@ -702,7 +705,8 @@ pub trait ProcessEdgesWork:
                         self.edges[i].load() == self.sources[i],
                         "root packets, source object != slot.load()"
                     );
-                    let source = self.get_new_object(self.sources[i]);
+                    let source = self.trace_object(self.sources[i]);
+                    // let source = self.get_new_object(self.sources[i]);
 
                     if self.vm_roots_type != 0 && !source.is_null() {
                         if !crate::util::public_bit::is_public::<Self::VM>(source) {
@@ -727,7 +731,9 @@ pub trait ProcessEdgesWork:
             {
                 // In the case of a root packet, sources[i] might contain a stale object
                 // so use trace_object to get the evacuated/new source object
-                let source = self.get_new_object(self.sources[i]);
+                let source = self.trace_object(self.sources[i]);
+                // let source = self.get_new_object(self.sources[i]);
+
                 if !source.is_null() && crate::util::public_bit::is_public::<Self::VM>(source) {
                     if !new_object.is_null() {
                         // source is public, then its child new_object must be public, otherwise, leakage
@@ -745,8 +751,7 @@ pub trait ProcessEdgesWork:
                             );
                             <Self::VM as VMBinding>::VMObjectModel::dump_object(new_object);
                         }
-                        debug_assert!(
-                            valid,
+                        panic!(
                             "public object: {:?} {:?} slot: {:?} points to private object: {:?} {:?}",
                             source,
                             crate::util::object_extra_header_metadata::get_extra_header_metadata::<
@@ -774,11 +779,6 @@ pub trait ProcessEdgesWork:
         for i in 0..self.edges.len() {
             self.process_edge(self.edges[i])
         }
-    }
-
-    #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
-    fn get_new_object(&self, _object: ObjectReference) -> ObjectReference {
-        unimplemented!()
     }
 }
 
@@ -1192,10 +1192,6 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
         if P::may_move_objects::<KIND>() {
             slot.store(new_object);
         }
-    }
-    #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
-    fn get_new_object(&self, object: ObjectReference) -> ObjectReference {
-        self.plan.get_new_object(object)
     }
 }
 

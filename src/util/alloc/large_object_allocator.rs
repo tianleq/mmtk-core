@@ -158,8 +158,6 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
                 debug_assert!(false, "Public Object:{:?} found in local los set", object);
             } else {
                 // local/private objects also need to be reclaimed in a global gc
-                // #[cfg(debug_assertions)]
-                // info!("A private los object is released in global gc");
                 self.space.thread_local_sweep_large_object(object);
             }
         }

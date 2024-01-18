@@ -1,6 +1,6 @@
 use super::SemiSpace;
-use crate::MMTK;
-// use crate::plan::barriers::NoBarrier;
+#[cfg(not(feature = "public_bit"))]
+use crate::plan::barriers::NoBarrier;
 use crate::plan::barriers::PublicObjectMarkingBarrier;
 use crate::plan::barriers::PublicObjectMarkingBarrierSemantics;
 use crate::plan::mutator_context::Mutator;
@@ -13,6 +13,7 @@ use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
 use crate::util::alloc::BumpAllocator;
 use crate::util::{VMMutatorThread, VMWorkerThread};
 use crate::vm::VMBinding;
+use crate::MMTK;
 use enum_map::EnumMap;
 
 pub fn ss_mutator_prepare<VM: VMBinding>(_mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {
@@ -67,18 +68,32 @@ pub fn create_ss_mutator<VM: VMBinding>(
         prepare_func: &ss_mutator_prepare,
         release_func: &ss_mutator_release,
     };
+    #[cfg(feature = "thread_local_gc")]
     let mutator_id = crate::util::MUTATOR_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);
+    #[cfg(feature = "public_bit")]
+    let barrier = Box::new(PublicObjectMarkingBarrier::new(
+        PublicObjectMarkingBarrierSemantics::new(mmtk),
+    ));
+    #[cfg(not(feature = "public_bit"))]
+    let barrier = Box::new(NoBarrier);
+
     Mutator {
         allocators: Allocators::<VM>::new(mutator_tls, 0, plan, &config.space_mapping),
-        // barrier: Box::new(NoBarrier),
-        barrier: Box::new(PublicObjectMarkingBarrier::new(
-            PublicObjectMarkingBarrierSemantics::new(mmtk),
-        )),
+        barrier,
         mutator_tls,
         config,
         plan,
+        #[cfg(feature = "thread_local_gc")]
         thread_local_gc_status: 0,
+        #[cfg(feature = "thread_local_gc")]
         mutator_id,
+        #[cfg(feature = "thread_local_gc")]
         finalizable_candidates: Box::new(Vec::new()),
+        #[cfg(feature = "public_object_analysis")]
+        allocation_count: 0,
+        #[cfg(feature = "public_object_analysis")]
+        bytes_allocated: 0,
+        #[cfg(feature = "public_object_analysis")]
+        request_id: 0,
     }
 }

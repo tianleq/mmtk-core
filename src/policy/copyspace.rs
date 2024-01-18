@@ -182,8 +182,8 @@ impl<VM: VMBinding> CopySpace<VM> {
     }
 
     #[cfg(feature = "vo_bit")]
-    unsafe fn reset_vo_bit(&self) {
-        let current_chunk = self.pr.get_current_chunk();
+    fn reset_vo_bit(&self) {
+        let current_chunk = unsafe { self.pr.get_current_chunk() };
         if self.common.contiguous {
             // If we have allocated something into this space, we need to clear its VO bit.
             if current_chunk != self.common.start {
@@ -197,8 +197,8 @@ impl<VM: VMBinding> CopySpace<VM> {
         }
     }
 
-    unsafe fn reset_public_bit(&self) {
-        let current_chunk = self.pr.get_current_chunk();
+    fn reset_public_bit(&self) {
+        let current_chunk = unsafe { self.pr.get_current_chunk() };
         if self.common.contiguous {
             crate::util::public_bit::bzero_public_bit(
                 self.common.start,
@@ -206,7 +206,7 @@ impl<VM: VMBinding> CopySpace<VM> {
                     - self.common.start,
             );
         } else {
-            unimplemented!();
+            panic!("bulk clearing public bit is not supported in discontiguous setting");
         }
     }
 
@@ -271,12 +271,15 @@ impl<VM: VMBinding> CopySpace<VM> {
                 );
             }
 
-            // ---- public bit begin ----
-            let is_pubic = crate::util::public_bit::is_public::<VM>(object);
-            if is_pubic {
-                crate::util::public_bit::set_public_bit::<VM>(new_object);
+            #[cfg(feature = "public_object_analysis")]
+            {}
+            #[cfg(feature = "public_bit")]
+            {
+                let is_pubic = crate::util::public_bit::is_public::<VM>(object);
+                if is_pubic {
+                    crate::util::public_bit::set_public_bit::<VM>(new_object);
+                }
             }
-            // ---- public bit end ----
 
             trace!("Forwarding pointer");
             queue.enqueue(new_object);
@@ -317,6 +320,18 @@ impl<VM: VMBinding> CopySpace<VM> {
             );
         }
         trace!("Unprotect {:x} {:x}", start, start + extent);
+    }
+
+    #[cfg(all(feature = "debug_publish_object"))]
+    pub fn get_new_object(&self, object: ObjectReference) -> ObjectReference {
+        if object_forwarding::is_forwarded_or_being_forwarded::<VM>(object) {
+            return object_forwarding::spin_and_get_forwarded_object::<VM>(
+                object,
+                object_forwarding::get_forwarding_status::<VM>(object),
+            );
+        }
+        // race condition occurs here, object may now being forwarded by another gc thread
+        object
     }
 }
 

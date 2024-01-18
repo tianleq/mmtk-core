@@ -1,6 +1,8 @@
 use super::allocator::{align_allocation_no_fill, fill_alignment_gap};
 use crate::plan::Plan;
+#[cfg(feature = "thread_local_gc")]
 use crate::policy::immix::block::Block;
+#[cfg(feature = "thread_local_gc")]
 use crate::policy::immix::block::BlockState;
 use crate::policy::immix::line::*;
 use crate::policy::immix::ImmixSpace;
@@ -12,6 +14,7 @@ use crate::util::opaque_pointer::VMThread;
 use crate::util::rust_util::unlikely;
 use crate::util::Address;
 use crate::vm::*;
+#[cfg(feature = "thread_local_gc")]
 use crossbeam::queue::SegQueue;
 
 #[repr(i32)]
@@ -25,6 +28,7 @@ pub enum ImmixAllocSemantics {
 #[repr(C)]
 pub struct ImmixAllocator<VM: VMBinding> {
     pub tls: VMThread,
+    #[cfg(feature = "thread_local_gc")]
     mutator_id: u32,
     /// Bump pointer
     cursor: Address,
@@ -47,13 +51,18 @@ pub struct ImmixAllocator<VM: VMBinding> {
     /// Hole-searching cursor
     line: Option<Line>,
     /// header of the block acquired by this allocator
+    #[cfg(feature = "thread_local_gc")]
     block_header: Option<Block>,
+    #[cfg(feature = "thread_local_gc")]
     local_blocks: Box<SegQueue<Block>>,
+    #[cfg(feature = "thread_local_gc")]
     /// line mark state of local gc
     pub local_line_mark_state: u8,
+    #[cfg(feature = "thread_local_gc")]
     pub local_unavailable_line_mark_state: u8,
+    #[cfg(feature = "thread_local_gc")]
     semantic: Option<ImmixAllocSemantics>,
-    #[cfg(all(debug_assertions, feature = "debug_publish_object"))]
+    #[cfg(all(feature = "debug_publish_object", feature = "thread_local_gc"))]
     blocks: Box<Vec<Block>>,
 }
 
@@ -385,6 +394,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 local_blocks.push(block);
                 current = self.next_block(block);
             }
+            #[cfg(feature = "debug_publish_object")]
             for b in self.blocks.iter() {
                 local_blocks.retain(|&block| *b != block);
             }
@@ -583,6 +593,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         let global_line_mark_state = space.line_mark_state.load(atomic::Ordering::Acquire);
         return ImmixAllocator {
             tls,
+            #[cfg(feature = "thread_local_gc")]
             mutator_id,
             space,
             plan,
@@ -594,11 +605,17 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             large_limit: Address::ZERO,
             request_for_large: false,
             line: None,
+            #[cfg(feature = "thread_local_gc")]
             semantic,
+            #[cfg(feature = "thread_local_gc")]
             block_header: None,
+            #[cfg(feature = "thread_local_gc")]
             local_blocks: Box::new(SegQueue::new()),
+            #[cfg(feature = "thread_local_gc")]
             local_line_mark_state: global_line_mark_state,
+            #[cfg(feature = "thread_local_gc")]
             local_unavailable_line_mark_state: global_line_mark_state,
+            #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object",))]
             blocks: Box::new(Vec::new()),
         };
     }
@@ -712,18 +729,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     #[cfg(not(feature = "thread_local_gc"))]
     /// Get a recyclable block from ImmixSpace.
     fn acquire_recyclable_block(&mut self) -> bool {
-        match self
-            .immix_space()
-            .get_reusable_block(self.copy, self.mutator_id, self.semantic)
-        {
+        match self.immix_space().get_reusable_block(self.copy) {
             Some(block) => {
                 trace!("{:?}: acquire_recyclable_block -> {:?}", self.tls, block);
-                debug_assert!(
-                    self.mutator_id == block.owner(),
-                    "recyclable block is corrupted. mutator: {:?} -- owner: {:?}",
-                    self.mutator_id,
-                    block.owner()
-                );
+
                 // Set the hole-searching cursor to the start of this block.
                 self.line = Some(block.start_line());
                 true
@@ -779,6 +788,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     fn acquire_clean_block(&mut self, size: usize, align: usize, offset: usize) -> Address {
         match self.immix_space().get_clean_block(self.tls, self.copy) {
             None => {
+                #[cfg(feature = "thread_local_gc")]
                 // add an assertion here, assume collectors can always allocate new blocks
                 debug_assert!(
                     self.semantic.is_none(),
@@ -947,7 +957,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             // block will be the new header
             self.block_header = Some(block);
         }
-        #[cfg(debug_assertions)]
+        #[cfg(all(feature = "debug_publish_object"))]
         {
             debug_assert!(
                 block.owner() == self.mutator_id,
@@ -1052,7 +1062,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 //     next: node.next,
                 // });
             }
-            #[cfg(debug_assertions)]
+            #[cfg(all(feature = "debug_publish_object"))]
             {
                 self.blocks.retain(|&b| b != block);
             }

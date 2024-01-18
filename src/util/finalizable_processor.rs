@@ -36,6 +36,7 @@ impl<F: Finalizable> FinalizableProcessor<F> {
         self.candidates.push(object);
     }
 
+    #[cfg(feature = "thread_local_gc")]
     pub fn add_candidates<T>(&mut self, candidates: T)
     where
         T: IntoIterator<Item = F>,
@@ -43,6 +44,7 @@ impl<F: Finalizable> FinalizableProcessor<F> {
         self.candidates.extend(candidates);
     }
 
+    #[cfg(feature = "thread_local_gc")]
     pub fn add_ready_for_finalize_objects<T>(&mut self, ready_for_finalize_objects: T)
     where
         T: IntoIterator<Item = F>,

@@ -138,6 +138,22 @@ pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
     ///
     // TODO: Review any potential use cases for other VM bindings.
     fn object_probable_write(&mut self, _obj: ObjectReference) {}
+
+    #[cfg(feature = "public_object_analysis")]
+    fn get_number_of_objects_published(&self) -> usize {
+        0
+    }
+
+    #[cfg(feature = "public_object_analysis")]
+    fn clear_number_of_objects_published(&mut self) {}
+
+    #[cfg(feature = "public_object_analysis")]
+    fn get_number_of_bytes_published(&self) -> usize {
+        0
+    }
+
+    #[cfg(feature = "public_object_analysis")]
+    fn clear_number_of_bytes_published(&mut self) {}
 }
 
 impl_downcast!(Barrier<VM> where VM: VMBinding);
@@ -193,9 +209,21 @@ pub trait BarrierSemantics: 'static + Send {
     /// Object will probably be modified
     fn object_probable_write_slow(&mut self, _obj: ObjectReference) {}
 
-    fn current_mutator(&self) -> VMMutatorThread {
-        VMMutatorThread(VMThread::UNINITIALIZED)
+    #[cfg(feature = "public_object_analysis")]
+    fn get_number_of_objects_published(&self) -> usize {
+        0
     }
+
+    #[cfg(feature = "public_object_analysis")]
+    fn clear_number_of_objects_published(&mut self) {}
+
+    #[cfg(feature = "public_object_analysis")]
+    fn get_number_of_bytes_published(&self) -> usize {
+        0
+    }
+
+    #[cfg(feature = "public_object_analysis")]
+    fn clear_number_of_bytes_published(&mut self) {}
 }
 
 /// Generic object barrier with a type argument defining it's slow-path behaviour.
@@ -369,26 +397,60 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
         self.semantics
             .object_array_copy_slow(src_base, dst_base, src, dst);
     }
+
+    #[cfg(feature = "public_object_analysis")]
+    fn get_number_of_objects_published(&self) -> usize {
+        self.semantics.get_number_of_objects_published()
+    }
+
+    #[cfg(feature = "public_object_analysis")]
+    fn clear_number_of_objects_published(&mut self) {
+        self.semantics.clear_number_of_objects_published();
+    }
+
+    #[cfg(feature = "public_object_analysis")]
+    fn get_number_of_bytes_published(&self) -> usize {
+        self.semantics.get_number_of_bytes_published()
+    }
+
+    #[cfg(feature = "public_object_analysis")]
+    fn clear_number_of_bytes_published(&mut self) {
+        self.semantics.clear_number_of_bytes_published();
+    }
 }
 
 pub struct PublicObjectMarkingBarrierSemantics<VM: VMBinding> {
     mmtk: &'static MMTK<VM>,
+    #[cfg(feature = "public_object_analysis")]
+    number_of_objects_published: usize,
+    #[cfg(feature = "public_object_analysis")]
+    number_of_bytes_published: usize,
 }
 
 impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
     pub fn new(mmtk: &'static MMTK<VM>) -> Self {
-        Self { mmtk }
+        Self {
+            mmtk,
+            #[cfg(feature = "public_object_analysis")]
+            number_of_objects_published: 0,
+            #[cfg(feature = "public_object_analysis")]
+            number_of_bytes_published: 0,
+        }
     }
 
     fn trace_public_object(&mut self, _src: ObjectReference, value: ObjectReference) {
         let mut closure = PublishObjectClosure::<VM>::new(self.mmtk);
-        // #[cfg(all(debug_assertions, feature = "debug_publish_object"))]
-        // info!("publish root object: {:?}", value);
         set_public_bit::<VM>(value);
         #[cfg(feature = "thread_local_gc")]
         self.mmtk.plan.publish_object(value);
         VM::VMScanning::scan_object(VMWorkerThread(VMThread::UNINITIALIZED), value, &mut closure);
         closure.do_closure();
+        #[cfg(feature = "public_object_analysis")]
+        {
+            self.number_of_objects_published += closure.get_number_of_objects_published() + 1;
+            self.number_of_bytes_published += closure.get_number_of_bytes_published()
+                + VM::VMObjectModel::get_current_size(value);
+        }
     }
 }
 
@@ -426,5 +488,25 @@ impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM>
                 self.trace_public_object(src_base, object);
             }
         }
+    }
+
+    #[cfg(feature = "public_object_analysis")]
+    fn get_number_of_objects_published(&self) -> usize {
+        self.number_of_objects_published
+    }
+
+    #[cfg(feature = "public_object_analysis")]
+    fn clear_number_of_objects_published(&mut self) {
+        self.number_of_objects_published = 0;
+    }
+
+    #[cfg(feature = "public_object_analysis")]
+    fn get_number_of_bytes_published(&self) -> usize {
+        self.number_of_bytes_published
+    }
+
+    #[cfg(feature = "public_object_analysis")]
+    fn clear_number_of_bytes_published(&mut self) {
+        self.number_of_bytes_published = 0;
     }
 }

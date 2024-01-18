@@ -27,9 +27,12 @@ use crate::util::heap::layout::vm_layout_constants::HEAP_START;
 use crate::util::opaque_pointer::*;
 use crate::util::{Address, ObjectReference};
 use crate::vm::edge_shape::MemorySlice;
+use crate::vm::ActivePlan;
 use crate::vm::ReferenceGlue;
 use crate::vm::Scanning;
 use crate::vm::VMBinding;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::sync::atomic::Ordering;
 
 /// Initialize an MMTk instance. A VM should call this method after creating an [`crate::MMTK`]
@@ -419,7 +422,7 @@ pub fn free_with_size<VM: VMBinding>(mmtk: &MMTK<VM>, addr: Address, old_size: u
 /// However, if a binding uses counted malloc (which won't poll for GC), they may want to poll for GC manually.
 /// This function should only be used by mutator threads.
 pub fn gc_poll<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
-    use crate::vm::{ActivePlan, Collection};
+    use crate::vm::Collection;
     debug_assert!(
         VM::VMActivePlan::is_mutator(tls.0),
         "gc_poll() can only be called by a mutator thread."
@@ -762,14 +765,16 @@ pub fn harness_end<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
 /// * `object`: The object that has a finalizer
 pub fn add_finalizer<VM: VMBinding>(
     mmtk: &'static MMTK<VM>,
-    mutator: &'static mut Mutator<VM>,
+    _mutator: &'static mut Mutator<VM>,
     object: <VM::VMReferenceGlue as ReferenceGlue<VM>>::FinalizableType,
 ) {
     if *mmtk.options.no_finalizer {
         warn!("add_finalizer() is called when no_finalizer = true");
     }
-    mutator.finalizable_candidates.push(object);
-    // mmtk.finalizable_processor.lock().unwrap().add(object);
+    #[cfg(feature = "thread_local_gc")]
+    _mutator.finalizable_candidates.push(object);
+    #[cfg(not(feature = "thread_local_gc"))]
+    mmtk.finalizable_processor.lock().unwrap().add(object);
 }
 
 /// Pin an object. MMTk will make sure that the object does not move
@@ -1007,4 +1012,40 @@ pub fn compute_allocator_mem_layout_checksum<VM: VMBinding>() -> usize {
             ^ std::mem::size_of::<BumpAllocator<VM>>()
             ^ std::mem::size_of::<LargeObjectAllocator<VM>>()
     };
+}
+
+pub fn mmtk_analyze_object_publication<VM: VMBinding>(tls: VMMutatorThread, request_id: i32) {
+    #[cfg(feature = "public_object_analysis")]
+    {
+        let mutator = VM::VMActivePlan::mutator(tls);
+        let number_of_objects_published = mutator.barrier().get_number_of_objects_published();
+        let number_of_bytes_published = mutator.barrier().get_number_of_bytes_published();
+        let allocation_count = mutator.allocation_count;
+        let bytes_allocated = mutator.bytes_allocated;
+        let mut log_file = OpenOptions::new()
+            .append(true)
+            .open("/tmp/object_publication.log")
+            .unwrap();
+        write!(
+            log_file,
+            "ID: {}, A: {}, P: {}, TB: {}, PB: {}",
+            request_id,
+            allocation_count,
+            number_of_objects_published,
+            bytes_allocated,
+            number_of_bytes_published
+        )
+        .unwrap();
+    }
+}
+
+pub fn mmtk_clear_object_publication_info<VM: VMBinding>(tls: VMMutatorThread) {
+    #[cfg(feature = "public_object_analysis")]
+    {
+        let mutator = VM::VMActivePlan::mutator(tls);
+        mutator.barrier().clear_number_of_objects_published();
+        mutator.barrier().clear_number_of_bytes_published();
+        mutator.allocation_count = 0;
+        mutator.bytes_allocated = 0;
+    }
 }

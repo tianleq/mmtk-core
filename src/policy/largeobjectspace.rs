@@ -1,6 +1,7 @@
 use atomic::Ordering;
 
 use crate::plan::ObjectQueue;
+#[cfg(feature = "thread_local_gc")]
 use crate::plan::ThreadlocalTracedObjectType;
 use crate::plan::VectorObjectQueue;
 use crate::policy::sft::GCWorkerMutRef;
@@ -24,6 +25,8 @@ const LOS_BIT_MASK: u8 = 0b11;
 const BOTTOM_HALF_MASK: usize = 0x00000000FFFFFFFF;
 #[cfg(feature = "thread_local_gc")]
 const TOP_HALF_MASK: usize = 0xFFFFFFFF00000000;
+#[cfg(feature = "thread_local_gc")]
+const SHIFT: usize = 32;
 
 /// This type implements a policy for large objects. Each instance corresponds
 /// to one Treadmill space.
@@ -218,9 +221,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     pub fn thread_local_prepare(&self, _mutator_id: u32) {}
 
     #[cfg(feature = "thread_local_gc")]
-    pub fn thread_local_release(&self, _mutator_id: u32) {
-        // self.thread_local_sweep_large_pages(mutator_id);
-    }
+    pub fn thread_local_release(&self, _mutator_id: u32) {}
 
     #[cfg(feature = "thread_local_gc")]
     fn thread_local_trace_object(
@@ -321,8 +322,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         } else {
             for object in self.treadmill.collect() {
                 sweep(object);
-                // #[cfg(debug_assertions)]
-                // info!("sweep public los object: {:?}", object);
             }
         }
     }
@@ -353,12 +352,12 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                 crate::util::conversions::page_align_down(object.to_object_start::<VM>());
 
             let metadata = metadata_address.load::<usize>();
-            let local_mark_value = (metadata & TOP_HALF_MASK) >> 32;
+            let local_mark_value = (metadata & TOP_HALF_MASK) >> SHIFT;
             if u8::try_from(local_mark_value).unwrap() == value {
                 false
             } else {
                 let mutator_id = metadata & BOTTOM_HALF_MASK;
-                let m = (usize::try_from(value).unwrap() << 32) | mutator_id;
+                let m = (usize::try_from(value).unwrap() << SHIFT) | mutator_id;
                 metadata_address.store(m);
                 true
             }
@@ -369,7 +368,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         let metaadta_address =
             crate::util::conversions::page_align_down(object.to_object_start::<VM>());
         let metadata = unsafe { metaadta_address.load::<usize>() };
-        let local_mark_value = (metadata & TOP_HALF_MASK) >> 32;
+        let local_mark_value = (metadata & TOP_HALF_MASK) >> SHIFT;
         u8::try_from(local_mark_value).unwrap() == value
     }
 
@@ -447,8 +446,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     }
 
     pub fn publish_object(&self, _object: ObjectReference) {
-        // #[cfg(debug_assertions)]
-        // info!("publish los object: {:?}", _object);
         self.treadmill.add_to_treadmill(_object, false);
     }
 

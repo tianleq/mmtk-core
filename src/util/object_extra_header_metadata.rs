@@ -1,12 +1,9 @@
-#[cfg(feature = "extra_header")]
 use super::{metadata::MetadataValue, Address, ObjectReference};
-#[cfg(feature = "extra_header")]
 use crate::vm::VMBinding;
 
-#[cfg(feature = "extra_header")]
 pub const BOTTOM_HALF_MASK: usize = 0x00000000FFFFFFFF;
-#[cfg(feature = "extra_header")]
 pub const TOP_HALF_MASK: usize = 0xFFFFFFFF00000000;
+pub const SHIFT: usize = 32;
 
 // The following are a few functions for manipulating extra header metadata.
 // Basically for each allocation request, we allocate extra bytes of [`HEADER_RESERVED_IN_BYTES`].
@@ -16,20 +13,19 @@ pub const TOP_HALF_MASK: usize = 0xFFFFFFFF00000000;
 // From the cell address, `cell - GC_EXTRA_HEADER_WORD` is where we store the header forwarding pointer.
 
 /// Get the address for header metadata
-#[cfg(feature = "extra_header")]
+
 fn extra_header_metadata_address<VM: VMBinding>(object: ObjectReference) -> Address {
     object.to_object_start::<VM>() - VM::EXTRA_HEADER_BYTES
 }
 
 /// Get header forwarding pointer for an object
 
-#[cfg(feature = "extra_header")]
 pub fn get_extra_header_metadata<VM: VMBinding, T: MetadataValue>(object: ObjectReference) -> T {
     unsafe { extra_header_metadata_address::<VM>(object).load::<T>() }
 }
 
 /// Store header forwarding pointer for an object
-#[cfg(feature = "extra_header")]
+
 pub fn store_extra_header_metadata<VM: VMBinding, T: MetadataValue>(
     object: ObjectReference,
     metadata: T,
@@ -40,7 +36,7 @@ pub fn store_extra_header_metadata<VM: VMBinding, T: MetadataValue>(
 }
 
 // Clear header forwarding pointer for an object
-#[cfg(feature = "extra_header")]
+
 pub fn clear_extra_header_metadata<VM: VMBinding>(object: ObjectReference) {
     crate::util::memory::zero(
         extra_header_metadata_address::<VM>(object),

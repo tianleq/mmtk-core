@@ -4,6 +4,7 @@ use crate::util::opaque_pointer::*;
 use crate::vm::VMBinding;
 use crate::{scheduler::*, Mutator};
 
+#[cfg(feature = "thread_local_gc")]
 use super::ObjectGraphTraversal;
 
 /// Thread context for the spawned GC thread.  It is used by spawn_gc_thread.

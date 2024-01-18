@@ -8,7 +8,9 @@ use crate::util::metadata::mark_bit::MarkState;
 
 use crate::util::{metadata, ObjectReference};
 
-use crate::plan::{ObjectQueue, ThreadlocalTracedObjectType, VectorObjectQueue};
+#[cfg(feature = "thread_local_gc")]
+use crate::plan::ThreadlocalTracedObjectType;
+use crate::plan::{ObjectQueue, VectorObjectQueue};
 
 use crate::policy::sft::GCWorkerMutRef;
 use crate::vm::{ObjectModel, VMBinding};
@@ -220,6 +222,7 @@ impl<VM: VMBinding> ImmortalSpace<VM> {
         object
     }
 
+    #[cfg(feature = "thread_local_gc")]
     pub fn thread_local_trace_object(
         &self,
         object: ObjectReference,

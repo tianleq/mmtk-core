@@ -17,13 +17,6 @@ pub fn set_public_bit<VM: VMBinding>(object: ObjectReference) {
         "{:x}: public bit already set",
         object,
     );
-    #[cfg(debug_assertions)]
-    {
-        let metadata_addr = crate::util::metadata::side_metadata::address_to_meta_address(
-            &PUBLIC_SIDE_METADATA_SPEC,
-            object.to_address::<VM>(),
-        );
-    }
     PUBLIC_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_address::<VM>(), 1, Ordering::SeqCst);
 }
 

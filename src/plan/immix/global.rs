@@ -11,6 +11,7 @@ use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 #[cfg(feature = "thread_local_gc")]
 use crate::plan::PlanThreadlocalTraceObject;
+#[cfg(feature = "thread_local_gc")]
 use crate::plan::ThreadlocalTracedObjectType;
 #[cfg(feature = "thread_local_gc")]
 use crate::policy::gc_work::PolicyThreadlocalTraceObject;
@@ -27,11 +28,12 @@ use crate::util::copy::*;
 use crate::util::heap::VMRequest;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSanity;
-#[cfg(feature = "thread_local_gc")]
+#[cfg(feature = "debug_publish_object")]
 use crate::util::ObjectReference;
 #[cfg(feature = "thread_local_gc")]
 use crate::util::VMMutatorThread;
 use crate::vm::VMBinding;
+#[cfg(feature = "thread_local_gc")]
 use crate::Mutator;
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use std::sync::atomic::AtomicBool;
@@ -182,14 +184,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             return Some(self.immix_space.get_object_owner(_object));
         }
         Option::None
-    }
-
-    #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
-    fn get_new_object(&self, object: ObjectReference) -> ObjectReference {
-        if self.immix_space.in_space(object) {
-            return self.immix_space.get_new_object(object);
-        }
-        object
     }
 }
 

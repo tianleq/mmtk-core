@@ -55,7 +55,7 @@ rand = "0.8.5"
 built = { version = "=0.6.0", features = ["git2"] }
 
 [features]
-default = ["thread_local_gc", "debug_publish_object"]
+default = ["debug_publish_object", "public_object_analysis"]
 
 # This feature is only supported on x86-64 for now
 # It's manually added to CI scripts
@@ -96,14 +96,20 @@ is_mmtk_object = ["vo_bit"]
 # Enable object pinning, in particular, enable pinning/unpinning, and its metadata
 object_pinning = []
 
+# Enable marking public objects
+public_bit = []
+
 #Enable allocate extra header of each individual object
 extra_header = []
 
 #Enable debugging publishing object
-debug_publish_object = ["extra_header"]
+debug_publish_object = ["extra_header", "public_bit"]
 
 #Enable thread local gc
-thread_local_gc = []
+thread_local_gc = ["public_bit"]
+
+#Enable object publication analysis
+public_object_analysis = ["extra_header", "public_bit"]
 
 # The following two features are useful for using Immix for VMs that do not support moving GC.
 

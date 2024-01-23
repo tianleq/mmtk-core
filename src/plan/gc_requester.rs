@@ -1,5 +1,7 @@
 use crate::util::{VMMutatorThread, VMThread};
-use crate::vm::{Collection, VMBinding};
+#[cfg(feature = "thread_local_gc")]
+use crate::vm::Collection;
+use crate::vm::VMBinding;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};

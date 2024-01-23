@@ -513,6 +513,11 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
             slot.store(new_object);
         }
     }
+
+    #[cfg(feature = "debug_publish_object")]
+    fn is_object_published(&self, object: ObjectReference) -> bool {
+        self.plan.is_object_published(object)
+    }
 }
 
 // Impl Deref/DerefMut to ProcessEdgesBase for PlanProcessEdges

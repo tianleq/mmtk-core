@@ -698,24 +698,23 @@ pub trait ProcessEdgesWork:
     #[cfg(feature = "debug_publish_object")]
     fn process_edges(&mut self) {
         for i in 0..self.edges.len() {
+            let source = self.sources[i];
             #[cfg(debug_assertions)]
             {
                 if self.roots {
                     assert!(
-                        self.edges[i].load() == self.sources[i],
+                        self.edges[i].load() == source,
                         "root packets, source object != slot.load()"
                     );
-                    let source = self.trace_object(self.sources[i]);
-                    // let source = self.get_new_object(self.sources[i]);
 
+                    // root type 0 are stack roots
                     if self.vm_roots_type != 0 && !source.is_null() {
-                        if !crate::util::public_bit::is_public::<Self::VM>(source) {
+                        if !self.is_object_published(source) {
                             println!("root slot: {:?}", self.edges[i]);
                             println!("###########");
                             <Self::VM as VMBinding>::VMObjectModel::dump_object(source);
                             println!("###########");
-                            debug_assert!(
-                                false,
+                            panic!(
                                 "VM Specific Root({:?}): {:?} is not published",
                                 self.vm_roots_type, source
                             )
@@ -730,11 +729,10 @@ pub trait ProcessEdgesWork:
             #[cfg(feature = "debug_publish_object")]
             {
                 // In the case of a root packet, sources[i] might contain a stale object
-                // so use trace_object to get the evacuated/new source object
-                let source = self.trace_object(self.sources[i]);
-                // let source = self.get_new_object(self.sources[i]);
+                // is_object_published will make sure to read the public bit on the correct
+                // object reference
 
-                if !source.is_null() && crate::util::public_bit::is_public::<Self::VM>(source) {
+                if !source.is_null() && self.is_object_published(source) {
                     if !new_object.is_null() {
                         // source is public, then its child new_object must be public, otherwise, leakage
                         // occurs
@@ -750,21 +748,21 @@ pub trait ProcessEdgesWork:
                                 metadata_address
                             );
                             <Self::VM as VMBinding>::VMObjectModel::dump_object(new_object);
+                            panic!(
+                                "public object: {:?} {:?} slot: {:?} points to private object: {:?} {:?}",
+                                source,
+                                crate::util::object_extra_header_metadata::get_extra_header_metadata::<
+                                    Self::VM,
+                                    usize,
+                                >(source),
+                                slot,
+                                new_object,
+                                crate::util::object_extra_header_metadata::get_extra_header_metadata::<
+                                    Self::VM,
+                                    usize,
+                                >(new_object)
+                            );
                         }
-                        panic!(
-                            "public object: {:?} {:?} slot: {:?} points to private object: {:?} {:?}",
-                            source,
-                            crate::util::object_extra_header_metadata::get_extra_header_metadata::<
-                                Self::VM,
-                                usize,
-                            >(source),
-                            slot,
-                            new_object,
-                            crate::util::object_extra_header_metadata::get_extra_header_metadata::<
-                                Self::VM,
-                                usize,
-                            >(new_object)
-                        );
                     }
                 }
             }
@@ -780,6 +778,9 @@ pub trait ProcessEdgesWork:
             self.process_edge(self.edges[i])
         }
     }
+
+    #[cfg(feature = "debug_publish_object")]
+    fn is_object_published(&self, _object: ObjectReference) -> bool;
 }
 
 impl<E: ProcessEdgesWork> GCWork<E::VM> for E {
@@ -857,6 +858,11 @@ impl<VM: VMBinding> ProcessEdgesWork for SFTProcessEdges<VM> {
 
     fn create_scan_work(&self, nodes: Vec<ObjectReference>, roots: bool) -> ScanObjects<Self> {
         ScanObjects::<Self>::new(nodes, false, roots)
+    }
+
+    #[cfg(feature = "debug_publish_object")]
+    fn is_object_published(&self, _object: ObjectReference) -> bool {
+        unimplemented!()
     }
 }
 
@@ -1192,6 +1198,11 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
         if P::may_move_objects::<KIND>() {
             slot.store(new_object);
         }
+    }
+
+    #[cfg(feature = "debug_publish_object")]
+    fn is_object_published(&self, object: ObjectReference) -> bool {
+        self.plan.is_object_published(object)
     }
 }
 

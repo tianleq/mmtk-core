@@ -185,6 +185,18 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         }
         Option::None
     }
+
+    #[cfg(feature = "debug_publish_object")]
+    fn is_object_published(&self, object: ObjectReference) -> bool {
+        debug_assert!(object.is_null() == false, "object is null");
+        if self.immix_space.in_space(object) {
+            self.immix_space.is_object_published(object)
+        } else {
+            // the object is not in immix space, it will not be moved
+            // so simply check if the object has been published or not
+            crate::util::public_bit::is_public::<VM>(object)
+        }
+    }
 }
 
 impl<VM: VMBinding> Immix<VM> {

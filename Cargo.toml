@@ -55,7 +55,7 @@ rand = "0.8.5"
 built = { version = "=0.6.0", features = ["git2"] }
 
 [features]
-default = ["debug_publish_object", "public_object_analysis"]
+default = ["debug_publish_object"]
 
 # This feature is only supported on x86-64 for now
 # It's manually added to CI scripts

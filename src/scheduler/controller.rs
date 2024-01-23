@@ -11,7 +11,9 @@ use crate::scheduler::single_thread_gc_work::ScheduleSingleThreadCollection;
 #[cfg(feature = "thread_local_gc")]
 use crate::scheduler::thread_local_gc_work::ScheduleThreadlocalCollection;
 use crate::scheduler::{GCWork, WorkBucketStage};
-use crate::util::{VMMutatorThread, VMWorkerThread};
+#[cfg(feature = "thread_local_gc")]
+use crate::util::VMMutatorThread;
+use crate::util::VMWorkerThread;
 use crate::vm::VMBinding;
 use crate::MMTK;
 
@@ -178,10 +180,6 @@ impl<VM: VMBinding> GCController<VM> {
 
         // If all of the above failed, it means GC has finished.
         false
-    }
-    #[cfg(not(feature = "thread_local_gc"))]
-    pub fn do_thread_local_gc_until_completion(&mut self, tls: VMMutatorThread) {
-        unimplemented!()
     }
 
     #[cfg(feature = "thread_local_gc")]

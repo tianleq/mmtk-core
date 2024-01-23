@@ -1,6 +1,7 @@
 use crate::util::Address;
 use crate::util::ObjectReference;
 use crate::vm::VMBinding;
+#[cfg(feature = "thread_local_gc")]
 use crate::Mutator;
 
 /// A GC worker's copy allocator for copying GCs.

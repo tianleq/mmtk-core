@@ -72,6 +72,11 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>> ProcessEdg
     ) -> Self::ScanObjectsWorkType {
         PlanScanObjects::new(self.plan, nodes, false, roots)
     }
+
+    #[cfg(feature = "debug_publish_object")]
+    fn is_object_published(&self, _object: ObjectReference) -> bool {
+        unimplemented!()
+    }
 }
 
 impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>> Deref

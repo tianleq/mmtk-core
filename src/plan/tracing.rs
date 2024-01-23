@@ -6,7 +6,6 @@ use crate::scheduler::{GCWorker, WorkBucketStage};
 use crate::util::{ObjectReference, VMMutatorThread};
 use crate::vm::edge_shape::Edge;
 use crate::vm::EdgeVisitor;
-use crate::vm::ObjectModel;
 use crate::vm::Scanning;
 use crate::MMTK;
 
@@ -228,6 +227,7 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
                 );
                 #[cfg(feature = "public_object_analysis")]
                 {
+                    use crate::vm::ObjectModel;
                     self.number_of_objects_published += 1;
                     self.number_of_bytes_published += VM::VMObjectModel::get_current_size(object);
                 }

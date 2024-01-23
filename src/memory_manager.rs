@@ -31,8 +31,7 @@ use crate::vm::ActivePlan;
 use crate::vm::ReferenceGlue;
 use crate::vm::Scanning;
 use crate::vm::VMBinding;
-use std::fs::OpenOptions;
-use std::io::Write;
+
 use std::sync::atomic::Ordering;
 
 /// Initialize an MMTk instance. A VM should call this method after creating an [`crate::MMTK`]
@@ -962,33 +961,34 @@ pub fn handle_user_single_thread_collection_request<VM: VMBinding>(
         .handle_user_collection_request_with_single_thread(tls, true, false);
 }
 
-pub fn mmtk_set_public_bit<VM: VMBinding>(mmtk: &'static MMTK<VM>, object: ObjectReference) {
+#[cfg(feature = "public_bit")]
+pub fn mmtk_set_public_bit<VM: VMBinding>(_mmtk: &'static MMTK<VM>, object: ObjectReference) {
     debug_assert!(!object.is_null(), "object is null!");
-    // #[cfg(all(debug_assertions, feature = "debug_publish_object"))]
-    // info!("mmtk_set_public_bit object: {:?}", object);
     crate::util::public_bit::set_public_bit::<VM>(object);
     #[cfg(feature = "thread_local_gc")]
-    mmtk.plan.publish_object(object);
+    _mmtk.plan.publish_object(object);
 }
 
-pub fn mmtk_publish_object<VM: VMBinding>(mmtk: &'static MMTK<VM>, object: ObjectReference) {
-    if object.is_null() || crate::util::public_bit::is_public::<VM>(object) {
+#[cfg(feature = "public_bit")]
+pub fn mmtk_publish_object<VM: VMBinding>(_mmtk: &'static MMTK<VM>, _object: ObjectReference) {
+    if _object.is_null() || crate::util::public_bit::is_public::<VM>(_object) {
         return;
     }
 
     let mut closure: crate::plan::PublishObjectClosure<VM> =
-        crate::plan::PublishObjectClosure::<VM>::new(mmtk);
+        crate::plan::PublishObjectClosure::<VM>::new(_mmtk);
 
-    mmtk_set_public_bit(mmtk, object);
+    mmtk_set_public_bit(_mmtk, _object);
     // Publish all the descendants
     VM::VMScanning::scan_object(
         VMWorkerThread(VMThread::UNINITIALIZED),
-        object,
+        _object,
         &mut closure,
     );
     closure.do_closure();
 }
 
+#[cfg(feature = "public_bit")]
 pub fn mmtk_is_object_published<VM: VMBinding>(object: ObjectReference) -> bool {
     if object.is_null() {
         false
@@ -1014,38 +1014,38 @@ pub fn compute_allocator_mem_layout_checksum<VM: VMBinding>() -> usize {
     };
 }
 
+#[cfg(feature = "public_object_analysis")]
 pub fn mmtk_analyze_object_publication<VM: VMBinding>(tls: VMMutatorThread, request_id: i32) {
-    #[cfg(feature = "public_object_analysis")]
-    {
-        let mutator = VM::VMActivePlan::mutator(tls);
-        let number_of_objects_published = mutator.barrier().get_number_of_objects_published();
-        let number_of_bytes_published = mutator.barrier().get_number_of_bytes_published();
-        let allocation_count = mutator.allocation_count;
-        let bytes_allocated = mutator.bytes_allocated;
-        let mut log_file = OpenOptions::new()
-            .append(true)
-            .open("/tmp/object_publication.log")
-            .unwrap();
-        write!(
-            log_file,
-            "ID: {}, A: {}, P: {}, TB: {}, PB: {}",
-            request_id,
-            allocation_count,
-            number_of_objects_published,
-            bytes_allocated,
-            number_of_bytes_published
-        )
+    use std::fs::OpenOptions;
+    use std::io::Write;
+
+    let mutator = VM::VMActivePlan::mutator(tls);
+    let number_of_objects_published = mutator.barrier().get_number_of_objects_published();
+    let number_of_bytes_published = mutator.barrier().get_number_of_bytes_published();
+    let allocation_count = mutator.allocation_count;
+    let bytes_allocated = mutator.bytes_allocated;
+    let mut log_file = OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open("/tmp/object_publication.log")
         .unwrap();
-    }
+    write!(
+        log_file,
+        "ID: {}, A: {}, P: {}, TB: {}, PB: {}",
+        request_id,
+        allocation_count,
+        number_of_objects_published,
+        bytes_allocated,
+        number_of_bytes_published
+    )
+    .unwrap();
 }
 
+#[cfg(feature = "public_object_analysis")]
 pub fn mmtk_clear_object_publication_info<VM: VMBinding>(tls: VMMutatorThread) {
-    #[cfg(feature = "public_object_analysis")]
-    {
-        let mutator = VM::VMActivePlan::mutator(tls);
-        mutator.barrier().clear_number_of_objects_published();
-        mutator.barrier().clear_number_of_bytes_published();
-        mutator.allocation_count = 0;
-        mutator.bytes_allocated = 0;
-    }
+    let mutator = VM::VMActivePlan::mutator(tls);
+    mutator.barrier().clear_number_of_objects_published();
+    mutator.barrier().clear_number_of_bytes_published();
+    mutator.allocation_count = 0;
+    mutator.bytes_allocated = 0;
 }

@@ -60,7 +60,7 @@ impl<VM: VMBinding> GCTrigger<VM> {
         &self,
         space_full: bool,
         space: Option<&dyn Space<VM>>,
-        tls: VMMutatorThread,
+        _tls: VMMutatorThread,
     ) -> Option<GCKind> {
         let plan = unsafe { self.plan.assume_init() };
         if self.policy.is_gc_required(space_full, space, plan) {
@@ -85,7 +85,7 @@ impl<VM: VMBinding> GCTrigger<VM> {
             .is_thread_local_gc_required(space_full, space, plan)
         {
             // TODO need a way to tell whether this is a global gc or local gc
-            let result = plan.base().gc_requester.request_thread_local_gc(tls);
+            let result = plan.base().gc_requester.request_thread_local_gc(_tls);
             if result {
                 return Some(GCKind::LOCAL);
             } else {

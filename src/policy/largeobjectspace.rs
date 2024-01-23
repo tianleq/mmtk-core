@@ -308,7 +308,12 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         let sweep = |object: ObjectReference| {
             #[cfg(feature = "vo_bit")]
             crate::util::metadata::vo_bit::unset_vo_bit::<VM>(object);
-            debug_assert!(crate::util::public_bit::is_public::<VM>(object));
+
+            #[cfg(feature = "thread_local_gc")]
+            {
+                // The following assertion only makes sense
+                debug_assert!(crate::util::public_bit::is_public::<VM>(object));
+            }
 
             crate::util::public_bit::unset_public_bit::<VM>(object);
 

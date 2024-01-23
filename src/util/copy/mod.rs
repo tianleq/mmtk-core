@@ -13,6 +13,7 @@ use crate::util::opaque_pointer::VMWorkerThread;
 use crate::util::{Address, ObjectReference};
 use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
+#[cfg(feature = "thread_local_gc")]
 use crate::Mutator;
 use enum_map::Enum;
 use enum_map::EnumMap;

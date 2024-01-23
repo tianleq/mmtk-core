@@ -323,22 +323,27 @@ impl<VM: VMBinding> CopySpace<VM> {
     }
 
     #[cfg(all(feature = "debug_publish_object"))]
-    pub fn get_new_object(&self, object: ObjectReference) -> ObjectReference {
+    pub fn is_object_published(&self, object: ObjectReference) -> bool {
+        debug_assert!(!object.is_null());
+        // read the public bit of the old object first
+        let is_published = crate::util::public_bit::is_public::<VM>(object);
         if object_forwarding::is_forwarded_or_being_forwarded::<VM>(object) {
-            return object_forwarding::spin_and_get_forwarded_object::<VM>(
+            // object's public bit may have been cleared, so need to read the public bit on the forwarded object
+            let new_object = object_forwarding::spin_and_get_forwarded_object::<VM>(
                 object,
                 object_forwarding::get_forwarding_status::<VM>(object),
             );
+            crate::util::public_bit::is_public::<VM>(new_object)
+        } else {
+            // object has not been forwarded yet, the public bit read before is still valid
+            is_published
         }
-        // race condition occurs here, object may now being forwarded by another gc thread
-        object
     }
 }
 
 use crate::plan::Plan;
 use crate::util::alloc::Allocator;
 use crate::util::alloc::BumpAllocator;
-// use crate::util::alloc::MarkCompactAllocator;
 use crate::util::opaque_pointer::VMWorkerThread;
 
 /// Copy allocator for CopySpace

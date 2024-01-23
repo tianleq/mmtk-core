@@ -1363,8 +1363,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     pub fn get_next_available_lines(
         &self,
         search_start: Line,
-        local_unavailable_state: Option<u8>,
-        local_current_mark_state: Option<u8>,
+        _local_unavailable_state: Option<u8>,
+        _local_current_mark_state: Option<u8>,
     ) -> Option<(Line, Line)> {
         debug_assert!(!super::BLOCK_ONLY);
         #[cfg(not(feature = "thread_local_gc"))]
@@ -1372,9 +1372,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         #[cfg(not(feature = "thread_local_gc"))]
         let current_state = self.line_mark_state.load(Ordering::Acquire);
         #[cfg(feature = "thread_local_gc")]
-        let unavail_state = local_unavailable_state.unwrap();
+        let unavail_state = _local_unavailable_state.unwrap();
         #[cfg(feature = "thread_local_gc")]
-        let current_state = local_current_mark_state.unwrap();
+        let current_state = _local_current_mark_state.unwrap();
         #[cfg(feature = "thread_local_gc")]
         let public_line_state = Line::public_line_mark_state(current_state);
         let block = search_start.block();
@@ -1463,6 +1463,23 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[cfg(feature = "thread_local_gc")]
     pub fn get_object_owner(&self, object: ObjectReference) -> u32 {
         Block::containing::<VM>(object).owner()
+    }
+
+    #[cfg(feature = "debug_publish_object")]
+    pub fn is_object_published(&self, object: ObjectReference) -> bool {
+        debug_assert!(!object.is_null());
+        let is_published = crate::util::public_bit::is_public::<VM>(object);
+        if ForwardingWord::is_forwarded_or_being_forwarded::<VM>(object) {
+            // object's public bit may have been cleared, so need to read the public bit on the forwarded object
+            let new_object = ForwardingWord::spin_and_get_forwarded_object::<VM>(
+                object,
+                ForwardingWord::get_forwarding_status::<VM>(object),
+            );
+            crate::util::public_bit::is_public::<VM>(new_object)
+        } else {
+            // object has not been forwarded yet, the public bit read before is still valid
+            is_published
+        }
     }
 }
 

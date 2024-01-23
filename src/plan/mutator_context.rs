@@ -5,7 +5,9 @@ use crate::plan::global::Plan;
 use crate::plan::AllocationSemantics;
 use crate::policy::space::Space;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
-use crate::util::{object_extra_header_metadata, Address, ObjectReference};
+#[cfg(all(feature = "public_object_analysis", feature = "thread_local_gc"))]
+use crate::util::object_extra_header_metadata;
+use crate::util::{Address, ObjectReference};
 use crate::util::{VMMutatorThread, VMWorkerThread};
 use crate::vm::VMBinding;
 

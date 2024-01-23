@@ -582,19 +582,19 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
 impl<VM: VMBinding> ImmixAllocator<VM> {
     pub fn new(
         tls: VMThread,
-        mutator_id: u32,
+        _mutator_id: u32,
         space: &'static ImmixSpace<VM>,
         plan: &'static dyn Plan<VM = VM>,
         copy: bool,
-        semantic: Option<ImmixAllocSemantics>,
+        _semantic: Option<ImmixAllocSemantics>,
     ) -> Self {
         // Local line mark state has to be in line with global line mark state, cannot use the default
         // value GLOBAL_RESET_MARK_STATE as mutator threads can be spawned at any time
-        let global_line_mark_state = space.line_mark_state.load(atomic::Ordering::Acquire);
+        let _global_line_mark_state = space.line_mark_state.load(atomic::Ordering::Acquire);
         return ImmixAllocator {
             tls,
             #[cfg(feature = "thread_local_gc")]
-            mutator_id,
+            mutator_id: _mutator_id,
             space,
             plan,
             cursor: Address::ZERO,
@@ -606,15 +606,15 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             request_for_large: false,
             line: None,
             #[cfg(feature = "thread_local_gc")]
-            semantic,
+            semantic: _semantic,
             #[cfg(feature = "thread_local_gc")]
             block_header: None,
             #[cfg(feature = "thread_local_gc")]
             local_blocks: Box::new(SegQueue::new()),
             #[cfg(feature = "thread_local_gc")]
-            local_line_mark_state: global_line_mark_state,
+            local_line_mark_state: _global_line_mark_state,
             #[cfg(feature = "thread_local_gc")]
-            local_unavailable_line_mark_state: global_line_mark_state,
+            local_unavailable_line_mark_state: _global_line_mark_state,
             #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object",))]
             blocks: Box::new(Vec::new()),
         };

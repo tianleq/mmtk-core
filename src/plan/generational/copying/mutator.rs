@@ -48,10 +48,9 @@ pub fn create_gencopy_mutator<VM: VMBinding>(
         mutator_tls,
         config,
         plan: gencopy,
+        mutator_id: 0,
         #[cfg(feature = "thread_local_gc")]
         thread_local_gc_status: 0,
-        #[cfg(feature = "thread_local_gc")]
-        mutator_id: 0,
         #[cfg(feature = "thread_local_gc")]
         finalizable_candidates: Box::new(Vec::new()),
         #[cfg(feature = "public_object_analysis")]
@@ -60,5 +59,7 @@ pub fn create_gencopy_mutator<VM: VMBinding>(
         bytes_allocated: 0,
         #[cfg(feature = "public_object_analysis")]
         request_id: 0,
+        #[cfg(feature = "public_object_analysis")]
+        global_request_id: 0,
     }
 }

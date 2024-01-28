@@ -162,7 +162,7 @@ impl<E: ProcessEdgesWork> RootsWorkFactory<EdgeOf<E>>
         crate::memory_manager::add_local_work_packet(
             self.mmtk,
             WorkBucketStage::Unconstrained,
-            E::new(edges, true, self.mmtk, None, None),
+            E::new(edges, true, self.mmtk, None),
         );
         #[cfg(feature = "debug_publish_object")]
         crate::memory_manager::add_local_work_packet(
@@ -207,7 +207,6 @@ impl<E: ProcessEdgesWork> RootsWorkFactory<EdgeOf<E>>
         let process_edges_work = E::new(vec![], true, self.mmtk, Option::None);
         #[cfg(feature = "debug_publish_object")]
         // We want to use E::create_scan_work.
-        debug_assert!(false, "openjdk does not use node enquing");
         let process_edges_work = E::new(vec![], vec![], true, 0, self.mmtk, None);
         let work = process_edges_work.create_scan_work(nodes, true);
         crate::memory_manager::add_local_work_packet(

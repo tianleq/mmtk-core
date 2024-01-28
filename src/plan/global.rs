@@ -409,6 +409,16 @@ pub trait Plan: 'static + Sync + Downcast {
     fn is_object_published(&self, _object: ObjectReference) -> bool {
         false
     }
+
+    #[cfg(feature = "public_object_analysis")]
+    fn activate_public_object_analysis(&self) {
+        unimplemented!()
+    }
+
+    #[cfg(feature = "public_object_analysis")]
+    fn is_public_object_analysis_active(&self) -> bool {
+        false
+    }
 }
 
 impl_downcast!(Plan assoc VM);

@@ -171,7 +171,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for Finalization<E> {
             finalizable_processor.ready_for_finalize.len()
         );
         #[cfg(not(feature = "debug_publish_object"))]
-        let mut w = E::new(vec![], false, mmtk, self.1);
+        let mut w = E::new(vec![], false, mmtk, None);
         #[cfg(feature = "debug_publish_object")]
         let mut w = E::new(vec![], vec![], false, 0, mmtk, None);
         w.set_worker(worker);

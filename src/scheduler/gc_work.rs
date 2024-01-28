@@ -927,7 +927,6 @@ impl<E: ProcessEdgesWork> RootsWorkFactory<EdgeOf<E>> for ProcessEdgesWorkRootsW
         #[cfg(not(feature = "debug_publish_object"))]
         let process_edges_work = E::new(vec![], true, self.mmtk, Option::None);
         #[cfg(feature = "debug_publish_object")]
-        debug_assert!(false, "openjdk does not use node enquing");
         let process_edges_work = E::new(vec![], vec![], true, 0, self.mmtk, None);
         let work = process_edges_work.create_scan_work(nodes, true);
         crate::memory_manager::add_work_packet(self.mmtk, WorkBucketStage::Closure, work);
@@ -1002,13 +1001,7 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
         let scanned_root_objects = self.roots().then(|| {
             // We create an instance of E to use its `trace_object` method and its object queue.
             #[cfg(not(feature = "debug_publish_object"))]
-            let mut process_edges_work = Self::E::new(
-                vec![],
-                false,
-                mmtk,
-                None,
-                process_edges_work_counter.clone(),
-            );
+            let mut process_edges_work = Self::E::new(vec![], false, mmtk, None);
             #[cfg(feature = "debug_publish_object")]
             let mut process_edges_work = Self::E::new(vec![], vec![], false, 0, mmtk, None);
             process_edges_work.set_worker(worker);

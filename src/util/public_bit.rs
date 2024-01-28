@@ -44,13 +44,6 @@ pub fn unset_addr_public_bit<VM: VMBinding>(address: Address) {
 
 #[cfg(not(feature = "debug_publish_object"))]
 pub fn unset_public_bit<VM: VMBinding>(object: ObjectReference) {
-    #[cfg(debug_assertions)]
-    {
-        let metadata_addr = crate::util::metadata::side_metadata::address_to_meta_address(
-            &PUBLIC_SIDE_METADATA_SPEC,
-            object.to_address::<VM>(),
-        );
-    }
     PUBLIC_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_address::<VM>(), 0, Ordering::SeqCst);
 }
 

@@ -5,7 +5,7 @@ use crate::plan::global::Plan;
 use crate::plan::AllocationSemantics;
 use crate::policy::space::Space;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
-#[cfg(all(feature = "public_object_analysis", feature = "thread_local_gc"))]
+#[cfg(all(feature = "public_object_analysis"))]
 use crate::util::object_extra_header_metadata;
 use crate::util::{Address, ObjectReference};
 use crate::util::{VMMutatorThread, VMWorkerThread};
@@ -73,10 +73,9 @@ pub struct Mutator<VM: VMBinding> {
     pub mutator_tls: VMMutatorThread,
     pub plan: &'static dyn Plan<VM = VM>,
     pub config: MutatorConfig<VM>,
+    pub mutator_id: u32,
     #[cfg(feature = "thread_local_gc")]
     pub thread_local_gc_status: u32,
-    #[cfg(feature = "thread_local_gc")]
-    pub mutator_id: u32,
     #[cfg(feature = "thread_local_gc")]
     pub finalizable_candidates:
         Box<Vec<<VM::VMReferenceGlue as crate::vm::ReferenceGlue<VM>>::FinalizableType>>,
@@ -85,7 +84,9 @@ pub struct Mutator<VM: VMBinding> {
     #[cfg(feature = "public_object_analysis")]
     pub bytes_allocated: usize,
     #[cfg(feature = "public_object_analysis")]
-    pub request_id: usize,
+    pub request_id: u32,
+    #[cfg(feature = "public_object_analysis")]
+    pub global_request_id: u32,
 }
 
 impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
@@ -126,6 +127,22 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         }
         .get_space();
         space.initialize_object_metadata(refer, true);
+
+        #[cfg(not(feature = "thread_local_gc"))]
+        {
+            #[cfg(feature = "debug_publish_object")]
+            {
+                #[cfg(not(feature = "public_object_analysis"))]
+                let metadata: usize = usize::try_from(self.mutator_id).unwrap();
+                #[cfg(feature = "public_object_analysis")]
+                let metadata: usize = usize::try_from(self.mutator_id).unwrap()
+                    | usize::try_from(self.request_id).unwrap()
+                        << object_extra_header_metadata::SHIFT;
+                crate::util::object_extra_header_metadata::store_extra_header_metadata::<VM, usize>(
+                    refer, metadata,
+                );
+            }
+        }
 
         // Large object allocation always go through the slow-path, so it is fine to
         // do the following book-keeping in post_alloc(only executed in slow-path)

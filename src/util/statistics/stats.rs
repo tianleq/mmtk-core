@@ -55,6 +55,7 @@ pub struct Stats {
     pub shared: Arc<SharedStats>,
     counters: Mutex<Vec<Arc<Mutex<dyn Counter + Send>>>>,
     exceeded_phase_limit: AtomicBool,
+    requests_time: Arc<Mutex<Timer>>,
 }
 
 impl Stats {
@@ -81,6 +82,13 @@ impl Stats {
             false,
             MonotoneNanoTime {},
         )));
+        let requests_time = Arc::new(Mutex::new(LongCounter::new(
+            "time.requests".to_string(),
+            shared.clone(),
+            false,
+            false,
+            MonotoneNanoTime {},
+        )));
         counters.push(t.clone());
         // Read from the MMTK option for a list of perf events we want to
         // measure, and create corresponding counters
@@ -103,6 +111,7 @@ impl Stats {
             shared,
             counters: Mutex::new(counters),
             exceeded_phase_limit: AtomicBool::new(false),
+            requests_time,
         }
     }
 
@@ -192,6 +201,8 @@ impl Stats {
         let scheduler_stat = mmtk.scheduler.statistics();
         self.print_column_names(&scheduler_stat);
         print!("{}\t", self.get_phase() / 2);
+        self.requests_time.lock().unwrap().print_total(None);
+        print!("\t");
         let counter = self.counters.lock().unwrap();
         for iter in &(*counter) {
             let c = iter.lock().unwrap();
@@ -216,6 +227,7 @@ impl Stats {
 
     pub fn print_column_names(&self, scheduler_stat: &HashMap<String, String>) {
         print!("GC\t");
+        print!("time.requests\t");
         let counter = self.counters.lock().unwrap();
         for iter in &(*counter) {
             let c = iter.lock().unwrap();
@@ -265,5 +277,13 @@ impl Stats {
 
     pub fn get_gathering_stats(&self) -> bool {
         self.shared.get_gathering_stats()
+    }
+
+    pub fn request_starting(&self) {
+        self.requests_time.lock().unwrap().start();
+    }
+
+    pub fn request_finished(&self) {
+        self.requests_time.lock().unwrap().stop();
     }
 }

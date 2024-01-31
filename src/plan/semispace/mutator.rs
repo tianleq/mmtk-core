@@ -68,7 +68,7 @@ pub fn create_ss_mutator<VM: VMBinding>(
         prepare_func: &ss_mutator_prepare,
         release_func: &ss_mutator_release,
     };
-    #[cfg(feature = "thread_local_gc")]
+
     let mutator_id = crate::util::MUTATOR_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);
     #[cfg(feature = "public_bit")]
     let barrier = Box::new(PublicObjectMarkingBarrier::new(
@@ -83,7 +83,7 @@ pub fn create_ss_mutator<VM: VMBinding>(
         mutator_tls,
         config,
         plan,
-        mutator_id: 0,
+        mutator_id,
         #[cfg(feature = "thread_local_gc")]
         thread_local_gc_status: 0,
         #[cfg(feature = "thread_local_gc")]

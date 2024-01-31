@@ -190,7 +190,10 @@ impl<'a, E: ProcessEdgesWork> Drop for ObjectsClosure<'a, E> {
 pub struct PublishObjectClosure<VM: crate::vm::VMBinding> {
     _mmtk: &'static MMTK<VM>,
     edge_buffer: std::collections::VecDeque<VM::VMEdge>,
-    #[cfg(feature = "public_object_analysis")]
+    #[cfg(any(
+        feature = "public_object_analysis",
+        feature = "debug_publish_object_overhead"
+    ))]
     number_of_objects_published: usize,
     #[cfg(feature = "public_object_analysis")]
     number_of_bytes_published: usize,
@@ -201,7 +204,10 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
         PublishObjectClosure {
             _mmtk: mmtk,
             edge_buffer: std::collections::VecDeque::new(),
-            #[cfg(feature = "public_object_analysis")]
+            #[cfg(any(
+                feature = "public_object_analysis",
+                feature = "debug_publish_object_overhead"
+            ))]
             number_of_objects_published: 0,
             #[cfg(feature = "public_object_analysis")]
             number_of_bytes_published: 0,
@@ -231,11 +237,21 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
                     self.number_of_objects_published += 1;
                     self.number_of_bytes_published += VM::VMObjectModel::get_current_size(object);
                 }
+                #[cfg(feature = "debug_publish_object_overhead")]
+                {
+                    #[cfg(not(feature = "public_object_analysis"))]
+                    {
+                        self.number_of_objects_published += 1;
+                    }
+                }
             }
         }
     }
 
-    #[cfg(feature = "public_object_analysis")]
+    #[cfg(any(
+        feature = "public_object_analysis",
+        feature = "debug_publish_object_overhead"
+    ))]
     pub fn get_number_of_objects_published(&self) -> usize {
         self.number_of_objects_published
     }

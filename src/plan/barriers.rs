@@ -1,5 +1,7 @@
 //! Read/Write barrier implementations.
 
+use std::sync::atomic::AtomicUsize;
+
 use crate::util::public_bit::{is_public, set_public_bit};
 use crate::vm::edge_shape::{Edge, MemorySlice};
 use crate::vm::ObjectModel;
@@ -139,7 +141,10 @@ pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
     // TODO: Review any potential use cases for other VM bindings.
     fn object_probable_write(&mut self, _obj: ObjectReference) {}
 
-    #[cfg(feature = "public_object_analysis")]
+    #[cfg(any(
+        feature = "public_object_analysis",
+        feature = "debug_publish_object_overhead"
+    ))]
     fn get_number_of_objects_published(&self) -> usize {
         0
     }
@@ -154,6 +159,16 @@ pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
 
     #[cfg(feature = "public_object_analysis")]
     fn clear_number_of_bytes_published(&mut self) {}
+
+    #[cfg(feature = "debug_publish_object_overhead")]
+    fn get_total_write_count(&self) -> usize {
+        0
+    }
+
+    #[cfg(feature = "debug_publish_object_overhead")]
+    fn get_slowpath_taken_count(&self) -> usize {
+        0
+    }
 }
 
 impl_downcast!(Barrier<VM> where VM: VMBinding);
@@ -209,7 +224,10 @@ pub trait BarrierSemantics: 'static + Send {
     /// Object will probably be modified
     fn object_probable_write_slow(&mut self, _obj: ObjectReference) {}
 
-    #[cfg(feature = "public_object_analysis")]
+    #[cfg(any(
+        feature = "public_object_analysis",
+        feature = "debug_publish_object_overhead"
+    ))]
     fn get_number_of_objects_published(&self) -> usize {
         0
     }
@@ -318,11 +336,21 @@ impl<S: BarrierSemantics> Barrier<S::VM> for ObjectBarrier<S> {
 
 pub struct PublicObjectMarkingBarrier<S: BarrierSemantics> {
     semantics: S,
+    #[cfg(feature = "debug_publish_object_overhead")]
+    total_write: AtomicUsize,
+    #[cfg(feature = "debug_publish_object_overhead")]
+    slowpath_taken: AtomicUsize,
 }
 
 impl<S: BarrierSemantics> PublicObjectMarkingBarrier<S> {
     pub fn new(semantics: S) -> Self {
-        Self { semantics }
+        Self {
+            semantics,
+            #[cfg(feature = "debug_publish_object_overhead")]
+            total_write: AtomicUsize::new(0),
+            #[cfg(feature = "debug_publish_object_overhead")]
+            slowpath_taken: AtomicUsize::new(0),
+        }
     }
 }
 
@@ -334,6 +362,8 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
         slot: <S::VM as VMBinding>::VMEdge,
         target: ObjectReference,
     ) {
+        #[cfg(feature = "debug_publish_object_overhead")]
+        self.total_write.fetch_add(1, Ordering::SeqCst);
         // only trace when store private to a public object
         if is_public::<S::VM>(src) {
             if !target.is_null() && !is_public::<S::VM>(target) {
@@ -349,6 +379,8 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
         slot: <S::VM as VMBinding>::VMEdge,
         target: ObjectReference,
     ) {
+        #[cfg(feature = "debug_publish_object_overhead")]
+        self.slowpath_taken.fetch_add(1, Ordering::SeqCst);
         debug_assert!(is_public::<S::VM>(src), "source check is broken");
         debug_assert!(!target.is_null(), "target null check is broken");
         debug_assert!(!is_public::<S::VM>(target), "target check is broken");
@@ -364,18 +396,23 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
         src: <S::VM as VMBinding>::VMMemorySlice,
         dst: <S::VM as VMBinding>::VMMemorySlice,
     ) {
+        #[cfg(feature = "debug_publish_object_overhead")]
+        self.total_write.fetch_add(1, Ordering::SeqCst);
         debug_assert!(!src_base.is_null(), "source array is null");
         debug_assert!(!dst_base.is_null(), "destination array is null");
         // Only do publication when the dst array is public and src array is private
         // a private array should not have public object as its elements
         if is_public::<S::VM>(dst_base) {
             if !is_public::<S::VM>(src_base) {
+                #[cfg(feature = "debug_publish_object_overhead")]
+                self.slowpath_taken.fetch_add(1, Ordering::SeqCst);
                 self.semantics
                     .object_array_copy_slow(src_base, dst_base, src, dst);
             }
         }
     }
 
+    // The following is not being used by openjdk
     #[inline(always)]
     fn object_array_copy_slow(
         &mut self,
@@ -384,6 +421,8 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
         src: <S::VM as VMBinding>::VMMemorySlice,
         dst: <S::VM as VMBinding>::VMMemorySlice,
     ) {
+        #[cfg(feature = "debug_publish_object_overhead")]
+        self.slowpath_taken.fetch_add(1, Ordering::SeqCst);
         debug_assert!(
             is_public::<S::VM>(dst_base),
             "arraycopy slow path: destination array: {:?} is private",
@@ -398,7 +437,10 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
             .object_array_copy_slow(src_base, dst_base, src, dst);
     }
 
-    #[cfg(feature = "public_object_analysis")]
+    #[cfg(any(
+        feature = "public_object_analysis",
+        feature = "debug_publish_object_overhead"
+    ))]
     fn get_number_of_objects_published(&self) -> usize {
         self.semantics.get_number_of_objects_published()
     }
@@ -417,11 +459,24 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
     fn clear_number_of_bytes_published(&mut self) {
         self.semantics.clear_number_of_bytes_published();
     }
+
+    #[cfg(feature = "debug_publish_object_overhead")]
+    fn get_total_write_count(&self) -> usize {
+        self.total_write.load(Ordering::SeqCst)
+    }
+
+    #[cfg(feature = "debug_publish_object_overhead")]
+    fn get_slowpath_taken_count(&self) -> usize {
+        self.slowpath_taken.load(Ordering::SeqCst)
+    }
 }
 
 pub struct PublicObjectMarkingBarrierSemantics<VM: VMBinding> {
     mmtk: &'static MMTK<VM>,
-    #[cfg(feature = "public_object_analysis")]
+    #[cfg(any(
+        feature = "public_object_analysis",
+        feature = "debug_publish_object_overhead"
+    ))]
     number_of_objects_published: usize,
     #[cfg(feature = "public_object_analysis")]
     number_of_bytes_published: usize,
@@ -431,7 +486,10 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
     pub fn new(mmtk: &'static MMTK<VM>) -> Self {
         Self {
             mmtk,
-            #[cfg(feature = "public_object_analysis")]
+            #[cfg(any(
+                feature = "public_object_analysis",
+                feature = "debug_publish_object_overhead"
+            ))]
             number_of_objects_published: 0,
             #[cfg(feature = "public_object_analysis")]
             number_of_bytes_published: 0,
@@ -450,6 +508,13 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
             self.number_of_objects_published += closure.get_number_of_objects_published() + 1;
             self.number_of_bytes_published += closure.get_number_of_bytes_published()
                 + VM::VMObjectModel::get_current_size(value);
+        }
+        #[cfg(feature = "debug_publish_object_overhead")]
+        {
+            #[cfg(not(feature = "public_object_analysis"))]
+            {
+                self.number_of_objects_published += closure.get_number_of_objects_published() + 1;
+            }
         }
     }
 }
@@ -472,7 +537,7 @@ impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM>
 
     fn object_array_copy_slow(
         &mut self,
-        src_base: ObjectReference,
+        _src_base: ObjectReference,
         _dst_base: ObjectReference,
         src: <Self::VM as VMBinding>::VMMemorySlice,
         _dst: <Self::VM as VMBinding>::VMMemorySlice,
@@ -485,12 +550,15 @@ impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM>
             // public objects, so need to rule out those public
             // objects
             if !object.is_null() && !is_public::<VM>(object) {
-                self.trace_public_object(src_base, object);
+                self.trace_public_object(_dst_base, object)
             }
         }
     }
 
-    #[cfg(feature = "public_object_analysis")]
+    #[cfg(any(
+        feature = "public_object_analysis",
+        feature = "debug_publish_object_overhead"
+    ))]
     fn get_number_of_objects_published(&self) -> usize {
         self.number_of_objects_published
     }

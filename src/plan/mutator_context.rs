@@ -233,6 +233,15 @@ impl<VM: VMBinding> Mutator<VM> {
         for selector in self.get_all_allocator_selectors() {
             unsafe { self.allocators.get_allocator_mut(selector) }.on_mutator_destroy();
         }
+        #[cfg(feature = "debug_publish_object_overhead")]
+        {
+            println!(
+                "***** total: {}, slow: {}, objects: {} *****",
+                self.barrier.get_total_write_count(),
+                self.barrier.get_slowpath_taken_count(),
+                self.barrier.get_number_of_objects_published(),
+            );
+        }
     }
 }
 

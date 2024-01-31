@@ -1067,3 +1067,43 @@ pub fn mmtk_clear_object_publication_info<VM: VMBinding>(tls: VMMutatorThread) {
     mutator.bytes_allocated = 0;
     LIVE_OBJECTS.lock().unwrap().clear();
 }
+
+#[cfg(feature = "debug_publish_object_overhead")]
+pub fn mmtk_debug_publish_object_overhead<VM: VMBinding>(tls: VMMutatorThread, id: i32) {
+    use std::io::Write;
+
+    let mutator = VM::VMActivePlan::mutator(tls);
+    let number_of_objects_published = mutator.barrier().get_number_of_objects_published();
+    let slowpath_taken = mutator.barrier().get_slowpath_taken_count();
+    let total_writes = mutator.barrier().get_total_write_count();
+    let mut log_file = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open("/home/tianleq/misc/object_publication.log")
+        .unwrap();
+    writeln!(
+        log_file,
+        "GLOBAL_ID: {}, MUTATOR_ID: {}, TOTAL_WRITES: {}, SLOWPATH_TAKEN: {}, OBJECTS_PUBLISHED: {}",
+        id, mutator.mutator_id, total_writes, slowpath_taken, number_of_objects_published
+    )
+    .unwrap();
+}
+
+/// Generic hook to allow benchmarks to be harnessed. We do a full heap
+/// GC, and then start recording statistics for MMTk.
+///
+/// Arguments:
+/// * `mmtk`: A reference to an MMTk instance.
+/// * `tls`: The thread that calls the function (and triggers a collection).
+pub fn request_starting<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
+    mmtk.request_starting()
+}
+
+/// Generic hook to allow benchmarks to be harnessed. We stop collecting
+/// statistics, and print stats values.
+///
+/// Arguments:
+/// * `mmtk`: A reference to an MMTk instance.
+pub fn request_finished<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
+    mmtk.request_finished();
+}

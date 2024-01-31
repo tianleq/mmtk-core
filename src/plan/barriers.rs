@@ -1,7 +1,5 @@
 //! Read/Write barrier implementations.
 
-use std::sync::atomic::AtomicUsize;
-
 use crate::util::public_bit::{is_public, set_public_bit};
 use crate::vm::edge_shape::{Edge, MemorySlice};
 use crate::vm::ObjectModel;
@@ -337,9 +335,9 @@ impl<S: BarrierSemantics> Barrier<S::VM> for ObjectBarrier<S> {
 pub struct PublicObjectMarkingBarrier<S: BarrierSemantics> {
     semantics: S,
     #[cfg(feature = "debug_publish_object_overhead")]
-    total_write: AtomicUsize,
+    total_write: usize,
     #[cfg(feature = "debug_publish_object_overhead")]
-    slowpath_taken: AtomicUsize,
+    slowpath_taken: usize,
 }
 
 impl<S: BarrierSemantics> PublicObjectMarkingBarrier<S> {
@@ -347,9 +345,9 @@ impl<S: BarrierSemantics> PublicObjectMarkingBarrier<S> {
         Self {
             semantics,
             #[cfg(feature = "debug_publish_object_overhead")]
-            total_write: AtomicUsize::new(0),
+            total_write: 0,
             #[cfg(feature = "debug_publish_object_overhead")]
-            slowpath_taken: AtomicUsize::new(0),
+            slowpath_taken: 0,
         }
     }
 }
@@ -380,7 +378,9 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
         target: ObjectReference,
     ) {
         #[cfg(feature = "debug_publish_object_overhead")]
-        self.slowpath_taken.fetch_add(1, Ordering::SeqCst);
+        {
+            self.slowpath_taken += 1;
+        }
         debug_assert!(is_public::<S::VM>(src), "source check is broken");
         debug_assert!(!target.is_null(), "target null check is broken");
         debug_assert!(!is_public::<S::VM>(target), "target check is broken");
@@ -397,7 +397,10 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
         dst: <S::VM as VMBinding>::VMMemorySlice,
     ) {
         #[cfg(feature = "debug_publish_object_overhead")]
-        self.total_write.fetch_add(1, Ordering::SeqCst);
+        {
+            self.total_write += 1;
+        }
+
         debug_assert!(!src_base.is_null(), "source array is null");
         debug_assert!(!dst_base.is_null(), "destination array is null");
         // Only do publication when the dst array is public and src array is private
@@ -405,7 +408,9 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
         if is_public::<S::VM>(dst_base) {
             if !is_public::<S::VM>(src_base) {
                 #[cfg(feature = "debug_publish_object_overhead")]
-                self.slowpath_taken.fetch_add(1, Ordering::SeqCst);
+                {
+                    self.slowpath_taken += 1;
+                }
                 self.semantics
                     .object_array_copy_slow(src_base, dst_base, src, dst);
             }
@@ -422,7 +427,9 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
         dst: <S::VM as VMBinding>::VMMemorySlice,
     ) {
         #[cfg(feature = "debug_publish_object_overhead")]
-        self.slowpath_taken.fetch_add(1, Ordering::SeqCst);
+        {
+            self.slowpath_taken += 1;
+        }
         debug_assert!(
             is_public::<S::VM>(dst_base),
             "arraycopy slow path: destination array: {:?} is private",
@@ -462,12 +469,12 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
 
     #[cfg(feature = "debug_publish_object_overhead")]
     fn get_total_write_count(&self) -> usize {
-        self.total_write.load(Ordering::SeqCst)
+        self.total_write
     }
 
     #[cfg(feature = "debug_publish_object_overhead")]
     fn get_slowpath_taken_count(&self) -> usize {
-        self.slowpath_taken.load(Ordering::SeqCst)
+        self.slowpath_taken
     }
 }
 

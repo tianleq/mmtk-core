@@ -512,9 +512,17 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
         closure.do_closure();
         #[cfg(feature = "public_object_analysis")]
         {
-            self.number_of_objects_published += closure.get_number_of_objects_published() + 1;
-            self.number_of_bytes_published += closure.get_number_of_bytes_published()
+            let newly_published_count = closure.get_number_of_objects_published() + 1;
+            let newly_published_bytes = closure.get_number_of_bytes_published()
                 + VM::VMObjectModel::get_current_size(value);
+            self.number_of_objects_published += newly_published_count;
+            self.number_of_bytes_published += newly_published_bytes;
+
+            let mut stats = crate::util::REQUEST_SCOPE_OBJECTS_STATS.lock().unwrap();
+            if stats.active {
+                stats.public_count += newly_published_count;
+                stats.public_bytes += newly_published_bytes;
+            }
         }
         #[cfg(feature = "debug_publish_object_overhead")]
         {

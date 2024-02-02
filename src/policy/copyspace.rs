@@ -289,65 +289,65 @@ impl<VM: VMBinding> CopySpace<VM> {
                 );
             }
 
-            #[cfg(feature = "public_object_analysis")]
-            {
-                use crate::util::object_extra_header_metadata::BOTTOM_HALF_MASK;
-                use crate::util::object_extra_header_metadata::SHIFT;
-                use crate::util::object_extra_header_metadata::TOP_HALF_MASK;
-                use crate::util::LiveObjectsInfo;
-                use crate::util::LIVE_OBJECTS;
+            // #[cfg(feature = "public_object_analysis")]
+            // {
+            //     use crate::util::object_extra_header_metadata::BOTTOM_HALF_MASK;
+            //     use crate::util::object_extra_header_metadata::SHIFT;
+            //     use crate::util::object_extra_header_metadata::TOP_HALF_MASK;
+            //     use crate::util::LiveObjectsInfo;
+            //     use crate::util::LIVE_OBJECTS;
 
-                if self.public_object_analysis_active.load(Ordering::Relaxed) {
-                    let object_size = VM::VMObjectModel::get_current_size(object);
-                    let metadata =
-                        crate::util::object_extra_header_metadata::get_extra_header_metadata::<
-                            VM,
-                            usize,
-                        >(object);
-                    let mutator_id = u32::try_from(metadata & BOTTOM_HALF_MASK).unwrap();
-                    let request_id = u32::try_from((metadata & TOP_HALF_MASK) >> SHIFT).unwrap();
-                    let mut public_bytes = 0;
-                    let is_pubic = crate::util::public_bit::is_public::<VM>(object);
-                    if is_pubic {
-                        public_bytes = object_size;
-                    }
-                    let mut map = LIVE_OBJECTS.lock().unwrap();
-                    if map.contains_key(&mutator_id) {
-                        let details = map.get_mut(&mutator_id).unwrap();
-                        if details.contains_key(&request_id) {
-                            let info = details.get_mut(&request_id).unwrap();
-                            info.public_bytes += public_bytes;
-                            info.public_count += if is_pubic { 1 } else { 0 };
-                            info.total_bytes += object_size;
-                            info.total_count += 1;
-                        } else {
-                            // first time come across objects allocated in this request
-                            details.insert(
-                                request_id,
-                                LiveObjectsInfo {
-                                    total_count: 1,
-                                    total_bytes: object_size,
-                                    public_count: if is_pubic { 1 } else { 0 },
-                                    public_bytes,
-                                },
-                            );
-                        }
-                    } else {
-                        map.insert(
-                            mutator_id,
-                            std::collections::HashMap::<u32, LiveObjectsInfo>::from([(
-                                request_id,
-                                LiveObjectsInfo {
-                                    total_count: 1,
-                                    total_bytes: object_size,
-                                    public_count: if is_pubic { 1 } else { 0 },
-                                    public_bytes,
-                                },
-                            )]),
-                        );
-                    }
-                }
-            }
+            //     if self.public_object_analysis_active.load(Ordering::Relaxed) {
+            //         let object_size = VM::VMObjectModel::get_current_size(object);
+            //         let metadata =
+            //             crate::util::object_extra_header_metadata::get_extra_header_metadata::<
+            //                 VM,
+            //                 usize,
+            //             >(object);
+            //         let mutator_id = u32::try_from(metadata & BOTTOM_HALF_MASK).unwrap();
+            //         let request_id = u32::try_from((metadata & TOP_HALF_MASK) >> SHIFT).unwrap();
+            //         let mut public_bytes = 0;
+            //         let is_pubic = crate::util::public_bit::is_public::<VM>(object);
+            //         if is_pubic {
+            //             public_bytes = object_size;
+            //         }
+            //         let mut map = LIVE_OBJECTS.lock().unwrap();
+            //         if map.contains_key(&mutator_id) {
+            //             let details = map.get_mut(&mutator_id).unwrap();
+            //             if details.contains_key(&request_id) {
+            //                 let info = details.get_mut(&request_id).unwrap();
+            //                 info.public_bytes += public_bytes;
+            //                 info.public_count += if is_pubic { 1 } else { 0 };
+            //                 info.total_bytes += object_size;
+            //                 info.total_count += 1;
+            //             } else {
+            //                 // first time come across objects allocated in this request
+            //                 details.insert(
+            //                     request_id,
+            //                     LiveObjectsInfo {
+            //                         total_count: 1,
+            //                         total_bytes: object_size,
+            //                         public_count: if is_pubic { 1 } else { 0 },
+            //                         public_bytes,
+            //                     },
+            //                 );
+            //             }
+            //         } else {
+            //             map.insert(
+            //                 mutator_id,
+            //                 std::collections::HashMap::<u32, LiveObjectsInfo>::from([(
+            //                     request_id,
+            //                     LiveObjectsInfo {
+            //                         total_count: 1,
+            //                         total_bytes: object_size,
+            //                         public_count: if is_pubic { 1 } else { 0 },
+            //                         public_bytes,
+            //                     },
+            //                 )]),
+            //             );
+            //         }
+            //     }
+            // }
             #[cfg(feature = "public_bit")]
             {
                 let is_pubic = crate::util::public_bit::is_public::<VM>(object);

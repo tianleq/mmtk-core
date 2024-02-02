@@ -5,7 +5,7 @@ use crate::plan::global::Plan;
 use crate::plan::AllocationSemantics;
 use crate::policy::space::Space;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
-#[cfg(all(feature = "public_object_analysis"))]
+#[cfg(all(feature = "debug_publish_object"))]
 use crate::util::object_extra_header_metadata;
 use crate::util::{Address, ObjectReference};
 use crate::util::{VMMutatorThread, VMWorkerThread};
@@ -195,6 +195,11 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         {
             self.allocation_count += 1;
             self.bytes_allocated += _bytes;
+            let mut stats = crate::util::REQUEST_SCOPE_OBJECTS_STATS.lock().unwrap();
+            if stats.active {
+                stats.allocation_count += 1;
+                stats.allocation_bytes += _bytes;
+            }
         }
     }
 

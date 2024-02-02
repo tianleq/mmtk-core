@@ -48,7 +48,10 @@ impl<VM: VMBinding> CommonGenPlan<VM> {
         );
         let common = CommonPlan::new(args);
 
-        let full_heap_gc_count = common.base.stats.new_event_counter("majorGC", true, true);
+        let full_heap_gc_count = common
+            .base
+            .stats
+            .new_event_counter("majorGC", true, true, true);
 
         CommonGenPlan {
             nursery,

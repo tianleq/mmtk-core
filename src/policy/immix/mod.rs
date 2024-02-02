@@ -30,13 +30,13 @@ pub const DEFRAG_EVERY_BLOCK: bool = false;
 /// Make every GC a defragment GC to make sure
 /// public objects are always strictly evacuated
 /// in global gc
-pub const STRESS_DEFRAG: bool = true;
+pub const STRESS_DEFRAG: bool = DEFRAG;
 
 #[cfg(feature = "thread_local_gc")]
 /// Mark every allocated block as defragmentation source before GC.
 /// This and `STRESS_DEFRAG` are used to ensure public objects are
 /// always strictly evacuated in global gc
-pub const DEFRAG_EVERY_BLOCK: bool = true;
+pub const DEFRAG_EVERY_BLOCK: bool = DEFRAG;
 
 /// If Immix is used as a nursery space, do we prefer copy?
 pub const PREFER_COPY_ON_NURSERY_GC: bool = !cfg!(feature = "immix_non_moving"); // copy nursery objects if we are allowed to move.

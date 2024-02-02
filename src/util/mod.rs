@@ -89,16 +89,25 @@ pub use self::reference_processor::ReferenceProcessor;
 
 pub(crate) static MUTATOR_ID_GENERATOR: AtomicU32 = AtomicU32::new(1);
 #[cfg(feature = "public_object_analysis")]
-pub(crate) struct LiveObjectsInfo {
-    pub total_count: usize,
-    pub total_bytes: usize,
+#[derive(Default)]
+pub(crate) struct RequestScopeObjectsStats {
+    pub active: bool,
+    pub allocation_count: usize,
+    pub allocation_bytes: usize,
     pub public_count: usize,
     pub public_bytes: usize,
 }
 
+// #[cfg(feature = "public_object_analysis")]
+// lazy_static! {
+//     pub(crate) static ref LIVE_OBJECTS: std::sync::Mutex<
+//         std::collections::HashMap<u32, std::collections::HashMap<u32, LiveObjectsInfo>>,
+//     > = std::sync::Mutex::new(std::collections::HashMap::new());
+
+// }
+
 #[cfg(feature = "public_object_analysis")]
 lazy_static! {
-    pub(crate) static ref LIVE_OBJECTS: std::sync::Mutex<
-        std::collections::HashMap<u32, std::collections::HashMap<u32, LiveObjectsInfo>>,
-    > = std::sync::Mutex::new(std::collections::HashMap::new());
+    pub(crate) static ref REQUEST_SCOPE_OBJECTS_STATS: std::sync::Mutex<RequestScopeObjectsStats> =
+        std::sync::Mutex::new(RequestScopeObjectsStats::default());
 }

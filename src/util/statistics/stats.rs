@@ -79,6 +79,7 @@ impl Stats {
             "time".to_string(),
             shared.clone(),
             true,
+            true,
             false,
             MonotoneNanoTime {},
         )));
@@ -87,9 +88,13 @@ impl Stats {
             shared.clone(),
             false,
             false,
+            false,
             MonotoneNanoTime {},
         )));
+
         counters.push(t.clone());
+        counters.push(requests_time.clone());
+        // counters.push(requests_time.clone());
         // Read from the MMTK option for a list of perf events we want to
         // measure, and create corresponding counters
         #[cfg(feature = "perf_counter")]
@@ -119,6 +124,7 @@ impl Stats {
         &self,
         name: &str,
         implicit_start: bool,
+        implicit_stop: bool,
         merge_phases: bool,
     ) -> Arc<Mutex<EventCounter>> {
         let mut guard = self.counters.lock().unwrap();
@@ -126,6 +132,7 @@ impl Stats {
             name.to_string(),
             self.shared.clone(),
             implicit_start,
+            implicit_stop,
             merge_phases,
         )));
         guard.push(counter.clone());
@@ -136,10 +143,16 @@ impl Stats {
         &self,
         name: &str,
         implicit_start: bool,
+        implicit_stop: bool,
         merge_phases: bool,
     ) -> Mutex<SizeCounter> {
-        let u = self.new_event_counter(name, implicit_start, merge_phases);
-        let v = self.new_event_counter(&format!("{}.volume", name), implicit_start, merge_phases);
+        let u = self.new_event_counter(name, implicit_start, implicit_stop, merge_phases);
+        let v = self.new_event_counter(
+            &format!("{}.volume", name),
+            implicit_start,
+            implicit_stop,
+            merge_phases,
+        );
         Mutex::new(SizeCounter::new(u, v))
     }
 
@@ -147,6 +160,7 @@ impl Stats {
         &self,
         name: &str,
         implicit_start: bool,
+        implicit_stop: bool,
         merge_phases: bool,
     ) -> Arc<Mutex<Timer>> {
         let mut guard = self.counters.lock().unwrap();
@@ -154,6 +168,7 @@ impl Stats {
             name.to_string(),
             self.shared.clone(),
             implicit_start,
+            implicit_stop,
             merge_phases,
             MonotoneNanoTime {},
         )));
@@ -201,8 +216,7 @@ impl Stats {
         let scheduler_stat = mmtk.scheduler.statistics();
         self.print_column_names(&scheduler_stat);
         print!("{}\t", self.get_phase() / 2);
-        self.requests_time.lock().unwrap().print_total(None);
-        print!("\t");
+
         let counter = self.counters.lock().unwrap();
         for iter in &(*counter) {
             let c = iter.lock().unwrap();
@@ -222,12 +236,25 @@ impl Stats {
         print!("Total time: ");
         self.total_time.lock().unwrap().print_total(None);
         println!(" ms");
+
+        #[cfg(feature = "public_object_analysis")]
+        {
+            let stats = crate::util::REQUEST_SCOPE_OBJECTS_STATS.lock().unwrap();
+            println!(
+                "Allocation count: {}, Allocation Bytes: {}, Public count: {}, Public Bytes: {}",
+                stats.allocation_count,
+                stats.allocation_bytes,
+                stats.public_count,
+                stats.public_bytes
+            );
+        }
+
         println!("------------------------------ End MMTk Statistics -----------------------------")
     }
 
     pub fn print_column_names(&self, scheduler_stat: &HashMap<String, String>) {
         print!("GC\t");
-        print!("time.requests\t");
+
         let counter = self.counters.lock().unwrap();
         for iter in &(*counter) {
             let c = iter.lock().unwrap();
@@ -266,7 +293,10 @@ impl Stats {
     fn stop_all_counters(&self) {
         let counters = self.counters.lock().unwrap();
         for c in &(*counters) {
-            c.lock().unwrap().stop();
+            let mut ctr = c.lock().unwrap();
+            if ctr.implicit_stop() {
+                ctr.stop();
+            }
         }
         self.shared.set_gathering_stats(false);
     }

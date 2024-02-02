@@ -1016,34 +1016,51 @@ pub fn compute_allocator_mem_layout_checksum<VM: VMBinding>() -> usize {
     };
 }
 
+// #[cfg(feature = "public_object_analysis")]
+// pub fn mmtk_analyze_object_publication<VM: VMBinding>(tls: VMMutatorThread, id: i32) {
+//     // use std::fs::OpenOptions;
+//     // use std::io::Write;
+
+//     let mutator = VM::VMActivePlan::mutator(tls);
+//     let number_of_objects_published = mutator.barrier().get_number_of_objects_published();
+//     let number_of_bytes_published = mutator.barrier().get_number_of_bytes_published();
+//     let allocation_count = mutator.allocation_count;
+//     let bytes_allocated = mutator.bytes_allocated;
+//     // let mut log_file = OpenOptions::new()
+//     //     .append(true)
+//     //     .create(true)
+//     //     .open("/tmp/object_publication.log")
+//     //     .unwrap();
+//     // write!(
+//     //     log_file,
+//     //     "ID: {}, A: {}, P: {}, TB: {}, PB: {}",
+//     //     id,
+//     //     allocation_count,
+//     //     number_of_objects_published,
+//     //     bytes_allocated,
+//     //     number_of_bytes_published
+//     // )
+//     // .unwrap();
+//     println!("*********************************");
+//     println!(
+//         "ID: {}, A: {}, P: {}, TB: {}, PB: {}",
+//         id,
+//         allocation_count,
+//         number_of_objects_published,
+//         bytes_allocated,
+//         number_of_bytes_published
+//     );
+
+//     println!("*********************************")
+// }
+
 #[cfg(feature = "public_object_analysis")]
-pub fn mmtk_analyze_object_publication<VM: VMBinding>(tls: VMMutatorThread, id: i32) {
-    // use std::fs::OpenOptions;
-    // use std::io::Write;
-
-    use crate::util::LIVE_OBJECTS;
-
+pub fn mmtk_print_object_publication<VM: VMBinding>(tls: VMMutatorThread, id: i32) {
     let mutator = VM::VMActivePlan::mutator(tls);
     let number_of_objects_published = mutator.barrier().get_number_of_objects_published();
     let number_of_bytes_published = mutator.barrier().get_number_of_bytes_published();
     let allocation_count = mutator.allocation_count;
     let bytes_allocated = mutator.bytes_allocated;
-    // let mut log_file = OpenOptions::new()
-    //     .append(true)
-    //     .create(true)
-    //     .open("/tmp/object_publication.log")
-    //     .unwrap();
-    // write!(
-    //     log_file,
-    //     "ID: {}, A: {}, P: {}, TB: {}, PB: {}",
-    //     id,
-    //     allocation_count,
-    //     number_of_objects_published,
-    //     bytes_allocated,
-    //     number_of_bytes_published
-    // )
-    // .unwrap();
-    println!("*********************************");
     println!(
         "ID: {}, A: {}, P: {}, TB: {}, PB: {}",
         id,
@@ -1052,20 +1069,15 @@ pub fn mmtk_analyze_object_publication<VM: VMBinding>(tls: VMMutatorThread, id: 
         bytes_allocated,
         number_of_bytes_published
     );
-
-    println!("*********************************")
 }
 
 #[cfg(feature = "public_object_analysis")]
 pub fn mmtk_clear_object_publication_info<VM: VMBinding>(tls: VMMutatorThread) {
-    use crate::util::LIVE_OBJECTS;
-
     let mutator = VM::VMActivePlan::mutator(tls);
     mutator.barrier().clear_number_of_objects_published();
     mutator.barrier().clear_number_of_bytes_published();
     mutator.allocation_count = 0;
     mutator.bytes_allocated = 0;
-    LIVE_OBJECTS.lock().unwrap().clear();
 }
 
 // #[cfg(feature = "debug_publish_object_overhead")]
@@ -1096,7 +1108,16 @@ pub fn mmtk_clear_object_publication_info<VM: VMBinding>(tls: VMMutatorThread) {
 /// * `mmtk`: A reference to an MMTk instance.
 /// * `tls`: The thread that calls the function (and triggers a collection).
 pub fn request_starting<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
-    mmtk.request_starting()
+    mmtk.request_starting();
+    #[cfg(feature = "public_object_analysis")]
+    {
+        let mut stats = crate::util::REQUEST_SCOPE_OBJECTS_STATS.lock().unwrap();
+        stats.allocation_count = 0;
+        stats.allocation_bytes = 0;
+        stats.public_bytes = 0;
+        stats.public_count = 0;
+        stats.active = true;
+    }
 }
 
 /// Generic hook to allow benchmarks to be harnessed. We stop collecting
@@ -1106,4 +1127,9 @@ pub fn request_starting<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
 /// * `mmtk`: A reference to an MMTk instance.
 pub fn request_finished<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
     mmtk.request_finished();
+    #[cfg(feature = "public_object_analysis")]
+    {
+        let mut stats = crate::util::REQUEST_SCOPE_OBJECTS_STATS.lock().unwrap();
+        stats.active = false;
+    }
 }

@@ -318,7 +318,10 @@ impl<VM: VMBinding> StickyImmix<VM> {
                 mixed_age: true,
             },
         );
-        let full_heap_gc_count = immix.base().stats.new_event_counter("majorGC", true, true);
+        let full_heap_gc_count = immix
+            .base()
+            .stats
+            .new_event_counter("majorGC", true, true, true);
         Self {
             immix,
             gc_full_heap: AtomicBool::new(false),

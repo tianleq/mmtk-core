@@ -57,7 +57,7 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Prepare<C> {
         #[cfg(feature = "thread_local_gc")]
         {
             // move finalizable candidates from local buffer to the global buffer
-            // rust's borrow checker is not happy if put the following in the previous loop
+            // rust's borrow checker is not happy if putting the following in the previous loop
             // it is safe because those two mutable operations are doing different things
             for mutator in <C::VM as VMBinding>::VMActivePlan::mutators() {
                 mmtk.finalizable_processor

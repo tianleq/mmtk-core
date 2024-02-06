@@ -152,10 +152,13 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
         use crate::policy::sft::SFT;
         let mut live_objects = vec![];
         for object in self.local_los_objects.drain() {
+            #[cfg(debug_assertions)]
+            if crate::util::public_bit::is_public::<VM>(object) {
+                panic!("Public Object:{:?} found in local los set", object);
+            }
+
             if self.space.is_live(object) {
                 live_objects.push(object);
-            } else if crate::util::public_bit::is_public::<VM>(object) {
-                debug_assert!(false, "Public Object:{:?} found in local los set", object);
             } else {
                 // local/private objects also need to be reclaimed in a global gc
                 self.space.thread_local_sweep_large_object(object);
@@ -168,16 +171,16 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
     pub fn thread_local_release(&mut self) {
         let mut live_objects = vec![];
         for object in self.local_los_objects.drain() {
+            #[cfg(debug_assertions)]
             if crate::util::public_bit::is_public::<VM>(object) {
-                debug_assert!(false, "Public Object:{:?} found in local los set", object);
-                continue;
-            } else if self.space.is_live_in_thread_local_gc(object) {
+                panic!("Public Object:{:?} found in local los set", object);
+            }
+
+            if self.space.is_live_in_thread_local_gc(object) {
                 // clear the local mark state
                 self.space.clear_thread_local_mark(object);
                 live_objects.push(object);
             } else {
-                // #[cfg(debug_assertions)]
-                // info!("A private los object is released in local gc");
                 self.space.thread_local_sweep_large_object(object);
             }
         }

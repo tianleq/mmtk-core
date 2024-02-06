@@ -51,6 +51,7 @@ impl Line {
     pub const MARK_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_LINE_MARK;
 
+    #[cfg(all(feature = "thread_local_gc", debug_assertions))]
     /// Block level public table (side)
     pub const LINE_PUBLICATION_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_LINE_PUBLICATION;
@@ -93,12 +94,6 @@ impl Line {
         unsafe { Self::MARK_TABLE.load::<u8>(self.start()) }
     }
 
-    #[cfg(debug_assertions)]
-    /// Test line publication state.
-    pub fn reset_line_mark_state(&self) {
-        unsafe { Self::MARK_TABLE.store::<u8>(self.start(), 0) }
-    }
-
     #[cfg(feature = "thread_local_gc")]
     pub fn public_line_mark_state(state: u8) -> u8 {
         (state & Self::GLOBAL_LINE_MARK_STATE_MASK) | Self::PUBLIC_LINE_MARK_STATE_BIT_MASK
@@ -127,27 +122,19 @@ impl Line {
     }
 
     #[cfg(feature = "thread_local_gc")]
+    /// Mark all lines the object is spanned to.
     pub fn mark_lines_for_object<VM: VMBinding>(object: ObjectReference, state: u8) {
-        // debug_assert!(!super::BLOCK_ONLY);
-        // let start = object.to_object_start::<VM>();
-        // let end = start + VM::VMObjectModel::get_current_size(object);
-        // let start_line = Line::from_unaligned_address(start);
-        // let mut end_line = Line::from_unaligned_address(end);
-        // if !Line::is_aligned(end) {
-        //     end_line = end_line.next();
-        // }
-        // let mut marked_lines = 0;
-        // let iter = RegionIterator::<Line>::new(start_line, end_line);
-        // for line in iter {
-        //     if !line.is_marked(state) {
-        //         marked_lines += 1;
-        //     }
-        //     line.mark(state)
-        // }
-        // marked_lines
+        // This function is only called in a global gc
         #[cfg(not(feature = "immix_non_moving"))]
+        // In a moving setting, a global gc will evacuate all public objects, which means
+        // private objects and public objects will not share the same line. Therefore, no
+        // need to retain the public line state
         Self::mark_lines_for_object_impl::<VM>(object, state, false);
         #[cfg(feature = "immix_non_moving")]
+        // A non-moving immix has to make sure that public line state is not overwritten
+        // Otherwise, subsequent local gc may reclaim a line that still has live public
+        // objects on it. The reason behind this is that now global gc no longer evacuate
+        // public objects,
         Self::mark_lines_for_object_impl::<VM>(object, state, true);
     }
 
@@ -185,14 +172,6 @@ impl Line {
         // mark line as public
         let (start_line, end_line) = Self::mark_lines_for_object_impl::<VM>(object, state, false);
 
-        // The following is safe because an object can only be published by its owner(exactly one thread will do the publication)
-        // let size = end_line.end() - start_line.start();
-        // debug_assert!(
-        //     size % Line::BYTES == 0,
-        //     "size is not a multiply of line size"
-        // );
-        // Line::LINE_PUBLICATION_TABLE.bset_metadata(start_line.start(), size);
-
         let iter = RegionIterator::<Line>::new(start_line, end_line);
         for line in iter {
             debug_assert!(
@@ -201,16 +180,23 @@ impl Line {
                 object,
                 state
             );
+            #[cfg(debug_assertions)]
             unsafe {
                 Line::LINE_PUBLICATION_TABLE.store::<u8>(line.start(), 1);
             }
-            // info!("Line: {:?} published", line);
         }
     }
 
-    #[cfg(feature = "thread_local_gc")]
+    #[cfg(all(feature = "thread_local_gc", debug_assertions))]
     pub fn is_public_line(&self) -> bool {
         unsafe { Line::LINE_PUBLICATION_TABLE.load::<u8>(self.start()) != 0 }
+    }
+
+    #[cfg(all(feature = "thread_local_gc", debug_assertions))]
+    pub fn reset_public_line(&self) {
+        unsafe {
+            Line::LINE_PUBLICATION_TABLE.store::<u8>(self.start(), 0);
+        }
     }
 
     #[cfg(feature = "thread_local_gc")]
@@ -228,7 +214,7 @@ impl Line {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    pub fn mark_lines_for_object_impl<VM: VMBinding>(
+    fn mark_lines_for_object_impl<VM: VMBinding>(
         object: ObjectReference,
         state: u8,
         retain_public_state: bool,

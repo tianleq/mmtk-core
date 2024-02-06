@@ -157,13 +157,13 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM>
 {
     fn thread_local_trace_object<const KIND: super::gc_work::TraceKind>(
         &self,
-        mutator_id: u32,
+        mutator: &crate::Mutator<VM>,
         object: ObjectReference,
         _copy: Option<CopySemantics>,
         _worker: &mut GCWorker<VM>,
     ) -> ThreadlocalTracedObjectType {
         #[cfg(feature = "thread_local_gc")]
-        return self.thread_local_trace_object(object, mutator_id);
+        return self.thread_local_trace_object(object, mutator.mutator_id);
         #[cfg(not(feature = "thread_local_gc"))]
         return object;
     }
@@ -312,7 +312,10 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             #[cfg(feature = "thread_local_gc")]
             {
                 // The following assertion only makes sense
-                debug_assert!(crate::util::public_bit::is_public::<VM>(object));
+                debug_assert!(
+                    crate::util::public_bit::is_public::<VM>(object),
+                    "local los object exists in global los treadmill"
+                );
             }
 
             crate::util::public_bit::unset_public_bit::<VM>(object);
@@ -370,20 +373,20 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     }
     #[cfg(feature = "thread_local_gc")]
     fn test_thread_local_mark(&self, object: ObjectReference, value: u8) -> bool {
-        let metaadta_address =
+        let metadata_address =
             crate::util::conversions::page_align_down(object.to_object_start::<VM>());
-        let metadata = unsafe { metaadta_address.load::<usize>() };
+        let metadata = unsafe { metadata_address.load::<usize>() };
         let local_mark_value = (metadata & TOP_HALF_MASK) >> SHIFT;
         u8::try_from(local_mark_value).unwrap() == value
     }
 
     #[cfg(feature = "thread_local_gc")]
     pub fn clear_thread_local_mark(&self, object: ObjectReference) {
-        let metaadta_address =
+        let metadata_address =
             crate::util::conversions::page_align_down(object.to_object_start::<VM>());
         unsafe {
-            let metadata = metaadta_address.load::<usize>();
-            metaadta_address.store::<usize>(metadata & BOTTOM_HALF_MASK)
+            let metadata = metadata_address.load::<usize>();
+            metadata_address.store::<usize>(metadata & BOTTOM_HALF_MASK)
         }
     }
 

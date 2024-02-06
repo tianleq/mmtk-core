@@ -18,8 +18,6 @@ use crate::policy::gc_work::PolicyThreadlocalTraceObject;
 use crate::policy::immix::ImmixSpaceArgs;
 use crate::policy::immix::{TRACE_KIND_DEFRAG, TRACE_KIND_FAST};
 use crate::policy::space::Space;
-// #[cfg(feature = "thread_local_gc")]
-// use crate::scheduler::thread_local_gc_work::ScanMutator;
 #[cfg(feature = "thread_local_gc")]
 use crate::scheduler::thread_local_gc_work::ThreadlocalPrepare;
 use crate::scheduler::*;
@@ -28,7 +26,7 @@ use crate::util::copy::*;
 use crate::util::heap::VMRequest;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSanity;
-#[cfg(feature = "debug_publish_object")]
+#[cfg(any(feature = "debug_publish_object", feature = "thread_local_gc"))]
 use crate::util::ObjectReference;
 #[cfg(feature = "thread_local_gc")]
 use crate::util::VMMutatorThread;
@@ -371,11 +369,7 @@ impl<VM: VMBinding> Immix<VM> {
 
 #[cfg(feature = "thread_local_gc")]
 impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for Immix<VM> {
-    fn thread_local_post_scan_object(
-        &self,
-        mutator: &'static Mutator<VM>,
-        object: ObjectReference,
-    ) {
+    fn thread_local_post_scan_object(&self, mutator: &Mutator<VM>, object: ObjectReference) {
         if self.immix_space.in_space(object) {
             <ImmixSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_post_scan_object(
                 &self.immix_space,
@@ -403,7 +397,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for Immix<VM> {
 
     fn thread_local_trace_object<const KIND: crate::policy::gc_work::TraceKind>(
         &self,
-        mutator_id: u32,
+        mutator: &Mutator<VM>,
         object: ObjectReference,
         worker: &mut GCWorker<VM>,
     ) -> ThreadlocalTracedObjectType {
@@ -412,7 +406,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for Immix<VM> {
                 KIND,
             >(
                 &self.immix_space,
-                mutator_id,
+                mutator,
                 object,
                 Some(CopySemantics::DefaultCopy),
                 worker,
@@ -420,7 +414,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for Immix<VM> {
         }
         <CommonPlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
             &self.common,
-            mutator_id,
+            mutator,
             object,
             worker,
         )

@@ -127,8 +127,6 @@ impl<VM: VMBinding> GCWork<VM> for EndOfThreadLocalGC {
             mmtk.edge_logger.reset();
         }
 
-        // mmtk.plan.base().set_gc_status(GcStatus::NotInGC);
-
         mmtk.plan
             .base()
             .gc_trigger
@@ -245,9 +243,11 @@ pub struct PlanThreadlocalObjectGraphTraversalClosure<
     worker: *mut GCWorker<VM>,
 }
 
-impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind>
-    ThreadlocalObjectGraphTraversalClosure<VM>
+impl<VM, P, const KIND: TraceKind> ThreadlocalObjectGraphTraversalClosure<VM>
     for PlanThreadlocalObjectGraphTraversalClosure<VM, P, KIND>
+where
+    VM: VMBinding,
+    P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>,
 {
     fn new(
         mmtk: &'static MMTK<VM>,
@@ -281,12 +281,12 @@ impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIN
 
     fn do_closure(&mut self) {
         #[cfg(feature = "debug_publish_object")]
-        debug_assert!(
+        assert!(
             self.edge_buffer.len() == self.source_buffer.len(),
             "slots len != object len"
         );
         let mutator = VM::VMActivePlan::mutator(self.tls);
-        let mutator_id = mutator.mutator_id;
+
         while !self.edge_buffer.is_empty() {
             let slot = self.edge_buffer.pop_front().unwrap();
             #[cfg(feature = "debug_publish_object")]
@@ -299,7 +299,7 @@ impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIN
             let new_object =
                 match self
                     .plan
-                    .thread_local_trace_object::<KIND>(mutator_id, object, self.worker())
+                    .thread_local_trace_object::<KIND>(mutator, object, self.worker())
                 {
                     Scanned(new_object) => new_object,
                     ToBeScanned(new_object) => {
@@ -314,7 +314,7 @@ impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIN
                 // in a local gc, public objects are not moved, so source is
                 // the exact object that needs to be looked at
                 if !_source.is_null() && crate::util::public_bit::is_public::<VM>(_source) {
-                    debug_assert!(
+                    assert!(
                         crate::util::public_bit::is_public::<VM>(new_object),
                         "public object: {:?} {:?} points to private object: {:?} {:?}",
                         _source,
@@ -339,12 +339,11 @@ impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIN
     fn do_object_closure(&mut self, object: ObjectReference) -> ObjectReference {
         debug_assert!(!object.is_null(), "object should not be null");
         let mutator = VM::VMActivePlan::mutator(self.tls);
-        let mutator_id = mutator.mutator_id;
 
         let new_object =
             match self
                 .plan
-                .thread_local_trace_object::<KIND>(mutator_id, object, self.worker())
+                .thread_local_trace_object::<KIND>(mutator, object, self.worker())
             {
                 Scanned(new_object) => {
                     debug_assert!(
@@ -367,11 +366,11 @@ impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIN
 
     fn do_object_tracing(&mut self, object: ObjectReference) -> ObjectReference {
         let mutator = VM::VMActivePlan::mutator(self.tls);
-        let mutator_id = mutator.mutator_id;
+
         let new_object =
             match self
                 .plan
-                .thread_local_trace_object::<KIND>(mutator_id, object, self.worker())
+                .thread_local_trace_object::<KIND>(mutator, object, self.worker())
             {
                 Scanned(new_object) => new_object,
                 _ => {
@@ -479,7 +478,6 @@ where
                     f
                 );
                 mutator.finalizable_candidates.push(f);
-                continue;
             } else {
                 // The object is private and dead, so it can be finalized
                 ready_for_finalize.push(f);

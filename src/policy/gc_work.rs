@@ -47,7 +47,7 @@ pub trait PolicyThreadlocalTraceObject<VM: VMBinding> {
     /// expect `copy` to be a `Some` value.
     fn thread_local_trace_object<const KIND: TraceKind>(
         &self,
-        _mutator_id: u32,
+        mutator: &Mutator<VM>,
         object: ObjectReference,
         copy: Option<CopySemantics>,
         worker: &mut GCWorker<VM>,
@@ -55,11 +55,7 @@ pub trait PolicyThreadlocalTraceObject<VM: VMBinding> {
 
     /// Policy-specific post-scan-object hook.  It is called after scanning
     /// each object in this space.
-    fn thread_local_post_scan_object(
-        &self,
-        _mutator: &'static Mutator<VM>,
-        _object: ObjectReference,
-    ) {
+    fn thread_local_post_scan_object(&self, _mutator: &Mutator<VM>, _object: ObjectReference) {
         // Do nothing.
     }
 

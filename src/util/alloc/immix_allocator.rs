@@ -134,13 +134,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         }
         self.local_line_mark_state += 1;
 
-        // #[cfg(debug_assertions)]
-        // info!(
-        //     "ImmixAllocator::thread_local_prepare\nglobal line mark state:{:?}\nlocal line mark state: {:?}",
-        //     global_line_state,
-        //     self.local_line_mark_state
-        // );
-
         debug_assert!(
             self.space.line_mark_state.load(atomic::Ordering::Acquire)
                 == (self.local_line_mark_state & Line::GLOBAL_LINE_MARK_STATE_MASK)
@@ -177,9 +170,13 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 block.owner()
             );
             block.set_state(BlockState::Unmarked);
-            // in a local gc, always do the defrag if it is a private block
+            #[cfg(feature = "immix_non_moving")]
+            let is_defrag_source = false;
+            #[cfg(not(feature = "immix_non_moving"))]
             let is_defrag_source = !block.is_block_published();
+            // in a local gc, always do the defrag if it is a private block
             block.set_as_defrag_source(is_defrag_source);
+
             // clear object mark bit
             if let crate::util::metadata::MetadataSpec::OnSide(side) =
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
@@ -322,9 +319,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     block.owner()
                 );
                 current = self.remove_block_from_list(block);
-                // info!("{:?} block: {:?} removed", block.get_state(), block);
             } else {
-                // info!("{:?} block: {:?} found", block.get_state(), block);
                 // since a global gc evacuates public objects, local blocks should be private again
                 #[cfg(debug_assertions)]
                 {
@@ -705,6 +700,15 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     self.tls
                 );
                 crate::util::public_bit::bzero_public_bit(self.cursor, self.limit - self.cursor);
+                // stale public line bit needs to be cleared,
+                #[cfg(debug_assertions)]
+                {
+                    let iter =
+                        crate::util::linear_scan::RegionIterator::<Line>::new(start_line, end_line);
+                    for line in iter {
+                        line.reset_public_line();
+                    }
+                }
                 crate::util::memory::zero(self.cursor, self.limit - self.cursor);
                 debug_assert!(
                     align_allocation_no_fill::<VM>(self.cursor, align, offset) + size <= self.limit

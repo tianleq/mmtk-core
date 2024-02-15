@@ -186,9 +186,16 @@ impl<VM: VMBinding> GCController<VM> {
     /// Coordinate workers to perform GC in response to a GC request.
     pub fn do_thread_local_gc_until_completion(&mut self, tls: VMMutatorThread) {
         let gc_start = std::time::Instant::now();
-
-        self.scheduler.work_buckets[WorkBucketStage::Unconstrained]
-            .add(ScheduleThreadlocalCollection(tls, gc_start));
+        #[cfg(feature = "debug_publish_object")]
+        let id = crate::util::LOCAL_GC_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);
+        self.scheduler.work_buckets[WorkBucketStage::Unconstrained].add(
+            ScheduleThreadlocalCollection {
+                mutator_tls: tls,
+                start_time: gc_start,
+                #[cfg(feature = "debug_publish_object")]
+                id,
+            },
+        );
 
         // Notify only one worker at this time because there is only one work packet,
         // namely `ScheduleCollection`.

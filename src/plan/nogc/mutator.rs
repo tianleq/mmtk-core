@@ -81,7 +81,7 @@ pub fn create_nogc_mutator<VM: VMBinding>(
         allocation_count: 0,
         #[cfg(feature = "public_object_analysis")]
         bytes_allocated: 0,
-        #[cfg(feature = "public_object_analysis")]
+        #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
         request_id: 0,
         #[cfg(feature = "public_object_analysis")]
         global_request_id: 0,

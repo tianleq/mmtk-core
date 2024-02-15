@@ -1,3 +1,5 @@
+use std::sync::atomic::AtomicUsize;
+
 use atomic::Ordering;
 
 use crate::plan::ObjectQueue;
@@ -36,6 +38,8 @@ pub struct LargeObjectSpace<VM: VMBinding> {
     mark_state: u8,
     in_nursery_gc: bool,
     treadmill: TreadMill<VM>,
+    #[cfg(feature = "debug_publish_object")]
+    counter: AtomicUsize,
 }
 
 impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
@@ -155,6 +159,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LargeObjec
 impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM>
     for LargeObjectSpace<VM>
 {
+    #[cfg(not(feature = "debug_publish_object"))]
     fn thread_local_trace_object<const KIND: super::gc_work::TraceKind>(
         &self,
         mutator: &crate::Mutator<VM>,
@@ -162,10 +167,20 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM>
         _copy: Option<CopySemantics>,
         _worker: &mut GCWorker<VM>,
     ) -> ThreadlocalTracedObjectType {
-        #[cfg(feature = "thread_local_gc")]
-        return self.thread_local_trace_object(object, mutator.mutator_id);
-        #[cfg(not(feature = "thread_local_gc"))]
-        return object;
+        self.thread_local_trace_object(object, mutator)
+    }
+
+    #[cfg(feature = "debug_publish_object")]
+    fn thread_local_trace_object<const KIND: super::gc_work::TraceKind>(
+        &self,
+        mutator: &crate::Mutator<VM>,
+        source: ObjectReference,
+        slot: VM::VMEdge,
+        object: ObjectReference,
+        _copy: Option<CopySemantics>,
+        _worker: &mut GCWorker<VM>,
+    ) -> ThreadlocalTracedObjectType {
+        self.thread_local_trace_object(_worker.tls, source, slot, object, mutator)
     }
 
     fn thread_local_may_move_objects<const KIND: super::gc_work::TraceKind>() -> bool {
@@ -197,6 +212,8 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             mark_state: 0,
             in_nursery_gc: false,
             treadmill: TreadMill::new(),
+            #[cfg(feature = "debug_publish_object")]
+            counter: AtomicUsize::new(0),
         }
     }
 
@@ -218,7 +235,10 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    pub fn thread_local_prepare(&self, _mutator_id: u32) {}
+    pub fn thread_local_prepare(&self, _mutator_id: u32) {
+        #[cfg(feature = "debug_publish_object")]
+        self.counter.store(0, Ordering::SeqCst);
+    }
 
     #[cfg(feature = "thread_local_gc")]
     pub fn thread_local_release(&self, _mutator_id: u32) {}
@@ -226,19 +246,63 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     #[cfg(feature = "thread_local_gc")]
     fn thread_local_trace_object(
         &self,
+        #[cfg(feature = "debug_publish_object")] worker_tls: VMWorkerThread,
+        #[cfg(feature = "debug_publish_object")] source: ObjectReference,
+        #[cfg(feature = "debug_publish_object")] slot: VM::VMEdge,
         object: ObjectReference,
-        _mutator_id: u32,
+        mutator: &crate::Mutator<VM>,
     ) -> ThreadlocalTracedObjectType {
+        #[cfg(not(feature = "debug_publish_object"))]
         if crate::util::public_bit::is_public::<VM>(object) {
             return ThreadlocalTracedObjectType::Scanned(object);
         }
-        debug_assert!(
-            Self::get_object_owner(object) == _mutator_id,
-            "mutator_id: {}, los object owner: {}",
-            _mutator_id,
-            Self::get_object_owner(object)
-        );
+        #[cfg(feature = "debug_publish_object")]
+        {
+            if !source.is_null() && crate::util::public_bit::is_public::<VM>(source) {
+                assert!(
+                    crate::util::public_bit::is_public::<VM>(object),
+                    "public src: {:?} --> private child; {:?}",
+                    source,
+                    object
+                );
+            }
+            if crate::util::public_bit::is_public::<VM>(object) {
+                return ThreadlocalTracedObjectType::Scanned(object);
+            }
+            #[cfg(debug_assertions)]
+            {
+                let valid = self.get_object_owner(object) == mutator.mutator_id;
+                assert!(
+                        valid,
+                        "worker: {:?}, mutator: {:?}, request_id: {} immix source: {:?} --> los target: {:?} owner: {}",
+                        worker_tls, mutator.mutator_id, mutator.request_id, source, object,
+                        self.get_object_owner(object)
+                    );
+            }
+        }
+
         if self.thread_local_mark(object, MARK_BIT) {
+            #[cfg(all(feature = "debug_publish_object", debug_assertions))]
+            use std::io::Write;
+
+            // let counter = self.counter.fetch_add(1, Ordering::SeqCst);
+            debug_assert!(self.test_thread_local_mark(object, MARK_BIT));
+            #[cfg(all(feature = "debug_publish_object", debug_assertions))]
+            let mut log_file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(format!(
+                    "/home/tianleq/misc/log-los-{}.txt",
+                    mutator.mutator_id
+                ))
+                .unwrap();
+            writeln!(
+                log_file,
+                "worker: {:?}, mutator: {:?}, request_id: {} | {:?}.{:?} --> {:?}",
+                worker_tls, mutator.mutator_id, mutator.request_id, source, slot, object
+            )
+            .unwrap();
+
             return ThreadlocalTracedObjectType::ToBeScanned(object);
         }
         ThreadlocalTracedObjectType::Scanned(object)
@@ -316,9 +380,10 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                     crate::util::public_bit::is_public::<VM>(object),
                     "local los object exists in global los treadmill"
                 );
+                crate::util::public_bit::unset_public_bit::<VM>(object);
+                // #[cfg(feature = "debug_publish_object")]
+                // info!("release public los object: {:?}", object);
             }
-
-            crate::util::public_bit::unset_public_bit::<VM>(object);
 
             self.pr
                 .release_pages(get_super_page(object.to_object_start::<VM>()));
@@ -334,7 +399,39 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         }
     }
 
-    #[cfg(feature = "thread_local_gc")]
+    #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
+    pub fn thread_local_sweep_large_object(
+        &self,
+        worker_tls: VMWorkerThread,
+        tls: VMMutatorThread,
+        object: ObjectReference,
+    ) {
+        use crate::vm::ActivePlan;
+        #[cfg(feature = "vo_bit")]
+        crate::util::metadata::vo_bit::unset_vo_bit::<VM>(object);
+        debug_assert!(
+            !crate::util::public_bit::is_public::<VM>(object),
+            "public object is reclaimed in thread local gc"
+        );
+        let mutator = VM::VMActivePlan::mutator(tls);
+        #[cfg(feature = "debug_publish_object")]
+        {
+            let counter = self.counter.fetch_add(1, Ordering::SeqCst);
+            // info!(
+            //     "worker: {:?}, mutator: {} counter: {} ==> {} release private los object: {:?}",
+            //     worker_tls, mutator.mutator_id, mutator.request_id, counter, object
+            // );
+
+            let metadata_address =
+                crate::util::conversions::page_align_down(object.to_object_start::<VM>());
+            unsafe { metadata_address.store::<usize>(usize::MAX) }
+        }
+
+        self.pr
+            .release_pages(get_super_page(object.to_object_start::<VM>()));
+    }
+
+    #[cfg(all(feature = "thread_local_gc", not(feature = "debug_publish_object")))]
     pub fn thread_local_sweep_large_object(&self, object: ObjectReference) {
         #[cfg(feature = "vo_bit")]
         crate::util::metadata::vo_bit::unset_vo_bit::<VM>(object);
@@ -458,7 +555,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    pub fn get_object_owner(object: ObjectReference) -> u32 {
+    pub fn get_object_owner(&self, object: ObjectReference) -> u32 {
         unsafe {
             let mutator_id =
                 crate::util::conversions::page_align_down(object.to_object_start::<VM>())

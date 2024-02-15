@@ -122,9 +122,23 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmortalSp
 
 #[cfg(feature = "thread_local_gc")]
 impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for ImmortalSpace<VM> {
+    #[cfg(not(feature = "debug_publish_object"))]
     fn thread_local_trace_object<const KIND: super::gc_work::TraceKind>(
         &self,
         _mutator: &crate::Mutator<VM>,
+        object: ObjectReference,
+        _copy: Option<CopySemantics>,
+        _worker: &mut GCWorker<VM>,
+    ) -> ThreadlocalTracedObjectType {
+        self.thread_local_trace_object(object)
+    }
+
+    #[cfg(feature = "debug_publish_object")]
+    fn thread_local_trace_object<const KIND: super::gc_work::TraceKind>(
+        &self,
+        _mutator: &crate::Mutator<VM>,
+        _source: ObjectReference,
+        _slot: VM::VMEdge,
         object: ObjectReference,
         _copy: Option<CopySemantics>,
         _worker: &mut GCWorker<VM>,

@@ -10,13 +10,18 @@ use crate::*;
 use std::collections::VecDeque;
 use std::marker::PhantomData;
 
-pub struct ScheduleThreadlocalCollection(pub VMMutatorThread, pub std::time::Instant);
+pub struct ScheduleThreadlocalCollection {
+    pub mutator_tls: VMMutatorThread,
+    pub start_time: std::time::Instant,
+    #[cfg(feature = "debug_publish_object")]
+    pub id: usize,
+}
 
 impl<VM: VMBinding> GCWork<VM> for ScheduleThreadlocalCollection {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let mutator = VM::VMActivePlan::mutator(self.0);
-        worker.gc_start = self.1;
-        info!(
+        let mutator = VM::VMActivePlan::mutator(self.mutator_tls);
+        worker.gc_start = self.start_time;
+        trace!(
             "ScheduleThreadlocalCollection {:?} executed by GC Thread {}",
             mutator.mutator_id,
             crate::scheduler::worker::current_worker_ordinal().unwrap()
@@ -32,10 +37,9 @@ impl<VM: VMBinding> GCWork<VM> for ScheduleThreadlocalCollection {
             .gc_trigger
             .policy
             .on_thread_local_gc_start(mmtk);
-        // When this gc thread is executing the local gc, it cannot steal work from others' bucket/queue
-        worker.disable_steal();
 
-        mmtk.plan.schedule_thread_local_collection(self.0, worker);
+        mmtk.plan
+            .schedule_thread_local_collection(self.mutator_tls, worker);
     }
 }
 
@@ -113,8 +117,20 @@ pub struct EndOfThreadLocalGC {
 }
 
 impl<VM: VMBinding> GCWork<VM> for EndOfThreadLocalGC {
-    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        info!(
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        #[cfg(debug_assertions)]
+        {
+            let mutator = VM::VMActivePlan::mutator(self.tls);
+            info!(
+                "End of Thread local GC {} ({}/{} pages, took {} ms)",
+                mutator.mutator_id,
+                mmtk.plan.get_reserved_pages(),
+                mmtk.plan.get_total_pages(),
+                self.elapsed.as_millis()
+            );
+        }
+        #[cfg(not(debug_assertions))]
+        trace!(
             "End of Thread local GC ({}/{} pages, took {} ms)",
             mmtk.plan.get_reserved_pages(),
             mmtk.plan.get_total_pages(),
@@ -135,7 +151,7 @@ impl<VM: VMBinding> GCWork<VM> for EndOfThreadLocalGC {
 
         // Reset the triggering information.
         mmtk.plan.base().reset_collection_trigger();
-        worker.enable_steal();
+
         <VM as VMBinding>::VMCollection::resume_from_thread_local_gc(self.tls);
     }
 }
@@ -193,6 +209,8 @@ where
     Closure: ThreadlocalObjectGraphTraversalClosure<VM>,
 {
     fn traverse_from_roots(&mut self, root_slots: Vec<VM::VMEdge>) {
+        let mutator = VM::VMActivePlan::mutator(self.tls);
+
         Closure::new(self.mmtk, self.tls, self.worker, Some(root_slots)).do_closure();
     }
 }
@@ -286,7 +304,14 @@ where
             "slots len != object len"
         );
         let mutator = VM::VMActivePlan::mutator(self.tls);
-
+        for r in &self.edge_buffer {
+            info!(
+                "req: {} | root slot: {:?} --> object: {:?}",
+                mutator.request_id,
+                *r,
+                r.load()
+            );
+        }
         while !self.edge_buffer.is_empty() {
             let slot = self.edge_buffer.pop_front().unwrap();
             #[cfg(feature = "debug_publish_object")]
@@ -295,7 +320,7 @@ where
             if object.is_null() {
                 continue;
             }
-
+            #[cfg(not(feature = "debug_publish_object"))]
             let new_object =
                 match self
                     .plan
@@ -308,6 +333,52 @@ where
                         new_object
                     }
                 };
+
+            #[cfg(feature = "debug_publish_object")]
+            let new_object = match self.plan.thread_local_trace_object::<KIND>(
+                mutator,
+                _source,
+                slot,
+                object,
+                self.worker(),
+            ) {
+                Scanned(new_object) => {
+                    if crate::util::public_bit::is_public::<VM>(object) {
+                        assert!(
+                            crate::util::public_bit::is_public::<VM>(new_object),
+                            "public bit is corrupted. public obj: {} | private new_obj: {} ",
+                            object,
+                            new_object
+                        );
+                        if mutator.request_id >= 4 {
+                            info!(
+                                "scanned | req: {} source: {:?} --> public object: {:?}",
+                                mutator.request_id, _source, new_object
+                            );
+                        }
+                    } else {
+                        if mutator.request_id >= 4 {
+                            info!(
+                                "scanned | req: {} source: {:?} --> private object: {:?}",
+                                mutator.request_id, _source, new_object
+                            );
+                        }
+                    }
+
+                    new_object
+                }
+                ToBeScanned(new_object) => {
+                    if mutator.request_id >= 4 {
+                        info!(
+                            "ToBeScanned | req: {} source: {:?} --> object: {:?}",
+                            mutator.request_id, _source, new_object
+                        );
+                    }
+                    VM::VMScanning::scan_object(self.worker().tls, new_object, self);
+                    self.plan.thread_local_post_scan_object(mutator, new_object);
+                    new_object
+                }
+            };
 
             #[cfg(feature = "debug_publish_object")]
             {
@@ -340,6 +411,7 @@ where
         debug_assert!(!object.is_null(), "object should not be null");
         let mutator = VM::VMActivePlan::mutator(self.tls);
 
+        #[cfg(not(feature = "debug_publish_object"))]
         let new_object =
             match self
                 .plan
@@ -360,6 +432,29 @@ where
                 }
             };
 
+        #[cfg(feature = "debug_publish_object")]
+        let new_object = match self.plan.thread_local_trace_object::<KIND>(
+            mutator,
+            object,
+            VM::VMObjectModel::null_slot(),
+            object,
+            self.worker(),
+        ) {
+            Scanned(new_object) => {
+                debug_assert!(
+                    object.is_live(),
+                    "object: {:?} is supposed to be alive.",
+                    object
+                );
+                new_object
+            }
+            ToBeScanned(new_object) => {
+                VM::VMScanning::scan_object(self.worker().tls, new_object, self);
+                self.plan.thread_local_post_scan_object(mutator, new_object);
+                new_object
+            }
+        };
+
         self.do_closure();
         new_object
     }
@@ -367,6 +462,7 @@ where
     fn do_object_tracing(&mut self, object: ObjectReference) -> ObjectReference {
         let mutator = VM::VMActivePlan::mutator(self.tls);
 
+        #[cfg(not(feature = "debug_publish_object"))]
         let new_object =
             match self
                 .plan
@@ -380,6 +476,23 @@ where
                     );
                 }
             };
+
+        #[cfg(feature = "debug_publish_object")]
+        let new_object = match self.plan.thread_local_trace_object::<KIND>(
+            mutator,
+            object,
+            VM::VMObjectModel::null_slot(),
+            object,
+            self.worker(),
+        ) {
+            Scanned(new_object) => new_object,
+            _ => {
+                panic!(
+                    "live object: {:?} must have been traced/scanned already",
+                    object
+                );
+            }
+        };
         new_object
     }
 }

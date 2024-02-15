@@ -5,9 +5,7 @@ use crate::plan::global::Plan;
 use crate::plan::AllocationSemantics;
 use crate::policy::space::Space;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
-#[cfg(all(feature = "debug_publish_object"))]
-use crate::util::object_extra_header_metadata;
-use crate::util::{Address, ObjectReference};
+use crate::util::{metadata, Address, ObjectReference};
 use crate::util::{VMMutatorThread, VMWorkerThread};
 use crate::vm::VMBinding;
 
@@ -83,8 +81,8 @@ pub struct Mutator<VM: VMBinding> {
     pub allocation_count: usize,
     #[cfg(feature = "public_object_analysis")]
     pub bytes_allocated: usize,
-    #[cfg(feature = "public_object_analysis")]
-    pub request_id: u32,
+    #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
+    pub request_id: usize,
     #[cfg(feature = "public_object_analysis")]
     pub global_request_id: u32,
 }
@@ -121,6 +119,8 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
     ) {
         #[cfg(feature = "thread_local_gc")]
         use crate::util::alloc::LargeObjectAllocator;
+        #[cfg(feature = "debug_publish_object")]
+        use crate::util::object_extra_header_metadata;
         let space = unsafe {
             self.allocators
                 .get_allocator_mut(self.config.allocator_mapping[semantics])
@@ -138,7 +138,7 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
                 let metadata: usize = usize::try_from(self.mutator_id).unwrap()
                     | usize::try_from(self.request_id).unwrap()
                         << object_extra_header_metadata::SHIFT;
-                crate::util::object_extra_header_metadata::store_extra_header_metadata::<VM, usize>(
+                object_extra_header_metadata::store_extra_header_metadata::<VM, usize>(
                     refer, metadata,
                 );
             }
@@ -167,7 +167,7 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
                     crate::util::conversions::page_align_down(refer.to_object_start::<VM>());
                 metadata_address.store(metadata);
                 // Store request_id|mutator_id into the extra header
-                #[cfg(feature = "public_object_analysis")]
+                #[cfg(all(feature = "public_object_analysis", feature = "debug_publish_object"))]
                 ((metadata_address + offset) as Address)
                     .store(metadata | self.request_id << object_extra_header_metadata::SHIFT);
                 debug_assert!(
@@ -177,6 +177,18 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
                     "los object is not aligned"
                 );
             }
+            // #[cfg(feature = "debug_publish_object")]
+            // {
+            //     #[cfg(debug_assertions)]
+            //     {
+            //         if self.mutator_id > 30 {
+            //             info!(
+            //                 "alloc los object: {:?} counter: {} owner: {}",
+            //                 refer, self.request_id, metadata
+            //             );
+            //         }
+            //     }
+            // }
         } else {
             #[cfg(feature = "debug_publish_object")]
             {
@@ -185,7 +197,7 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
                 #[cfg(feature = "public_object_analysis")]
                 let metadata: usize = usize::try_from(self.mutator_id).unwrap()
                     | self.request_id << object_extra_header_metadata::SHIFT;
-                crate::util::object_extra_header_metadata::store_extra_header_metadata::<VM, usize>(
+                object_extra_header_metadata::store_extra_header_metadata::<VM, usize>(
                     refer, metadata,
                 );
             }

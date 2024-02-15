@@ -332,22 +332,46 @@ impl Block {
             for line in self.lines() {
                 #[cfg(debug_assertions)]
                 {
-                    if line.is_public_line() {
-                        assert!(
-                            line.is_published(publish_state),
-                            "public line: {:?} is not marked, owner: {:?}, line mark state: {}",
-                            line,
-                            self.owner(),
-                            line.get_line_mark_state()
-                        );
-                    } else {
-                        assert!(
-                            !line.is_published(publish_state),
-                            "private line: {:?} is marked as public, block: {:?}, {:?}",
-                            line,
-                            self.owner(),
-                            self.is_block_published()
-                        );
+                    #[cfg(not(feature = "immix_non_moving"))]
+                    {
+                        if line.is_public_line() {
+                            assert!(
+                                line.is_published(publish_state),
+                                "public line: {:?} is not marked, owner: {:?}, line mark state: {}",
+                                line,
+                                self.owner(),
+                                line.get_line_mark_state()
+                            );
+                        } else {
+                            assert!(
+                                !line.is_published(publish_state),
+                                "private line: {:?} is marked as public, block: {:?}, {:?}",
+                                line,
+                                self.owner(),
+                                self.is_block_published()
+                            );
+                        }
+                    }
+                    #[cfg(feature = "immix_non_moving")]
+                    {
+                        if !line.is_public_line() {
+                            assert!(
+                                !line.is_published(publish_state),
+                                "private line: {:?} is marked as public, block: {:?}, {:?}",
+                                line,
+                                self.owner(),
+                                self.is_block_published()
+                            );
+                        }
+                        if line.is_published(publish_state) {
+                            assert!(
+                                line.is_public_line(),
+                                "public line: {:?} is not marked, owner: {:?}, line mark state: {}",
+                                line,
+                                self.owner(),
+                                line.get_line_mark_state()
+                            );
+                        }
                     }
                 }
                 if line.is_marked(line_mark_state) || line.is_published(publish_state) {
@@ -378,13 +402,16 @@ impl Block {
                     false
                 } else {
                     #[cfg(all(feature = "debug_publish_object", debug_assertions))]
-                    space.reusable_blocks.iterate_blocks(|block| {
-                        debug_assert!(
-                            self.0 != block.0,
-                            "Block: {:?} is now reclaimed and should not be in the reusable pool",
-                            self
-                        )
-                    });
+                    {
+                        // check if locally freed blocks exist in global reusable pool
+                        space.reusable_blocks.iterate_blocks(|block| {
+                            debug_assert!(
+                                self.0 != block.0,
+                                "Block: {:?} is now reclaimed and should not be in the reusable pool",
+                                self
+                            )
+                        });
+                    }
 
                     true
                 }
@@ -396,7 +423,7 @@ impl Block {
                         unavailable_lines: marked_lines as _,
                     });
 
-                    // local gc should not touch global state
+                    // local gc should not touch global state if possible
                     // if adding the blocks to the global reusable block list
                     // then once the block becomes free, it has to be removed
                     // from the global reusable block list, which is hard in

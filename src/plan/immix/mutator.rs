@@ -33,7 +33,14 @@ pub fn immix_mutator_prepare<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMW
     immix_allocator.reset();
     #[cfg(feature = "thread_local_gc")]
     {
-        let thread_local_gc_active = mutator.thread_local_gc_status == THREAD_LOCAL_GC_ACTIVE;
+        #[cfg(feature = "debug_publish_object")]
+        {
+            println!(
+                "####################### immix_mutator_prepare | req: {},  local gc active: {:?} | address: {:?} ###########################",
+                mutator.request_id, mutator.thread_local_gc_status, &mutator.thread_local_gc_status as *const u32
+            )
+        }
+        // let thread_local_gc_active = mutator.thread_local_gc_status == THREAD_LOCAL_GC_ACTIVE;
         if thread_local_gc_active {
             immix_allocator.thread_local_prepare();
         } else {
@@ -87,7 +94,10 @@ pub fn immix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMW
         .downcast_mut::<LargeObjectAllocator<VM>>()
         .unwrap();
         if thread_local_gc_active {
+            #[cfg(not(feature = "debug_publish_object"))]
             los_allocator.thread_local_release();
+            #[cfg(feature = "debug_publish_object")]
+            los_allocator.thread_local_release(_tls);
         } else {
             los_allocator.release();
         }
@@ -127,6 +137,8 @@ pub fn create_immix_mutator<VM: VMBinding>(
     #[cfg(feature = "public_bit")]
     let barrier = Box::new(PublicObjectMarkingBarrier::new(
         PublicObjectMarkingBarrierSemantics::new(mmtk),
+        #[cfg(feature = "debug_publish_object")]
+        mutator_tls,
     ));
     #[cfg(not(feature = "public_bit"))]
     let barrier = Box::new(NoBarrier);
@@ -145,7 +157,7 @@ pub fn create_immix_mutator<VM: VMBinding>(
         allocation_count: 0,
         #[cfg(feature = "public_object_analysis")]
         bytes_allocated: 0,
-        #[cfg(feature = "public_object_analysis")]
+        #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
         request_id: 0,
         #[cfg(feature = "public_object_analysis")]
         global_request_id: 0,

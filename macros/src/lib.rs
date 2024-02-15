@@ -13,7 +13,7 @@ use syn::DeriveInput;
 mod plan_trace_object_impl;
 mod util;
 
-const DEBUG_MACRO_OUTPUT: bool = true;
+const DEBUG_MACRO_OUTPUT: bool = false;
 
 /// Generally a plan needs to add these attributes in order for the macro to work. The macro will
 /// generate an implementation of `PlanTraceObject` for the plan. With `PlanTraceObject`, the plan use

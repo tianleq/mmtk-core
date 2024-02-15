@@ -180,8 +180,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     fn get_object_owner(&self, _object: ObjectReference) -> Option<u32> {
         if self.immix_space.in_space(_object) {
             return Some(self.immix_space.get_object_owner(_object));
+        } else if self.common.get_los().in_space(_object) {
+            return Some(self.common.get_los().get_object_owner(_object));
         }
-        Option::None
+        None
     }
 
     #[cfg(feature = "debug_publish_object")]
@@ -333,8 +335,7 @@ impl<VM: VMBinding> Immix<VM> {
             end_of_thread_local_gc.do_work_with_stat(worker, worker.mmtk);
         } else {
             // Prepare global/collectors/mutators
-            ThreadlocalPrepare::<FastContext>::new(plan, tls)
-                .do_work_with_stat(worker, worker.mmtk);
+            ThreadlocalPrepare::<FastContext>::new(plan, tls).do_work(worker, worker.mmtk);
 
             //Scan mutator
             ScanMutator::<
@@ -395,6 +396,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for Immix<VM> {
             >()
     }
 
+    #[cfg(not(feature = "debug_publish_object"))]
     fn thread_local_trace_object<const KIND: crate::policy::gc_work::TraceKind>(
         &self,
         mutator: &Mutator<VM>,
@@ -415,6 +417,38 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for Immix<VM> {
         <CommonPlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
             &self.common,
             mutator,
+            object,
+            worker,
+        )
+    }
+
+    #[cfg(feature = "debug_publish_object")]
+    fn thread_local_trace_object<const KIND: crate::policy::gc_work::TraceKind>(
+        &self,
+        mutator: &Mutator<VM>,
+        source: ObjectReference,
+        slot: VM::VMEdge,
+        object: ObjectReference,
+        worker: &mut GCWorker<VM>,
+    ) -> ThreadlocalTracedObjectType {
+        if self.immix_space.in_space(object) {
+            return <ImmixSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<
+                KIND,
+            >(
+                &self.immix_space,
+                mutator,
+                source,
+                slot,
+                object,
+                Some(CopySemantics::DefaultCopy),
+                worker,
+            );
+        }
+        <CommonPlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+            &self.common,
+            mutator,
+            source,
+            slot,
             object,
             worker,
         )

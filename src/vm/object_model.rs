@@ -472,6 +472,8 @@ pub trait ObjectModel<VM: VMBinding> {
     fn is_object_sane(_object: ObjectReference) -> bool {
         true
     }
+
+    fn null_slot() -> VM::VMEdge;
 }
 
 pub mod specs {

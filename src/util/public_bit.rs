@@ -27,6 +27,9 @@ pub fn set_public_bit<VM: VMBinding>(object: ObjectReference) -> Address {
         "{:x}: public bit already set",
         object,
     );
+    // if crate::util::DEBUG_SET_PUBLIC.load(Ordering::Acquire) {
+    //     info!("set {} to public, ", object);
+    // }
 
     let metadata_addr = crate::util::metadata::side_metadata::address_to_meta_address(
         &PUBLIC_SIDE_METADATA_SPEC,
@@ -53,6 +56,10 @@ pub fn unset_public_bit<VM: VMBinding>(object: ObjectReference) -> Address {
         &PUBLIC_SIDE_METADATA_SPEC,
         object.to_address::<VM>(),
     );
+
+    // if crate::util::DEBUG_SET_PUBLIC.load(Ordering::Acquire) {
+    //     info!("unset {} to public, ", object);
+    // }
 
     PUBLIC_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_address::<VM>(), 0, Ordering::SeqCst);
 

@@ -144,6 +144,7 @@ impl<VM: VMBinding> MMTK<VM> {
         self.inside_harness.store(true, Ordering::SeqCst);
         self.plan.base().stats.start_all();
         self.scheduler.enable_stat();
+        crate::util::DEBUG_SET_PUBLIC.store(true, Ordering::Release);
     }
 
     pub fn harness_end(&'static self) {

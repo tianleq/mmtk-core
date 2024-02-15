@@ -102,8 +102,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             let mut current = self.block_header;
             while let Some(block) = current {
                 if block.get_state() == BlockState::Unallocated {
-                    debug_assert!(
-                        false,
+                    panic!(
                         "Local block: {:?} state is Unallocated before a gc occurs",
                         block,
                     );
@@ -122,6 +121,13 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
                     current = self.next_block(block);
                 }
+                assert!(
+                    block.owner() == self.mutator_id,
+                    "block: {:?} owner: {} != mutator: {}",
+                    block,
+                    block.owner(),
+                    self.mutator_id
+                );
             }
         }
     }
@@ -181,8 +187,18 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             if let crate::util::metadata::MetadataSpec::OnSide(side) =
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
             {
+                // #[cfg(feature = "debug_publish_object")]
+                // {
+                // use crate::util::VMMutatorThread;
+                //     let mutator = VM::VMActivePlan::mutator(VMMutatorThread(self.tls));
+                //     info!(
+                //         "req: {} | bulk clear mark state {:?}",
+                //         mutator.request_id, block
+                //     );
+                // }
                 side.bzero_metadata(block.start(), Block::BYTES);
             }
+
             // Clear forwarding bits if necessary.
             if is_defrag_source {
                 // Note that `ImmixSpace::is_live` depends on the fact that we only clear side
@@ -464,6 +480,15 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     )
                 }
 
+                #[cfg(feature = "debug_publish_object")]
+                {
+                    assert!(
+                        self.blocks.contains(&block),
+                        "local block list is corrupted, block: {:?} is missing",
+                        block
+                    );
+                }
+
                 current = self.next_block(block);
             }
         }
@@ -701,7 +726,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 );
                 crate::util::public_bit::bzero_public_bit(self.cursor, self.limit - self.cursor);
                 // stale public line bit needs to be cleared,
-                #[cfg(debug_assertions)]
+                #[cfg(all(feature = "thread_local_gc", debug_assertions))]
                 {
                     let iter =
                         crate::util::linear_scan::RegionIterator::<Line>::new(start_line, end_line);
@@ -794,7 +819,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             None => {
                 #[cfg(feature = "thread_local_gc")]
                 // add an assertion here, assume collectors can always allocate new blocks
-                debug_assert!(
+                assert!(
                     self.semantic.is_none(),
                     "collector cannot acquire clean blocks"
                 );

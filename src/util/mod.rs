@@ -80,6 +80,7 @@ mod int_array_freelist;
 /// on demand direct from the OS (via mmap).
 mod raw_memory_freelist;
 
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU32;
 
 pub use self::address::Address;
@@ -88,6 +89,7 @@ pub use self::opaque_pointer::*;
 pub use self::reference_processor::ReferenceProcessor;
 
 pub(crate) static MUTATOR_ID_GENERATOR: AtomicU32 = AtomicU32::new(1);
+pub(crate) static DEBUG_SET_PUBLIC: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "public_object_analysis")]
 #[derive(Default)]
 pub(crate) struct RequestScopeObjectsStats {
@@ -98,16 +100,12 @@ pub(crate) struct RequestScopeObjectsStats {
     pub public_bytes: usize,
 }
 
-// #[cfg(feature = "public_object_analysis")]
-// lazy_static! {
-//     pub(crate) static ref LIVE_OBJECTS: std::sync::Mutex<
-//         std::collections::HashMap<u32, std::collections::HashMap<u32, LiveObjectsInfo>>,
-//     > = std::sync::Mutex::new(std::collections::HashMap::new());
-
-// }
-
 #[cfg(feature = "public_object_analysis")]
 lazy_static! {
     pub(crate) static ref REQUEST_SCOPE_OBJECTS_STATS: std::sync::Mutex<RequestScopeObjectsStats> =
         std::sync::Mutex::new(RequestScopeObjectsStats::default());
 }
+
+#[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
+pub(crate) static LOCAL_GC_ID_GENERATOR: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(1);

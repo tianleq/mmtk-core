@@ -184,6 +184,11 @@ impl<VM: VMBinding> GCTriggerPolicy<VM> for FixedHeapSizeTrigger {
     ) -> bool {
         plan.thread_local_collection_required(space_full, space)
     }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn on_thread_local_gc_end(&self, _mmtk: &'static MMTK<VM>) {
+        _mmtk.plan.base().gc_requester.thread_local_gc_end();
+    }
 }
 
 use atomic_refcell::AtomicRefCell;

@@ -82,9 +82,9 @@ pub trait Collection<VM: VMBinding> {
     /// * `tls`: The thread pointer of the mutator.
     fn resume_from_thread_local_gc(tls: VMMutatorThread);
 
-    #[cfg(feature = "thread_local_gc")]
-    /// Block the current thread, waiting for all on-the-fly thread local gc to finish
-    fn wait_for_thread_local_gc_to_finish();
+    // #[cfg(feature = "thread_local_gc")]
+    // /// Block the current thread, waiting for all on-the-fly thread local gc to finish
+    // fn wait_for_thread_local_gc_to_finish();
 
     /// Ask the VM to spawn a GC thread for MMTk. A GC thread may later call into the VM through these VM traits. Some VMs
     /// have assumptions that those calls needs to be within VM internal threads.

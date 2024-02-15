@@ -240,6 +240,11 @@ pub trait BarrierSemantics: 'static + Send {
 
     #[cfg(feature = "public_object_analysis")]
     fn clear_number_of_bytes_published(&mut self) {}
+
+    #[cfg(all(feature = "debug_publish_object", debug_assertions))]
+    fn get_object_owner(&self, _object: ObjectReference) -> u32 {
+        0
+    }
 }
 
 /// Generic object barrier with a type argument defining it's slow-path behaviour.
@@ -338,9 +343,12 @@ pub struct PublicObjectMarkingBarrier<S: BarrierSemantics> {
     total_write: usize,
     #[cfg(feature = "debug_publish_object_overhead")]
     slowpath_taken: usize,
+    #[cfg(feature = "debug_publish_object")]
+    mutator_tls: VMMutatorThread,
 }
 
 impl<S: BarrierSemantics> PublicObjectMarkingBarrier<S> {
+    #[cfg(not(feature = "debug_publish_object"))]
     pub fn new(semantics: S) -> Self {
         Self {
             semantics,
@@ -348,6 +356,18 @@ impl<S: BarrierSemantics> PublicObjectMarkingBarrier<S> {
             total_write: 0,
             #[cfg(feature = "debug_publish_object_overhead")]
             slowpath_taken: 0,
+        }
+    }
+
+    #[cfg(feature = "debug_publish_object")]
+    pub fn new(semantics: S, mutator_tls: VMMutatorThread) -> Self {
+        Self {
+            semantics,
+            #[cfg(feature = "debug_publish_object_overhead")]
+            total_write: 0,
+            #[cfg(feature = "debug_publish_object_overhead")]
+            slowpath_taken: 0,
+            mutator_tls,
         }
     }
 }
@@ -366,6 +386,31 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
         if is_public::<S::VM>(src) {
             if !target.is_null() && !is_public::<S::VM>(target) {
                 self.object_reference_write_slow(src, slot, target);
+            }
+        } else {
+            #[cfg(all(feature = "debug_publish_object", debug_assertions))]
+            {
+                // use crate::vm::ActivePlan;
+                if !target.is_null() && !is_public::<S::VM>(target) {
+                    // both source and target are private
+                    // they should have the same owner
+                    let source_owner = self.semantics.get_object_owner(src);
+                    let target_owner = self.semantics.get_object_owner(target);
+                    let valid = source_owner == target_owner;
+                    if !valid {
+                        panic!(
+                            "source: {} owner: {}, target: {} owner: {}",
+                            src, source_owner, target, target_owner
+                        );
+                    }
+                    // let mutator = <S::VM as VMBinding>::VMActivePlan::mutator(self.mutator_tls);
+                    // if mutator.mutator_id > 35 {
+                    //     info!(
+                    //         "mutator: {} req: {} | {}.{:?} -> {}",
+                    //         mutator.mutator_id, mutator.request_id, src, slot, target
+                    //     );
+                    // }
+                }
             }
         }
     }
@@ -413,6 +458,39 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
                 }
                 self.semantics
                     .object_array_copy_slow(src_base, dst_base, src, dst);
+            }
+        } else {
+            #[cfg(all(feature = "debug_publish_object", debug_assertions))]
+            {
+                let dst_owner = self.semantics.get_object_owner(dst_base);
+                let src_owner = self.semantics.get_object_owner(src_base);
+                if !is_public::<S::VM>(src_base) {
+                    // both src_base and dst_base are private
+                    assert!(
+                        src_owner == dst_owner,
+                        "src base: {} owner: {}, dst base: {} owner: {}",
+                        src_base,
+                        src_owner,
+                        dst_base,
+                        dst_owner
+                    );
+                    // Even if src base is private, it may still contain public objects
+                    // so need to rule out public objects
+                    for slot in src.iter_edges() {
+                        let object = slot.load();
+                        if !object.is_null() && !is_public::<S::VM>(object) {
+                            let owner = self.semantics.get_object_owner(object);
+                            assert!(
+                                dst_owner == owner,
+                                "dst base: {} owner: {}, src object: {} owner: {}",
+                                dst_base,
+                                dst_owner,
+                                object,
+                                owner
+                            );
+                        }
+                    }
+                }
             }
         }
     }
@@ -591,5 +669,9 @@ impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM>
     #[cfg(feature = "public_object_analysis")]
     fn clear_number_of_bytes_published(&mut self) {
         self.number_of_bytes_published = 0;
+    }
+    #[cfg(all(feature = "debug_publish_object", debug_assertions))]
+    fn get_object_owner(&self, _object: ObjectReference) -> u32 {
+        self.mmtk.get_plan().get_object_owner(_object).unwrap()
     }
 }

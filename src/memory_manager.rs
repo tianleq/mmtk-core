@@ -1016,6 +1016,10 @@ pub fn compute_allocator_mem_layout_checksum<VM: VMBinding>() -> usize {
     };
 }
 
+pub fn compute_mutator_mem_layout_checksum<VM: VMBinding>() -> usize {
+    std::mem::size_of::<Mutator<VM>>()
+}
+
 // #[cfg(feature = "public_object_analysis")]
 // pub fn mmtk_analyze_object_publication<VM: VMBinding>(tls: VMMutatorThread, id: i32) {
 //     // use std::fs::OpenOptions;

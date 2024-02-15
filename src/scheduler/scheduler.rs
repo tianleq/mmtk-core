@@ -322,19 +322,19 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 _ => {}
             }
         }
-        if worker.can_steal() {
-            // Try steal some packets from any worker
-            for (id, worker_shared) in self.worker_group.workers_shared.iter().enumerate() {
-                if id == worker.ordinal {
-                    continue;
-                }
-                match worker_shared.stealer.as_ref().unwrap().steal() {
-                    Steal::Success(w) => return Steal::Success(w),
-                    Steal::Retry => should_retry = true,
-                    _ => {}
-                }
+
+        // Try steal some packets from any worker
+        for (id, worker_shared) in self.worker_group.workers_shared.iter().enumerate() {
+            if id == worker.ordinal {
+                continue;
+            }
+            match worker_shared.stealer.as_ref().unwrap().steal() {
+                Steal::Success(w) => return Steal::Success(w),
+                Steal::Retry => should_retry = true,
+                _ => {}
             }
         }
+
         if should_retry {
             Steal::Retry
         } else {

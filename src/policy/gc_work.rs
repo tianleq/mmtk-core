@@ -43,11 +43,25 @@ pub trait PolicyTraceObject<VM: VMBinding> {
 
 #[cfg(feature = "thread_local_gc")]
 pub trait PolicyThreadlocalTraceObject<VM: VMBinding> {
+    #[cfg(not(feature = "debug_publish_object"))]
     /// Trace object in the policy. If the policy copies objects, we should
     /// expect `copy` to be a `Some` value.
     fn thread_local_trace_object<const KIND: TraceKind>(
         &self,
         mutator: &Mutator<VM>,
+        object: ObjectReference,
+        copy: Option<CopySemantics>,
+        worker: &mut GCWorker<VM>,
+    ) -> ThreadlocalTracedObjectType;
+
+    #[cfg(feature = "debug_publish_object")]
+    /// Trace object in the policy. If the policy copies objects, we should
+    /// expect `copy` to be a `Some` value.
+    fn thread_local_trace_object<const KIND: TraceKind>(
+        &self,
+        mutator: &Mutator<VM>,
+        source: ObjectReference,
+        slot: VM::VMEdge,
         object: ObjectReference,
         copy: Option<CopySemantics>,
         worker: &mut GCWorker<VM>,

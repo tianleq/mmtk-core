@@ -73,6 +73,8 @@ pub fn create_ss_mutator<VM: VMBinding>(
     #[cfg(feature = "public_bit")]
     let barrier = Box::new(PublicObjectMarkingBarrier::new(
         PublicObjectMarkingBarrierSemantics::new(mmtk),
+        #[cfg(feature = "debug_publish_object")]
+        mutator_tls,
     ));
     #[cfg(not(feature = "public_bit"))]
     let barrier = Box::new(NoBarrier);
@@ -92,7 +94,7 @@ pub fn create_ss_mutator<VM: VMBinding>(
         allocation_count: 0,
         #[cfg(feature = "public_object_analysis")]
         bytes_allocated: 0,
-        #[cfg(feature = "public_object_analysis")]
+        #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
         request_id: 0,
         #[cfg(feature = "public_object_analysis")]
         global_request_id: 0,

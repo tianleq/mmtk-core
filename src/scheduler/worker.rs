@@ -254,7 +254,6 @@ pub struct GCWorker<VM: VMBinding> {
     /// Local work packet queue.
     pub local_work_buffer: deque::Worker<Box<dyn GCWork<VM>>>,
     pub private_local_work_buffer: Vec<Box<dyn GCWork<VM>>>,
-    can_steal: bool,
     pub gc_start: std::time::Instant,
 }
 
@@ -295,7 +294,6 @@ impl<VM: VMBinding> GCWorker<VM> {
             shared,
             local_work_buffer,
             private_local_work_buffer: Vec::new(),
-            can_steal: true,
             gc_start: std::time::Instant::now(),
         }
     }
@@ -387,18 +385,6 @@ impl<VM: VMBinding> GCWorker<VM> {
                 current_worker_ordinal().unwrap()
             );
         }
-    }
-
-    pub fn can_steal(&self) -> bool {
-        self.can_steal
-    }
-
-    pub fn enable_steal(&mut self) {
-        self.can_steal = true;
-    }
-
-    pub fn disable_steal(&mut self) {
-        self.can_steal = false
     }
 }
 

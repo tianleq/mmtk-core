@@ -982,6 +982,7 @@ impl<VM: VMBinding> BasePlan<VM> {
         self.malloc_bytes.load(Ordering::SeqCst)
     }
 
+    #[cfg(feature = "thread_local_gc")]
     pub fn publish_object(&self, _object: ObjectReference) {
         #[cfg(feature = "code_space")]
         if self.code_space.in_space(_object) {
@@ -1015,6 +1016,7 @@ impl<VM: VMBinding> BasePlan<VM> {
 
 #[cfg(feature = "thread_local_gc")]
 impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for BasePlan<VM> {
+    #[cfg(not(feature = "debug_publish_object"))]
     fn thread_local_trace_object<const KIND: TraceKind>(
         &self,
         _mutator: &Mutator<VM>,
@@ -1059,6 +1061,66 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for BasePlan<VM> {
             return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
                 &self.vm_space,
                 _mutator,
+                object,
+                None,
+                _worker
+            );
+        }
+
+        ThreadlocalTracedObjectType::Scanned(object)
+    }
+
+    #[cfg(feature = "debug_publish_object")]
+    fn thread_local_trace_object<const KIND: TraceKind>(
+        &self,
+        _mutator: &Mutator<VM>,
+        _source: ObjectReference,
+        _slot: VM::VMEdge,
+        object: ObjectReference,
+        _worker: &mut GCWorker<VM>,
+    ) -> ThreadlocalTracedObjectType {
+        #[cfg(feature = "code_space")]
+        if self.code_space.in_space(object) {
+            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+                &self.code_space,
+                _mutator,
+                source,
+                object,
+                None,
+                _worker
+            );
+        }
+
+        #[cfg(feature = "code_space")]
+        if self.code_lo_space.in_space(object) {
+            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+                &self.code_lo_space,
+                _mutator,
+                source,
+                object,
+                None,
+                _worker
+            );
+        }
+
+        #[cfg(feature = "ro_space")]
+        if self.ro_space.in_space(object) {
+            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+                &self.ro_space,
+                _mutator,
+                source,
+                object,
+                None,
+                _worker
+            );
+        }
+
+        #[cfg(feature = "vm_space")]
+        if self.vm_space.in_space(object) {
+            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+                &self.vm_space,
+                _mutator,
+                source,
                 object,
                 None,
                 _worker
@@ -1208,6 +1270,7 @@ impl<VM: VMBinding> CommonPlan<VM> {
             .verify_side_metadata_sanity(side_metadata_sanity_checker);
     }
 
+    #[cfg(feature = "thread_local_gc")]
     pub fn publish_object(&self, object: ObjectReference) {
         if self.immortal.in_space(object) {
             trace!("publish_object: object in immortal space");
@@ -1230,6 +1293,7 @@ impl<VM: VMBinding> CommonPlan<VM> {
 
 #[cfg(feature = "thread_local_gc")]
 impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
+    #[cfg(not(feature = "debug_publish_object"))]
     fn thread_local_trace_object<const KIND: TraceKind>(
         &self,
         mutator: &Mutator<VM>,
@@ -1268,6 +1332,55 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
         }
         <BasePlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
             &self.base, mutator, object, worker,
+        )
+    }
+
+    #[cfg(feature = "debug_publish_object")]
+    fn thread_local_trace_object<const KIND: TraceKind>(
+        &self,
+        mutator: &Mutator<VM>,
+        source: ObjectReference,
+        slot: VM::VMEdge,
+        object: ObjectReference,
+        worker: &mut GCWorker<VM>,
+    ) -> ThreadlocalTracedObjectType {
+        if self.immortal.in_space(object) {
+            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<
+                KIND,
+            >(
+                &self.immortal,
+                mutator,
+                source,
+                slot,
+                object,
+                None,
+                worker
+            );
+        }
+        if self.los.in_space(object) {
+            return <LargeObjectSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+                &self.los,
+                mutator,
+                source,
+                slot,
+                object,
+                None,
+                worker
+            );
+        }
+        if self.nonmoving.in_space(object) {
+            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+                &self.nonmoving,
+                mutator,
+                source,
+                slot,
+                object,
+                None,
+                worker
+            );
+        }
+        <BasePlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+            &self.base, mutator, source, slot, object, worker,
         )
     }
 
@@ -1327,17 +1440,36 @@ pub trait PlanTraceObject<VM: VMBinding> {
 
 #[cfg(feature = "thread_local_gc")]
 pub trait PlanThreadlocalTraceObject<VM: VMBinding> {
+    #[cfg(not(feature = "debug_publish_object"))]
     /// Trace objects in the plan. Generally one needs to figure out
     /// which space an object resides in, and invokes the corresponding policy
     /// trace object method.
     ///
     /// Arguments:
-    /// * `mutator_id`: the current thread's id
+    /// * `mutator`: the current thread's context
     /// * `object`: the object to trace. This is a non-nullable object reference.
     /// * `worker`: the GC worker that is tracing this object.
     fn thread_local_trace_object<const KIND: TraceKind>(
         &self,
         mutator: &Mutator<VM>,
+        object: ObjectReference,
+        worker: &mut GCWorker<VM>,
+    ) -> ThreadlocalTracedObjectType;
+
+    #[cfg(feature = "debug_publish_object")]
+    /// Trace objects in the plan. Generally one needs to figure out
+    /// which space an object resides in, and invokes the corresponding policy
+    /// trace object method.
+    ///
+    /// Arguments:
+    /// * `mutator`: the current thread's context
+    /// * `object`: the object to trace. This is a non-nullable object reference.
+    /// * `worker`: the GC worker that is tracing this object.
+    fn thread_local_trace_object<const KIND: TraceKind>(
+        &self,
+        mutator: &Mutator<VM>,
+        source: ObjectReference,
+        slot: VM::VMEdge,
         object: ObjectReference,
         worker: &mut GCWorker<VM>,
     ) -> ThreadlocalTracedObjectType;

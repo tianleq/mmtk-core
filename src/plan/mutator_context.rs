@@ -5,7 +5,7 @@ use crate::plan::global::Plan;
 use crate::plan::AllocationSemantics;
 use crate::policy::space::Space;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
-use crate::util::{metadata, Address, ObjectReference};
+use crate::util::{Address, ObjectReference};
 use crate::util::{VMMutatorThread, VMWorkerThread};
 use crate::vm::VMBinding;
 
@@ -27,6 +27,20 @@ pub struct MutatorConfig<VM: VMBinding> {
     pub prepare_func: &'static (dyn Fn(&mut Mutator<VM>, VMWorkerThread) + Send + Sync),
     /// Plan-specific code for mutator release. The VMWorkerThread is the worker thread that executes this release function.
     pub release_func: &'static (dyn Fn(&mut Mutator<VM>, VMWorkerThread) + Send + Sync),
+    #[cfg(feature = "thread_local_gc")]
+    /// Plan-specific code for mutator prepare. The VMWorkerThread is the worker thread that executes this prepare function.
+    pub thread_local_prepare_func: &'static (dyn Fn(&mut Mutator<VM>) + Send + Sync),
+    #[cfg(feature = "thread_local_gc")]
+    /// Plan-specific code for mutator release. The VMWorkerThread is the worker thread that executes this release function.
+    pub thread_local_release_func: &'static (dyn Fn(&mut Mutator<VM>) + Send + Sync),
+    #[cfg(feature = "thread_local_gc")]
+    /// Plan-specific code for mutator prepare. The VMWorkerThread is the worker thread that executes this prepare function.
+    pub thread_local_alloc_copy_func:
+        &'static (dyn Fn(&mut Mutator<VM>, usize, usize, usize) -> Address + Send + Sync),
+    #[cfg(feature = "thread_local_gc")]
+    /// Plan-specific code for mutator release. The VMWorkerThread is the worker thread that executes this release function.
+    pub thread_local_post_copy_func:
+        &'static (dyn Fn(&mut Mutator<VM>, ObjectReference, usize) + Send + Sync),
 }
 
 impl<VM: VMBinding> std::fmt::Debug for MutatorConfig<VM> {
@@ -177,18 +191,6 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
                     "los object is not aligned"
                 );
             }
-            // #[cfg(feature = "debug_publish_object")]
-            // {
-            //     #[cfg(debug_assertions)]
-            //     {
-            //         if self.mutator_id > 30 {
-            //             info!(
-            //                 "alloc los object: {:?} counter: {} owner: {}",
-            //                 refer, self.request_id, metadata
-            //             );
-            //         }
-            //     }
-            // }
         } else {
             #[cfg(feature = "debug_publish_object")]
             {
@@ -228,6 +230,26 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
 
     fn barrier(&mut self) -> &mut dyn Barrier<VM> {
         &mut *self.barrier
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn alloc_copy(&mut self, size: usize, align: usize, offset: usize) -> Address {
+        (*self.config.thread_local_alloc_copy_func)(self, size, align, offset)
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn post_copy(&mut self, obj: ObjectReference, bytes: usize) {
+        (*self.config.thread_local_post_copy_func)(self, obj, bytes)
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn thread_local_prepare(&mut self) {
+        (*self.config.thread_local_prepare_func)(self)
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn thread_local_release(&mut self) {
+        (*self.config.thread_local_release_func)(self)
     }
 }
 
@@ -292,6 +314,18 @@ pub trait MutatorContext<VM: VMBinding>: Send + 'static {
     /// # Safety
     /// The safety of this function is ensured by a down-cast check.
     unsafe fn barrier_impl<B: Barrier<VM>>(&mut self) -> &mut B;
+
+    #[cfg(feature = "thread_local_gc")]
+    fn alloc_copy(&mut self, size: usize, align: usize, offset: usize) -> Address;
+
+    #[cfg(feature = "thread_local_gc")]
+    fn post_copy(&mut self, obj: ObjectReference, bytes: usize);
+
+    #[cfg(feature = "thread_local_gc")]
+    fn thread_local_prepare(&mut self);
+
+    #[cfg(feature = "thread_local_gc")]
+    fn thread_local_release(&mut self);
 }
 
 /// This is used for plans to indicate the number of allocators reserved for the plan.
@@ -469,4 +503,28 @@ pub(crate) fn create_space_mapping<VM: VMBinding>(
 
     reserved.validate();
     vec
+}
+
+#[cfg(feature = "thread_local_gc")]
+pub fn generic_thread_local_prepare<VM: VMBinding>(_mutator: &mut Mutator<VM>) {}
+
+#[cfg(feature = "thread_local_gc")]
+pub fn generic_thread_local_release<VM: VMBinding>(_mutator: &mut Mutator<VM>) {}
+
+#[cfg(feature = "thread_local_gc")]
+pub fn generic_thread_local_alloc_copy<VM: VMBinding>(
+    _mutator: &mut Mutator<VM>,
+    _size: usize,
+    _align: usize,
+    _offset: usize,
+) -> Address {
+    Address::ZERO
+}
+
+#[cfg(feature = "thread_local_gc")]
+pub fn generic_thread_local_post_copy<VM: VMBinding>(
+    _mutator: &mut Mutator<VM>,
+    _obj: ObjectReference,
+    _bytes: usize,
+) {
 }

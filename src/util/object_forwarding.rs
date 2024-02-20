@@ -104,9 +104,9 @@ pub fn forward_object<VM: VMBinding>(
 pub fn thread_local_forward_object<VM: VMBinding>(
     object: ObjectReference,
     semantics: CopySemantics,
-    copy_context: &mut GCWorkerCopyContext<VM>,
+    mutator: &mut crate::Mutator<VM>,
 ) -> ObjectReference {
-    let new_object = VM::VMObjectModel::copy(object, semantics, copy_context);
+    let new_object = VM::VMObjectModel::thread_local_copy(object, semantics, mutator);
     #[cfg(feature = "vo_bit")]
     crate::util::metadata::vo_bit::set_vo_bit::<VM>(new_object);
     debug_assert!(

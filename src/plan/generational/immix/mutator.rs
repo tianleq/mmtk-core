@@ -3,6 +3,10 @@ use crate::plan::barriers::ObjectBarrier;
 use crate::plan::generational::barrier::GenObjectBarrierSemantics;
 use crate::plan::generational::create_gen_space_mapping;
 use crate::plan::generational::immix::GenImmix;
+use crate::plan::mutator_context::generic_thread_local_alloc_copy;
+use crate::plan::mutator_context::generic_thread_local_post_copy;
+use crate::plan::mutator_context::generic_thread_local_prepare;
+use crate::plan::mutator_context::generic_thread_local_release;
 use crate::plan::mutator_context::Mutator;
 use crate::plan::mutator_context::MutatorConfig;
 use crate::plan::AllocationSemantics;
@@ -36,6 +40,14 @@ pub fn create_genimmix_mutator<VM: VMBinding>(
         space_mapping: Box::new(create_gen_space_mapping(&*mmtk.plan, &genimmix.gen.nursery)),
         prepare_func: &genimmix_mutator_prepare,
         release_func: &genimmix_mutator_release,
+        #[cfg(feature = "thread_local_gc")]
+        thread_local_prepare_func: &generic_thread_local_prepare,
+        #[cfg(feature = "thread_local_gc")]
+        thread_local_release_func: &generic_thread_local_release,
+        #[cfg(feature = "thread_local_gc")]
+        thread_local_alloc_copy_func: &generic_thread_local_alloc_copy,
+        #[cfg(feature = "thread_local_gc")]
+        thread_local_post_copy_func: &generic_thread_local_post_copy,
     };
 
     Mutator {

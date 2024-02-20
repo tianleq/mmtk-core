@@ -1,6 +1,10 @@
 use crate::plan::barriers::NoBarrier;
 use crate::plan::marksweep::MarkSweep;
 use crate::plan::mutator_context::create_allocator_mapping;
+use crate::plan::mutator_context::generic_thread_local_alloc_copy;
+use crate::plan::mutator_context::generic_thread_local_post_copy;
+use crate::plan::mutator_context::generic_thread_local_prepare;
+use crate::plan::mutator_context::generic_thread_local_release;
 use crate::plan::mutator_context::Mutator;
 use crate::plan::mutator_context::MutatorConfig;
 use crate::plan::mutator_context::ReservedAllocators;
@@ -118,6 +122,14 @@ pub fn create_ms_mutator<VM: VMBinding>(
         space_mapping: create_space_mapping(plan),
         prepare_func: &ms_mutator_prepare,
         release_func: &ms_mutator_release,
+        #[cfg(feature = "thread_local_gc")]
+        thread_local_prepare_func: &generic_thread_local_prepare,
+        #[cfg(feature = "thread_local_gc")]
+        thread_local_release_func: &generic_thread_local_release,
+        #[cfg(feature = "thread_local_gc")]
+        thread_local_alloc_copy_func: &generic_thread_local_alloc_copy,
+        #[cfg(feature = "thread_local_gc")]
+        thread_local_post_copy_func: &generic_thread_local_post_copy,
     };
 
     Mutator {

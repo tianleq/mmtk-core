@@ -343,12 +343,9 @@ pub struct PublicObjectMarkingBarrier<S: BarrierSemantics> {
     total_write: usize,
     #[cfg(feature = "debug_publish_object_overhead")]
     slowpath_taken: usize,
-    #[cfg(feature = "debug_publish_object")]
-    mutator_tls: VMMutatorThread,
 }
 
 impl<S: BarrierSemantics> PublicObjectMarkingBarrier<S> {
-    #[cfg(not(feature = "debug_publish_object"))]
     pub fn new(semantics: S) -> Self {
         Self {
             semantics,
@@ -356,18 +353,6 @@ impl<S: BarrierSemantics> PublicObjectMarkingBarrier<S> {
             total_write: 0,
             #[cfg(feature = "debug_publish_object_overhead")]
             slowpath_taken: 0,
-        }
-    }
-
-    #[cfg(feature = "debug_publish_object")]
-    pub fn new(semantics: S, mutator_tls: VMMutatorThread) -> Self {
-        Self {
-            semantics,
-            #[cfg(feature = "debug_publish_object_overhead")]
-            total_write: 0,
-            #[cfg(feature = "debug_publish_object_overhead")]
-            slowpath_taken: 0,
-            mutator_tls,
         }
     }
 }
@@ -403,13 +388,6 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
                             src, source_owner, target, target_owner
                         );
                     }
-                    // let mutator = <S::VM as VMBinding>::VMActivePlan::mutator(self.mutator_tls);
-                    // if mutator.mutator_id > 35 {
-                    //     info!(
-                    //         "mutator: {} req: {} | {}.{:?} -> {}",
-                    //         mutator.mutator_id, mutator.request_id, src, slot, target
-                    //     );
-                    // }
                 }
             }
         }

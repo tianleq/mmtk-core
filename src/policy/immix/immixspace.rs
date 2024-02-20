@@ -990,7 +990,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     pub fn thread_local_trace_object_without_moving(
         &self,
         mutator: &Mutator<VM>,
-        #[cfg(feature = "debug_publish_object")] worker_tls: VMWorkerThread,
         #[cfg(feature = "debug_publish_object")] source: ObjectReference,
         #[cfg(feature = "debug_publish_object")] slot: VM::VMEdge,
         object: ObjectReference,
@@ -1084,8 +1083,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     .unwrap();
                 writeln!(
                     log_file,
-                    "worker: {:?}, mutator: {:?}, request_id: {} | {:?}.{:?} --> {:?}",
-                    worker_tls, mutator.mutator_id, mutator.request_id, source, slot, object
+                    "mutator: {:?}, request_id: {} | {:?}.{:?} --> {:?}",
+                    mutator.mutator_id, mutator.request_id, source, slot, object
                 )
                 .unwrap();
             }
@@ -1099,10 +1098,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[allow(clippy::assertions_on_constants)]
     pub fn thread_local_trace_object_with_opportunistic_copy(
         &self,
-        _mutator_id: u32,
+        mutator: &mut Mutator<VM>,
         object: ObjectReference,
         semantics: CopySemantics,
-        worker: &mut GCWorker<VM>,
+        // worker: &mut GCWorker<VM>,
         nursery_collection: bool,
     ) -> ThreadlocalTracedObjectType {
         // public block is not degrag source, so it should not see
@@ -1119,22 +1118,21 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             );
             let block = Block::containing::<VM>(object);
             debug_assert!(
-                usize::try_from(_mutator_id).unwrap() == m,
+                usize::try_from(mutator.mutator_id).unwrap() == m,
                 "Object: {:?} 's owner is {:?}, but mutator is {}",
                 object,
                 m,
-                _mutator_id
+                mutator.mutator_id
             );
             debug_assert!(
-                _mutator_id == block.owner(),
+                mutator.mutator_id == block.owner(),
                 "Block: {:?} 's owner is {}, but mutator is {}",
                 block,
                 block.owner(),
-                _mutator_id
+                mutator.mutator_id
             );
         }
 
-        let copy_context = worker.get_copy_context_mut();
         debug_assert!(!super::BLOCK_ONLY);
 
         #[cfg(feature = "vo_bit")]
@@ -1193,11 +1191,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
                 // Clippy complains if the "vo_bit" feature is not enabled.
                 #[allow(clippy::let_and_return)]
-                let new_object = ForwardingWord::thread_local_forward_object::<VM>(
-                    object,
-                    semantics,
-                    copy_context,
-                );
+                let new_object =
+                    ForwardingWord::thread_local_forward_object::<VM>(object, semantics, mutator);
 
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_object_forwarded::<VM>(new_object);
@@ -1482,7 +1477,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Post copy routine for Immix copy contexts
-    fn post_copy(&self, object: ObjectReference, _bytes: usize) {
+    pub fn post_copy(&self, object: ObjectReference, _bytes: usize) {
         // Mark the object
         VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.store_atomic::<VM, u8>(
             object,
@@ -1552,10 +1547,9 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
     #[cfg(not(feature = "debug_publish_object"))]
     fn thread_local_trace_object<const KIND: TraceKind>(
         &self,
-        mutator: &Mutator<VM>,
+        mutator: &mut Mutator<VM>,
         object: ObjectReference,
         copy: Option<CopySemantics>,
-        worker: &mut GCWorker<VM>,
     ) -> ThreadlocalTracedObjectType {
         if KIND == TRACE_THREAD_LOCAL_FAST {
             #[cfg(not(feature = "immix_non_moving"))]
@@ -1586,12 +1580,11 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
     #[cfg(feature = "debug_publish_object")]
     fn thread_local_trace_object<const KIND: TraceKind>(
         &self,
-        mutator: &Mutator<VM>,
+        mutator: &mut Mutator<VM>,
         _source: ObjectReference,
         _slot: VM::VMEdge,
         object: ObjectReference,
         copy: Option<CopySemantics>,
-        worker: &mut GCWorker<VM>,
     ) -> ThreadlocalTracedObjectType {
         if KIND == TRACE_THREAD_LOCAL_FAST {
             #[cfg(not(feature = "immix_non_moving"))]
@@ -1599,16 +1592,13 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
             #[cfg(not(feature = "debug_publish_object"))]
             return self.thread_local_trace_object_without_moving(mutator, object);
             #[cfg(feature = "debug_publish_object")]
-            return self.thread_local_trace_object_without_moving(
-                mutator, worker.tls, _source, _slot, object,
-            );
+            return self.thread_local_trace_object_without_moving(mutator, _source, _slot, object);
         } else if KIND == TRACE_THREAD_LOCAL_DEFRAG {
             if Block::containing::<VM>(object).is_defrag_source() {
                 self.thread_local_trace_object_with_opportunistic_copy(
-                    mutator.mutator_id,
+                    mutator,
                     object,
                     copy.unwrap(),
-                    worker,
                     // This should not be nursery collection. Nursery collection does not use PolicyTraceObject.
                     false,
                 )
@@ -1620,9 +1610,8 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
                 #[cfg(not(feature = "debug_publish_object"))]
                 return self.thread_local_trace_object_without_moving(mutator, object);
                 #[cfg(feature = "debug_publish_object")]
-                return self.thread_local_trace_object_without_moving(
-                    mutator, worker.tls, _source, _slot, object,
-                );
+                return self
+                    .thread_local_trace_object_without_moving(mutator, _source, _slot, object);
             }
         } else {
             unreachable!()

@@ -115,10 +115,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    fn schedule_thread_local_collection(
+    fn do_thread_local_collection(
         &'static self,
         tls: VMMutatorThread,
-        worker: &mut GCWorker<Self::VM>,
+        mmtk: &'static crate::MMTK<VM>,
     ) {
         use crate::policy::immix::{TRACE_THREAD_LOCAL_DEFRAG, TRACE_THREAD_LOCAL_FAST};
 
@@ -128,7 +128,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             Immix<VM>,
             ImmixGCWorkContext<VM, TRACE_THREAD_LOCAL_FAST>,
             ImmixGCWorkContext<VM, TRACE_THREAD_LOCAL_DEFRAG>,
-        >(tls, self, &self.immix_space, worker)
+        >(tls, self, &self.immix_space, mmtk)
     }
 
     fn get_allocator_mapping(&self) -> &'static EnumMap<AllocationSemantics, AllocatorSelector> {
@@ -281,7 +281,7 @@ impl<VM: VMBinding> Immix<VM> {
         tls: VMMutatorThread,
         plan: &'static PlanType,
         immix_space: &ImmixSpace<VM>,
-        worker: &mut GCWorker<VM>,
+        mmtk: &'static crate::MMTK<VM>,
     ) {
         use crate::policy::immix::{TRACE_THREAD_LOCAL_DEFRAG, TRACE_THREAD_LOCAL_FAST};
         use crate::scheduler::thread_local_gc_work::{
@@ -299,7 +299,7 @@ impl<VM: VMBinding> Immix<VM> {
 
         if in_defrag {
             // Prepare global/collectors/mutators
-            ThreadlocalPrepare::<DefragContext>::new(plan, tls).do_work(worker, worker.mmtk);
+            ThreadlocalPrepare::<VM>::new(tls).execute();
 
             //Scan mutator
             ScanMutator::<
@@ -309,8 +309,8 @@ impl<VM: VMBinding> Immix<VM> {
                     Immix<VM>,
                     TRACE_THREAD_LOCAL_DEFRAG,
                 >,
-            >::new(tls)
-            .scan_mutator(worker, worker.mmtk);
+            >::new(tls, mmtk)
+            .execute();
 
             // Finalization has to be done before Release as it may resurrect objects
             if !*plan.base().options.no_finalizer {
@@ -322,27 +322,24 @@ impl<VM: VMBinding> Immix<VM> {
                         Immix<VM>,
                         TRACE_THREAD_LOCAL_DEFRAG,
                     >,
-                >::new(worker.mmtk, tls, worker)
+                >::new(tls, mmtk)
                 .do_finalization();
             }
 
-            ThreadlocalRelease::<DefragContext>::new(plan, tls).do_work(worker, worker.mmtk);
-            let mut end_of_thread_local_gc = EndOfThreadLocalGC {
-                elapsed: worker.gc_start.elapsed(),
-                tls,
-            };
+            ThreadlocalRelease::<VM>::new(tls).execute();
+            let mut end_of_thread_local_gc = EndOfThreadLocalGC { tls };
 
-            end_of_thread_local_gc.do_work_with_stat(worker, worker.mmtk);
+            end_of_thread_local_gc.execute(mmtk);
         } else {
             // Prepare global/collectors/mutators
-            ThreadlocalPrepare::<FastContext>::new(plan, tls).do_work(worker, worker.mmtk);
+            ThreadlocalPrepare::<VM>::new(tls).execute();
 
             //Scan mutator
             ScanMutator::<
                 VM,
                 PlanThreadlocalObjectGraphTraversalClosure<VM, Immix<VM>, TRACE_THREAD_LOCAL_FAST>,
-            >::new(tls)
-            .scan_mutator(worker, worker.mmtk);
+            >::new(tls, mmtk)
+            .execute();
 
             // Finalization and then do release
             if !*plan.base().options.no_finalizer {
@@ -354,16 +351,13 @@ impl<VM: VMBinding> Immix<VM> {
                         Immix<VM>,
                         TRACE_THREAD_LOCAL_FAST,
                     >,
-                >::new(worker.mmtk, tls, worker)
+                >::new(tls, mmtk)
                 .do_finalization();
             }
-            ThreadlocalRelease::<FastContext>::new(plan, tls).do_work(worker, worker.mmtk);
-            let mut end_of_thread_local_gc = EndOfThreadLocalGC {
-                elapsed: worker.gc_start.elapsed(),
-                tls,
-            };
+            ThreadlocalRelease::<VM>::new(tls).execute();
+            let mut end_of_thread_local_gc = EndOfThreadLocalGC { tls };
 
-            end_of_thread_local_gc.do_work_with_stat(worker, worker.mmtk);
+            end_of_thread_local_gc.execute(mmtk);
         }
     }
 }
@@ -401,7 +395,6 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for Immix<VM> {
         &self,
         mutator: &Mutator<VM>,
         object: ObjectReference,
-        worker: &mut GCWorker<VM>,
     ) -> ThreadlocalTracedObjectType {
         if self.immix_space.in_space(object) {
             return <ImmixSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<
@@ -411,25 +404,22 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for Immix<VM> {
                 mutator,
                 object,
                 Some(CopySemantics::DefaultCopy),
-                worker,
             );
         }
         <CommonPlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
             &self.common,
             mutator,
             object,
-            worker,
         )
     }
 
     #[cfg(feature = "debug_publish_object")]
     fn thread_local_trace_object<const KIND: crate::policy::gc_work::TraceKind>(
         &self,
-        mutator: &Mutator<VM>,
+        mutator: &mut Mutator<VM>,
         source: ObjectReference,
         slot: VM::VMEdge,
         object: ObjectReference,
-        worker: &mut GCWorker<VM>,
     ) -> ThreadlocalTracedObjectType {
         if self.immix_space.in_space(object) {
             return <ImmixSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<
@@ -441,7 +431,6 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for Immix<VM> {
                 slot,
                 object,
                 Some(CopySemantics::DefaultCopy),
-                worker,
             );
         }
         <CommonPlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
@@ -450,7 +439,6 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for Immix<VM> {
             source,
             slot,
             object,
-            worker,
         )
     }
 }

@@ -343,6 +343,21 @@ pub trait ObjectModel<VM: VMBinding> {
         copy_context: &mut GCWorkerCopyContext<VM>,
     ) -> ObjectReference;
 
+    #[cfg(feature = "thread_local_gc")]
+    /// Copy an object and return the address of the new object. Usually in the implementation of this method,
+    /// `alloc_copy()` and `post_copy()` from [`GCWorkerCopyContext`](util/copy/struct.GCWorkerCopyContext.html)
+    /// are used for copying.
+    ///
+    /// Arguments:
+    /// * `from`: The address of the object to be copied.
+    /// * `semantics`: The copy semantic to use.
+    /// * `mutator`: The `Mutator` for the mutator thread.
+    fn thread_local_copy(
+        from: ObjectReference,
+        semantics: CopySemantics,
+        mutator: &mut crate::Mutator<VM>,
+    ) -> ObjectReference;
+
     /// Copy an object. This is required
     /// for delayed-copy collectors such as compacting collectors. During the
     /// collection, MMTk reserves a region in the heap for an object as per

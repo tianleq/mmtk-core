@@ -129,19 +129,19 @@ impl WorkerMonitor {
         }
     }
 
-    #[cfg(feature = "thread_local_gc")]
-    /// Wake up workers without waiting
-    /// This is called by the coordinator.
-    /// If `all` is true, notify all workers; otherwise only notify one worker.
-    pub fn resume(&self, all: bool) {
-        let mut sync = self.sync.lock().unwrap();
-        sync.worker_group_state = WorkerGroupState::Working;
-        if all {
-            self.work_available.notify_all();
-        } else {
-            self.work_available.notify_one();
-        }
-    }
+    // #[cfg(feature = "thread_local_gc")]
+    // /// Wake up workers without waiting
+    // /// This is called by the coordinator.
+    // /// If `all` is true, notify all workers; otherwise only notify one worker.
+    // pub fn resume(&self, all: bool) {
+    //     let mut sync = self.sync.lock().unwrap();
+    //     sync.worker_group_state = WorkerGroupState::Working;
+    //     if all {
+    //         self.work_available.notify_all();
+    //     } else {
+    //         self.work_available.notify_one();
+    //     }
+    // }
 
     /// Wake up workers and wait until they transition to `Sleeping` state again.
     /// This is called by the coordinator.

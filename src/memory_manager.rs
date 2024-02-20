@@ -998,8 +998,11 @@ pub fn mmtk_is_object_published<VM: VMBinding>(object: ObjectReference) -> bool 
 }
 
 #[cfg(feature = "thread_local_gc")]
-pub fn mmtk_handle_user_triggered_local_gc<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
-    mmtk.plan.handle_thread_local_collection(tls);
+pub fn mmtk_handle_user_triggered_local_gc<VM: VMBinding>(
+    mmtk: &'static MMTK<VM>,
+    tls: VMMutatorThread,
+) {
+    mmtk.plan.handle_thread_local_collection(tls, mmtk);
 }
 
 pub fn mmtk_handle_user_triggered_global_gc<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {

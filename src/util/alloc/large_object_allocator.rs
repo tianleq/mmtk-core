@@ -160,26 +160,15 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
             if self.space.is_live(object) {
                 live_objects.push(object);
             } else {
-                #[cfg(not(feature = "debug_publish_object"))]
                 // local/private objects also need to be reclaimed in a global gc
                 self.space.thread_local_sweep_large_object(object);
-                #[cfg(feature = "debug_publish_object")]
-                // local/private objects also need to be reclaimed in a global gc
-                self.space.thread_local_sweep_large_object(
-                    VMWorkerThread(VMThread::UNINITIALIZED),
-                    VMMutatorThread(self.tls),
-                    object,
-                );
             }
         }
         self.local_los_objects.extend(live_objects);
     }
 
     #[cfg(feature = "thread_local_gc")]
-    pub fn thread_local_release(
-        &mut self,
-        #[cfg(feature = "debug_publish_object")] worker_tls: VMWorkerThread,
-    ) {
+    pub fn thread_local_release(&mut self) {
         let mut live_objects = vec![];
         for object in self.local_los_objects.drain() {
             #[cfg(debug_assertions)]
@@ -192,14 +181,7 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
                 self.space.clear_thread_local_mark(object);
                 live_objects.push(object);
             } else {
-                #[cfg(not(feature = "debug_publish_object"))]
                 self.space.thread_local_sweep_large_object(object);
-                #[cfg(feature = "debug_publish_object")]
-                self.space.thread_local_sweep_large_object(
-                    worker_tls,
-                    VMMutatorThread(self.tls),
-                    object,
-                );
             }
         }
 

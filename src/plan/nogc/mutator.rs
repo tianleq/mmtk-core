@@ -1,4 +1,8 @@
 use crate::plan::barriers::NoBarrier;
+use crate::plan::mutator_context::generic_thread_local_alloc_copy;
+use crate::plan::mutator_context::generic_thread_local_post_copy;
+use crate::plan::mutator_context::generic_thread_local_prepare;
+use crate::plan::mutator_context::generic_thread_local_release;
 use crate::plan::mutator_context::Mutator;
 use crate::plan::mutator_context::MutatorConfig;
 use crate::plan::mutator_context::{
@@ -64,6 +68,14 @@ pub fn create_nogc_mutator<VM: VMBinding>(
         }),
         prepare_func: &nogc_mutator_noop,
         release_func: &nogc_mutator_noop,
+        #[cfg(feature = "thread_local_gc")]
+        thread_local_prepare_func: &generic_thread_local_prepare,
+        #[cfg(feature = "thread_local_gc")]
+        thread_local_release_func: &generic_thread_local_release,
+        #[cfg(feature = "thread_local_gc")]
+        thread_local_alloc_copy_func: &generic_thread_local_alloc_copy,
+        #[cfg(feature = "thread_local_gc")]
+        thread_local_post_copy_func: &generic_thread_local_post_copy,
     };
 
     Mutator {

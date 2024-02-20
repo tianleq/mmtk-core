@@ -179,10 +179,10 @@ pub trait Plan: 'static + Sync + Downcast {
     fn base_mut(&mut self) -> &mut BasePlan<Self::VM>;
     fn schedule_collection(&'static self, _scheduler: &GCWorkScheduler<Self::VM>);
     fn schedule_single_thread_collection(&'static self, _worker: &mut GCWorker<Self::VM>) {}
-    fn schedule_thread_local_collection(
+    fn do_thread_local_collection(
         &'static self,
         _tls: VMMutatorThread,
-        _worker: &mut GCWorker<Self::VM>,
+        _mmtk: &'static MMTK<Self::VM>,
     ) {
     }
     fn common(&self) -> &CommonPlan<Self::VM> {
@@ -270,8 +270,8 @@ pub trait Plan: 'static + Sync + Downcast {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    fn handle_thread_local_collection(&self, tls: VMMutatorThread) {
-        self.base().handle_thread_local_collection(tls);
+    fn handle_thread_local_collection(&self, tls: VMMutatorThread, mmtk: &'static MMTK<Self::VM>) {
+        self.base().handle_thread_local_collection(tls, mmtk);
     }
 
     // Note: The following methods are about page accounting. The default implementation should
@@ -645,11 +645,21 @@ impl<VM: VMBinding> BasePlan<VM> {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    pub fn handle_thread_local_collection(&self, tls: VMMutatorThread) {
+    pub fn handle_thread_local_collection(&self, tls: VMMutatorThread, mmtk: &'static MMTK<VM>) {
         self.user_triggered_collection
             .store(true, Ordering::Relaxed);
         if self.gc_requester.request_thread_local_gc(tls) {
-            VM::VMCollection::block_for_thread_local_gc(tls);
+            #[cfg(feature = "debug_publish_object")]
+            let id = crate::util::LOCAL_GC_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);
+
+            thread_local_gc_work::ExecuteThreadlocalCollection {
+                mmtk,
+                mutator_tls: tls,
+                start_time: std::time::Instant::now(),
+                #[cfg(feature = "debug_publish_object")]
+                id,
+            }
+            .execute()
         } else {
             // A global gc has already been triggered, so cannot do local gc,
             // instead, block and wait for global gc to finish
@@ -1030,7 +1040,6 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for BasePlan<VM> {
                 _mutator,
                 object,
                 None,
-                _worker
             );
         }
 
@@ -1041,7 +1050,6 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for BasePlan<VM> {
                 _mutator,
                 object,
                 None,
-                _worker
             );
         }
 
@@ -1052,7 +1060,6 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for BasePlan<VM> {
                 _mutator,
                 object,
                 None,
-                _worker
             );
         }
 
@@ -1063,7 +1070,6 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for BasePlan<VM> {
                 _mutator,
                 object,
                 None,
-                _worker
             );
         }
 
@@ -1073,11 +1079,10 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for BasePlan<VM> {
     #[cfg(feature = "debug_publish_object")]
     fn thread_local_trace_object<const KIND: TraceKind>(
         &self,
-        _mutator: &Mutator<VM>,
+        _mutator: &mut Mutator<VM>,
         _source: ObjectReference,
         _slot: VM::VMEdge,
         object: ObjectReference,
-        _worker: &mut GCWorker<VM>,
     ) -> ThreadlocalTracedObjectType {
         #[cfg(feature = "code_space")]
         if self.code_space.in_space(object) {
@@ -1087,7 +1092,6 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for BasePlan<VM> {
                 source,
                 object,
                 None,
-                _worker
             );
         }
 
@@ -1099,7 +1103,6 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for BasePlan<VM> {
                 source,
                 object,
                 None,
-                _worker
             );
         }
 
@@ -1111,7 +1114,6 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for BasePlan<VM> {
                 source,
                 object,
                 None,
-                _worker
             );
         }
 
@@ -1123,7 +1125,6 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for BasePlan<VM> {
                 source,
                 object,
                 None,
-                _worker
             );
         }
 
@@ -1338,11 +1339,11 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
     #[cfg(feature = "debug_publish_object")]
     fn thread_local_trace_object<const KIND: TraceKind>(
         &self,
-        mutator: &Mutator<VM>,
+        mutator: &mut Mutator<VM>,
         source: ObjectReference,
         slot: VM::VMEdge,
         object: ObjectReference,
-        worker: &mut GCWorker<VM>,
+        // worker: &mut GCWorker<VM>,
     ) -> ThreadlocalTracedObjectType {
         if self.immortal.in_space(object) {
             return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<
@@ -1354,7 +1355,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
                 slot,
                 object,
                 None,
-                worker
+
             );
         }
         if self.los.in_space(object) {
@@ -1365,7 +1366,6 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
                 slot,
                 object,
                 None,
-                worker
             );
         }
         if self.nonmoving.in_space(object) {
@@ -1376,11 +1376,11 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
                 slot,
                 object,
                 None,
-                worker
+
             );
         }
         <BasePlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
-            &self.base, mutator, source, slot, object, worker,
+            &self.base, mutator, source, slot, object,
         )
     }
 
@@ -1467,11 +1467,11 @@ pub trait PlanThreadlocalTraceObject<VM: VMBinding> {
     /// * `worker`: the GC worker that is tracing this object.
     fn thread_local_trace_object<const KIND: TraceKind>(
         &self,
-        mutator: &Mutator<VM>,
+        mutator: &mut Mutator<VM>,
         source: ObjectReference,
         slot: VM::VMEdge,
         object: ObjectReference,
-        worker: &mut GCWorker<VM>,
+        // worker: &mut GCWorker<VM>,
     ) -> ThreadlocalTracedObjectType;
 
     /// Post-scan objects in the plan. Each object is scanned by `VM::VMScanning::scan_object()`, and this function

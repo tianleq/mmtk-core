@@ -1,8 +1,6 @@
-use super::*;
 use crate::plan::PlanThreadlocalTraceObject;
 use crate::plan::ThreadlocalTracedObjectType::*;
 use crate::policy::gc_work::TraceKind;
-use crate::scheduler::gc_work::PrepareMutator;
 use crate::util::*;
 use crate::vm::edge_shape::Edge;
 use crate::vm::*;
@@ -10,17 +8,21 @@ use crate::*;
 use std::collections::VecDeque;
 use std::marker::PhantomData;
 
-pub struct ScheduleThreadlocalCollection {
+pub const THREAD_LOCAL_GC_ACTIVE: u32 = 1;
+pub const THREAD_LOCAL_GC_INACTIVE: u32 = 0;
+
+pub struct ExecuteThreadlocalCollection<VM: VMBinding> {
+    pub mmtk: &'static MMTK<VM>,
     pub mutator_tls: VMMutatorThread,
     pub start_time: std::time::Instant,
     #[cfg(feature = "debug_publish_object")]
     pub id: usize,
 }
 
-impl<VM: VMBinding> GCWork<VM> for ScheduleThreadlocalCollection {
-    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+impl<VM: VMBinding> ExecuteThreadlocalCollection<VM> {
+    pub fn execute(&mut self) {
         let mutator = VM::VMActivePlan::mutator(self.mutator_tls);
-        worker.gc_start = self.start_time;
+        mutator.thread_local_gc_status = THREAD_LOCAL_GC_ACTIVE;
         trace!(
             "ScheduleThreadlocalCollection {:?} executed by GC Thread {}",
             mutator.mutator_id,
@@ -32,14 +34,25 @@ impl<VM: VMBinding> GCWork<VM> for ScheduleThreadlocalCollection {
         // TODO: Depending on the OS scheduling, other workers can run so fast that they can finish
         // everything in the `Unconstrained` and the `Prepare` buckets before we execute the next
         // statement. Consider if there is a better place to call `on_gc_start`.
-        mmtk.plan
+        self.mmtk
+            .plan
             .base()
             .gc_trigger
             .policy
-            .on_thread_local_gc_start(mmtk);
+            .on_thread_local_gc_start(self.mmtk);
 
-        mmtk.plan
-            .schedule_thread_local_collection(self.mutator_tls, worker);
+        self.mmtk
+            .plan
+            .do_thread_local_collection(self.mutator_tls, self.mmtk);
+        let elapsed = self.start_time.elapsed();
+        mutator.thread_local_gc_status = THREAD_LOCAL_GC_INACTIVE;
+        info!(
+            "End of Thread local GC {} ({}/{} pages, took {} ms)",
+            mutator.mutator_id,
+            self.mmtk.plan.get_reserved_pages(),
+            self.mmtk.plan.get_total_pages(),
+            elapsed.as_millis()
+        );
     }
 }
 
@@ -50,29 +63,27 @@ impl<VM: VMBinding> GCWork<VM> for ScheduleThreadlocalCollection {
 /// We assume this work packet is the only running work packet that accesses plan, and there should
 /// be no other concurrent work packet that accesses plan (read or write). Otherwise, there may
 /// be a race condition.
-pub struct ThreadlocalPrepare<C: GCWorkContext> {
-    pub plan: &'static C::PlanType,
+pub struct ThreadlocalPrepare<VM: VMBinding> {
     tls: VMMutatorThread,
+    phantom: PhantomData<VM>,
 }
 
-impl<C: GCWorkContext> ThreadlocalPrepare<C> {
-    pub fn new(plan: &'static C::PlanType, tls: VMMutatorThread) -> Self {
-        Self { plan, tls }
-    }
-}
-
-impl<C: GCWorkContext + 'static> GCWork<C::VM> for ThreadlocalPrepare<C> {
-    fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
-        trace!("Thread local Prepare Mutator");
-        {
-            let mutator = <C::VM as VMBinding>::VMActivePlan::mutator(self.tls);
-            PrepareMutator::<C::VM>::new(mutator).do_work(worker, mmtk);
+impl<VM: VMBinding> ThreadlocalPrepare<VM> {
+    pub fn new(tls: VMMutatorThread) -> Self {
+        Self {
+            tls,
+            phantom: PhantomData,
         }
-        let mutator = <C::VM as VMBinding>::VMActivePlan::mutator(self.tls);
+    }
+
+    pub fn execute(&mut self) {
+        trace!("Thread local Prepare Mutator");
+        let mutator = VM::VMActivePlan::mutator(self.tls);
+        mutator.thread_local_prepare();
+        // let mutator = <C::VM as VMBinding>::VMActivePlan::mutator(self.tls);
         // PrepareCollector.do_work(worker, mmtk);
-        trace!("Thread local Prepare Collector");
-        worker.get_copy_context_mut().thread_local_prepare(mutator);
-        mmtk.plan.prepare_worker(worker);
+        // trace!("Thread local Prepare Collector");
+        // worker.get_copy_context_mut().thread_local_prepare(mutator);
     }
 }
 
@@ -83,60 +94,43 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for ThreadlocalPrepare<C> {
 /// We assume this work packet is the only running work packet that accesses plan, and there should
 /// be no other concurrent work packet that accesses plan (read or write). Otherwise, there may
 /// be a race condition.
-pub struct ThreadlocalRelease<C: GCWorkContext> {
-    pub plan: &'static C::PlanType,
+pub struct ThreadlocalRelease<VM: VMBinding> {
     tls: VMMutatorThread,
+    phantom: PhantomData<VM>,
 }
 
-impl<C: GCWorkContext> ThreadlocalRelease<C> {
-    pub fn new(plan: &'static C::PlanType, tls: VMMutatorThread) -> Self {
-        Self { plan, tls }
+impl<VM: VMBinding> ThreadlocalRelease<VM> {
+    pub fn new(tls: VMMutatorThread) -> Self {
+        Self {
+            phantom: PhantomData,
+            tls,
+        }
     }
-}
 
-impl<C: GCWorkContext + 'static> GCWork<C::VM> for ThreadlocalRelease<C> {
-    fn do_work(&mut self, worker: &mut GCWorker<C::VM>, _mmtk: &'static MMTK<C::VM>) {
+    pub fn execute(&mut self) {
         trace!("Thread local Release");
-        let mutator = <C::VM as VMBinding>::VMActivePlan::mutator(self.tls);
+        let mutator = VM::VMActivePlan::mutator(self.tls);
         // self.plan.base().gc_trigger.policy.on_gc_release(mmtk);
+
+        // Since now the mutator is doing the local gc, all allocation is
+        // done by the mutator itself, so the following is no longer valid/needed
 
         // Mutators need to be aware of all memory allocated by the collector
         // So collector must be released before mutator
-        trace!("Thread local Release Collector");
-        worker.get_copy_context_mut().thread_local_release(mutator);
+        // trace!("Thread local Release Collector");
+        // worker.get_copy_context_mut().thread_local_release(mutator);
 
         trace!("Thread local Release Mutator");
-        mutator.release(worker.tls);
+        mutator.thread_local_release();
     }
 }
 
-#[derive(Default)]
 pub struct EndOfThreadLocalGC {
-    pub elapsed: std::time::Duration,
     pub tls: VMMutatorThread,
 }
 
-impl<VM: VMBinding> GCWork<VM> for EndOfThreadLocalGC {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        #[cfg(debug_assertions)]
-        {
-            let mutator = VM::VMActivePlan::mutator(self.tls);
-            info!(
-                "End of Thread local GC {} ({}/{} pages, took {} ms)",
-                mutator.mutator_id,
-                mmtk.plan.get_reserved_pages(),
-                mmtk.plan.get_total_pages(),
-                self.elapsed.as_millis()
-            );
-        }
-        #[cfg(not(debug_assertions))]
-        trace!(
-            "End of Thread local GC ({}/{} pages, took {} ms)",
-            mmtk.plan.get_reserved_pages(),
-            mmtk.plan.get_total_pages(),
-            self.elapsed.as_millis()
-        );
-
+impl EndOfThreadLocalGC {
+    pub fn execute<VM: VMBinding>(&mut self, mmtk: &'static MMTK<VM>) {
         #[cfg(feature = "extreme_assertions")]
         if crate::util::edge_logger::should_check_duplicate_edges(&*mmtk.plan) {
             // reset the logging info at the end of each GC
@@ -149,22 +143,19 @@ impl<VM: VMBinding> GCWork<VM> for EndOfThreadLocalGC {
             .policy
             .on_thread_local_gc_end(mmtk);
 
-        // Reset the triggering information.
-        mmtk.plan.base().reset_collection_trigger();
-
         <VM as VMBinding>::VMCollection::resume_from_thread_local_gc(self.tls);
     }
 }
 
 /// Scan a specific mutator
-#[derive(Default)]
 pub struct ScanMutator<VM, Closure>
 where
     VM: VMBinding,
     Closure: ThreadlocalObjectGraphTraversalClosure<VM>,
 {
     tls: VMMutatorThread,
-    phantom: PhantomData<(VM, Closure)>,
+    mmtk: &'static MMTK<VM>,
+    phantom: PhantomData<Closure>,
 }
 
 impl<VM, Closure> ScanMutator<VM, Closure>
@@ -172,63 +163,53 @@ where
     VM: VMBinding,
     Closure: ThreadlocalObjectGraphTraversalClosure<VM>,
 {
-    pub fn new(tls: VMMutatorThread) -> Self {
+    pub fn new(tls: VMMutatorThread, mmtk: &'static MMTK<VM>) -> Self {
         Self {
             tls,
+            mmtk,
             phantom: PhantomData,
         }
     }
 
-    pub fn scan_mutator(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+    pub fn execute(&mut self) {
         trace!("scan_mutator start");
-        mmtk.plan.base().prepare_for_stack_scanning();
+        self.mmtk.plan.base().prepare_for_stack_scanning();
         let object_graph_traversal =
-            ThreadlocalObjectGraphTraversal::<'_, VM, Closure>::new(mmtk, self.tls, worker);
+            ThreadlocalObjectGraphTraversal::<VM, Closure>::new(self.mmtk, self.tls);
         VM::VMCollection::scan_mutator(self.tls, object_graph_traversal);
         trace!("scan_mutator end");
     }
 }
 
-pub struct ThreadlocalObjectGraphTraversal<'a, VM, Closure>
+pub struct ThreadlocalObjectGraphTraversal<VM, Closure>
 where
     VM: VMBinding,
     Closure: ThreadlocalObjectGraphTraversalClosure<VM>,
 {
     mmtk: &'static MMTK<VM>,
     tls: VMMutatorThread,
-    // Use raw pointer for fast pointer dereferencing, instead of using `Option<&'static mut GCWorker<E::VM>>`.
-    // Because a copying gc will dereference this pointer at least once for every object copy.
-    worker: &'a mut GCWorker<VM>,
     phantom: PhantomData<Closure>,
 }
 
-impl<'a, VM, Closure> ObjectGraphTraversal<VM::VMEdge>
-    for ThreadlocalObjectGraphTraversal<'a, VM, Closure>
+impl<VM, Closure> ObjectGraphTraversal<VM::VMEdge> for ThreadlocalObjectGraphTraversal<VM, Closure>
 where
     VM: VMBinding,
     Closure: ThreadlocalObjectGraphTraversalClosure<VM>,
 {
     fn traverse_from_roots(&mut self, root_slots: Vec<VM::VMEdge>) {
-        let mutator = VM::VMActivePlan::mutator(self.tls);
-
-        Closure::new(self.mmtk, self.tls, self.worker, Some(root_slots)).do_closure();
+        Closure::new(self.mmtk, self.tls, Some(root_slots)).do_closure();
     }
 }
 
-impl<'a, VM, Closure> ThreadlocalObjectGraphTraversal<'a, VM, Closure>
+impl<VM, Closure> ThreadlocalObjectGraphTraversal<VM, Closure>
 where
     VM: VMBinding,
     Closure: ThreadlocalObjectGraphTraversalClosure<VM>,
 {
-    pub fn new(
-        mmtk: &'static MMTK<VM>,
-        tls: VMMutatorThread,
-        worker: &'a mut GCWorker<VM>,
-    ) -> Self {
+    pub fn new(mmtk: &'static MMTK<VM>, tls: VMMutatorThread) -> Self {
         Self {
             mmtk,
             tls,
-            worker,
             phantom: PhantomData,
         }
     }
@@ -241,7 +222,6 @@ pub trait ThreadlocalObjectGraphTraversalClosure<VM: VMBinding>: EdgeVisitor<VM:
     fn new(
         mmtk: &'static MMTK<VM>,
         tls: VMMutatorThread,
-        worker: &mut GCWorker<VM>,
         root_slots: Option<Vec<VM::VMEdge>>,
     ) -> Self;
 }
@@ -256,9 +236,6 @@ pub struct PlanThreadlocalObjectGraphTraversalClosure<
     edge_buffer: VecDeque<VM::VMEdge>,
     #[cfg(feature = "debug_publish_object")]
     source_buffer: VecDeque<ObjectReference>,
-    // Use raw pointer for fast pointer dereferencing, instead of using `Option<&'static mut GCWorker<E::VM>>`.
-    // Because a copying gc will dereference this pointer at least once for every object copy.
-    worker: *mut GCWorker<VM>,
 }
 
 impl<VM, P, const KIND: TraceKind> ThreadlocalObjectGraphTraversalClosure<VM>
@@ -270,7 +247,6 @@ where
     fn new(
         mmtk: &'static MMTK<VM>,
         tls: VMMutatorThread,
-        worker: &mut GCWorker<VM>,
         root_slots: Option<Vec<VM::VMEdge>>,
     ) -> Self {
         let mut edge_buffer = VecDeque::new();
@@ -293,7 +269,6 @@ where
             edge_buffer,
             #[cfg(feature = "debug_publish_object")]
             source_buffer,
-            worker,
         }
     }
 
@@ -304,14 +279,15 @@ where
             "slots len != object len"
         );
         let mutator = VM::VMActivePlan::mutator(self.tls);
-        for r in &self.edge_buffer {
-            info!(
-                "req: {} | root slot: {:?} --> object: {:?}",
-                mutator.request_id,
-                *r,
-                r.load()
-            );
-        }
+        // #[cfg(feature = "debug_publish_object")]
+        // for r in &self.edge_buffer {
+        //     info!(
+        //         "req: {} | root slot: {:?} --> object: {:?}",
+        //         mutator.request_id,
+        //         *r,
+        //         r.load()
+        //     );
+        // }
         while !self.edge_buffer.is_empty() {
             let slot = self.edge_buffer.pop_front().unwrap();
             #[cfg(feature = "debug_publish_object")]
@@ -335,13 +311,10 @@ where
                 };
 
             #[cfg(feature = "debug_publish_object")]
-            let new_object = match self.plan.thread_local_trace_object::<KIND>(
-                mutator,
-                _source,
-                slot,
-                object,
-                self.worker(),
-            ) {
+            let new_object = match self
+                .plan
+                .thread_local_trace_object::<KIND>(mutator, _source, slot, object)
+            {
                 Scanned(new_object) => {
                     if crate::util::public_bit::is_public::<VM>(object) {
                         assert!(
@@ -350,19 +323,6 @@ where
                             object,
                             new_object
                         );
-                        if mutator.request_id >= 4 {
-                            info!(
-                                "scanned | req: {} source: {:?} --> public object: {:?}",
-                                mutator.request_id, _source, new_object
-                            );
-                        }
-                    } else {
-                        if mutator.request_id >= 4 {
-                            info!(
-                                "scanned | req: {} source: {:?} --> private object: {:?}",
-                                mutator.request_id, _source, new_object
-                            );
-                        }
                     }
 
                     new_object
@@ -374,7 +334,11 @@ where
                             mutator.request_id, _source, new_object
                         );
                     }
-                    VM::VMScanning::scan_object(self.worker().tls, new_object, self);
+                    VM::VMScanning::scan_object(
+                        VMWorkerThread(VMThread::UNINITIALIZED), // worker tls is not being used by the openjdk binding
+                        new_object,
+                        self,
+                    );
                     self.plan.thread_local_post_scan_object(mutator, new_object);
                     new_object
                 }
@@ -438,7 +402,6 @@ where
             object,
             VM::VMObjectModel::null_slot(),
             object,
-            self.worker(),
         ) {
             Scanned(new_object) => {
                 debug_assert!(
@@ -449,7 +412,11 @@ where
                 new_object
             }
             ToBeScanned(new_object) => {
-                VM::VMScanning::scan_object(self.worker().tls, new_object, self);
+                VM::VMScanning::scan_object(
+                    VMWorkerThread(VMThread::UNINITIALIZED),
+                    new_object,
+                    self,
+                );
                 self.plan.thread_local_post_scan_object(mutator, new_object);
                 new_object
             }
@@ -483,7 +450,6 @@ where
             object,
             VM::VMObjectModel::null_slot(),
             object,
-            self.worker(),
         ) {
             Scanned(new_object) => new_object,
             _ => {
@@ -526,14 +492,6 @@ impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIN
     }
 }
 
-impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind>
-    PlanThreadlocalObjectGraphTraversalClosure<VM, P, KIND>
-{
-    pub fn worker(&self) -> &'static mut GCWorker<VM> {
-        unsafe { &mut *self.worker }
-    }
-}
-
 pub struct ThreadlocalFinalization<VM, Closure>
 where
     VM: VMBinding,
@@ -541,9 +499,9 @@ where
 {
     mmtk: &'static MMTK<VM>,
     tls: VMMutatorThread,
-    // Use raw pointer for fast pointer dereferencing, instead of using `Option<&'static mut GCWorker<E::VM>>`.
-    // Because a copying gc will dereference this pointer at least once for every object copy.
-    worker: *mut GCWorker<VM>,
+    // // Use raw pointer for fast pointer dereferencing, instead of using `Option<&'static mut GCWorker<E::VM>>`.
+    // // Because a copying gc will dereference this pointer at least once for every object copy.
+    // worker: *mut GCWorker<VM>,
     phantom: PhantomData<Closure>,
 }
 
@@ -552,22 +510,22 @@ where
     VM: VMBinding,
     Closure: ThreadlocalObjectGraphTraversalClosure<VM>,
 {
-    pub fn new(mmtk: &'static MMTK<VM>, tls: VMMutatorThread, worker: &mut GCWorker<VM>) -> Self {
+    pub fn new(tls: VMMutatorThread, mmtk: &'static MMTK<VM>) -> Self {
         Self {
             mmtk,
             tls,
-            worker,
+            // worker,
             phantom: PhantomData,
         }
     }
 
-    pub fn worker(&self) -> &'static mut GCWorker<VM> {
-        unsafe { &mut *self.worker }
-    }
+    // pub fn worker(&self) -> &'static mut GCWorker<VM> {
+    //     unsafe { &mut *self.worker }
+    // }
 
     pub fn do_finalization(&self) {
         let mutator = VM::VMActivePlan::mutator(self.tls);
-        let mut closure = Closure::new(self.mmtk, self.tls, self.worker(), None);
+        let mut closure = Closure::new(self.mmtk, self.tls, None);
         let mut ready_for_finalize = vec![];
         for mut f in mutator
             .finalizable_candidates
@@ -606,6 +564,10 @@ where
         finalizable_processor.add_ready_for_finalize_objects(ready_for_finalize);
 
         // Maybe should leave this to the global gc ???
-        VM::VMCollection::schedule_finalization(self.worker().tls);
+        // Finalization thread is expecting a gc thread to wake it up, since
+        // local gc is done by the mutator itself, finalization cannot be done after a
+        // local gc.
+
+        // VM::VMCollection::schedule_finalization(VMWorkerThread(VMThread::UNINITIALIZED));
     }
 }

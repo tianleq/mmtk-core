@@ -315,3 +315,141 @@ impl std::default::Default for CopySelector {
         CopySelector::Unused
     }
 }
+
+#[cfg(feature = "thread_local_gc")]
+/// The thread local struct for each GC worker for copying. Each GC worker should include
+/// one instance of this struct for copying operations.
+pub struct ThreadlocalGCCopyContext<VM: VMBinding> {
+    /// Copy allocators for ImmixSpace
+    pub immix: [MaybeUninit<ImmixCopyContext<VM>>; MAX_IMMIX_COPY_ALLOCATORS],
+    /// The config for the plan
+    config: CopyConfig<VM>,
+}
+
+impl<VM: VMBinding> ThreadlocalGCCopyContext<VM> {
+    /// Allocate for the object for GC copying.
+    ///
+    /// Arguments:
+    /// * `original`: The original object that will be copied.
+    /// * `bytes`: The size in bytes for the allocation.
+    /// * `align`: The alignment in bytes for the allocation.
+    /// * `offset`: The offset in bytes for the allocation.
+    /// * `semantics`: The copy semantic for this coying allocation.
+    ///   It determins which copy allocator will be used for the copying.
+    pub fn alloc_copy(
+        &mut self,
+        original: ObjectReference,
+        bytes: usize,
+        align: usize,
+        offset: usize,
+        semantics: CopySemantics,
+    ) -> Address {
+        #[cfg(debug_assertions)]
+        if bytes > self.config.constraints.max_non_los_default_alloc_bytes {
+            warn!(
+                "Attempted to copy an object of {} bytes (> {}) which should be allocated with LOS and not be copied.",
+                bytes, self.config.constraints.max_non_los_default_alloc_bytes
+            );
+        }
+        match self.config.copy_mapping[semantics] {
+            CopySelector::Immix(index) => unsafe { self.immix[index as usize].assume_init_mut() }
+                .alloc_copy(original, bytes, align, offset),
+            _ => unreachable!(),
+        }
+    }
+
+    /// Post allocation after allocating an object.
+    ///
+    /// Arguments:
+    /// * `object`: The newly allocated object (the new object after copying).
+    /// * `bytes`: The size of the object in bytes.
+    /// * `semantics`: The copy semantic used for the copying.
+    pub fn post_copy(&mut self, object: ObjectReference, bytes: usize, semantics: CopySemantics) {
+        // Clear forwarding bits.
+        object_forwarding::clear_forwarding_bits::<VM>(object);
+        // If we are copying objects in mature space, we would need to mark the object as mature.
+        if semantics.is_mature() && self.config.constraints.needs_log_bit {
+            // If the plan uses unlogged bit, we set the unlogged bit (the object is unlogged/mature)
+            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                .mark_byte_as_unlogged::<VM>(object, Ordering::Relaxed);
+        }
+        // Policy specific post copy.
+        match self.config.copy_mapping[semantics] {
+            CopySelector::Immix(index) => {
+                unsafe { self.immix[index as usize].assume_init_mut() }.post_copy(object, bytes)
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    /// Release the copying allocators.
+    pub fn thread_local_prepare(&mut self, mutator: &'static Mutator<VM>) {
+        // Delegate to release() for each policy copy context
+
+        for (_, selector) in self.config.copy_mapping.iter() {
+            match selector {
+                CopySelector::Immix(index) => {
+                    unsafe { self.immix[*index as usize].assume_init_mut() }
+                        .thread_local_prepare(mutator)
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    /// Release the copying allocators.
+    pub fn thread_local_release<'a>(&mut self, mutator: &'a mut Mutator<VM>) {
+        // Delegate to release() for each policy copy context
+
+        for (_, selector) in self.config.copy_mapping.iter() {
+            match selector {
+                CopySelector::Immix(index) => {
+                    unsafe { self.immix[*index as usize].assume_init_mut() }
+                        .thread_local_release(mutator)
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    /// Create a ThreadlocalGCCopyContext based on the configuration for a copying plan.
+    ///
+    /// Arguments:
+    /// * `worker_tls`: The worker thread for this copy context.
+    /// * `plan`: A reference to the current plan.
+    /// * `config`: The configuration for the copy context.
+    pub fn new(
+        worker_tls: VMWorkerThread,
+        plan: &'static dyn Plan<VM = VM>,
+        config: CopyConfig<VM>,
+    ) -> Self {
+        let mut ret = ThreadlocalGCCopyContext {
+            immix: unsafe { MaybeUninit::uninit().assume_init() },
+            config,
+        };
+
+        // Initiate the copy context for each policy based on the space mapping.
+        for &(selector, space) in ret.config.space_mapping.iter() {
+            match selector {
+                CopySelector::Immix(index) => {
+                    ret.immix[index as usize].write(ImmixCopyContext::new(
+                        worker_tls,
+                        plan,
+                        space.downcast_ref::<ImmixSpace<VM>>().unwrap(),
+                    ));
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        ret
+    }
+
+    /// Create a stub GCWorkerCopyContext for non copying plans.
+    pub fn new_non_copy() -> Self {
+        ThreadlocalGCCopyContext {
+            immix: unsafe { MaybeUninit::uninit().assume_init() },
+            config: CopyConfig::default(),
+        }
+    }
+}

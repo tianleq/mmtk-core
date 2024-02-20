@@ -80,7 +80,7 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
                     VM::VMCollection::block_for_gc(VMMutatorThread(tls)); // We have checked that this is mutator
                 } else {
                     #[cfg(feature = "thread_local_gc")]
-                    VM::VMCollection::block_for_thread_local_gc(VMMutatorThread(tls));
+                    {}
                     #[cfg(not(feature = "thread_local_gc"))]
                     panic!("thread local gc feature is not enabled");
                 }

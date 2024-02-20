@@ -67,15 +67,6 @@ pub trait Collection<VM: VMBinding> {
     );
 
     #[cfg(feature = "thread_local_gc")]
-    /// Block the current thread for a thread local GC. This is called when an allocation request cannot be fulfilled and a GC
-    /// is needed. MMTk calls this method to inform the VM that the current thread needs to be blocked as a GC
-    /// is going to happen. Then MMTk starts a GC.
-    ///
-    /// Arguments:
-    /// * `tls`: The current thread pointer that should be blocked. The VM can optionally check if the current thread matches `tls`.
-    fn block_for_thread_local_gc(tls: VMMutatorThread);
-
-    #[cfg(feature = "thread_local_gc")]
     /// Resume the mutator triggering the local gc. When a local GC is finished, MMTk calls this method.
     ///
     /// Arguments:

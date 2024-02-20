@@ -1,9 +1,7 @@
 use crate::util::{VMMutatorThread, VMThread};
-// #[cfg(feature = "thread_local_gc")]
-// use crate::vm::Collection;
 use crate::vm::VMBinding;
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
 
 struct RequestSync {
@@ -87,27 +85,27 @@ impl<VM: VMBinding> GCRequester<VM> {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    pub fn request_thread_local_gc(&self, tls: VMMutatorThread) -> bool {
+    pub fn request_thread_local_gc(&self, _tls: VMMutatorThread) -> bool {
         // If global gc has been requested, then skip the local gc
         if self.request_flag.load(Ordering::Relaxed) {
             return false;
         }
 
-        let mut guard = self.request_sync.lock().unwrap();
+        let guard = self.request_sync.lock().unwrap();
 
         if guard.global_gc_requested {
             // If global gc has been requested, then skip the local gc
             false
         } else {
-            let req = GCRequest {
-                single_thread: true,
-                thread_local: true,
-                tls,
-            };
-            guard.thread_local_request_count += 1;
-            guard.thread_local_requests.push(req);
+            // let req = GCRequest {
+            //     single_thread: true,
+            //     thread_local: true,
+            //     tls,
+            // };
+            // guard.thread_local_request_count += 1;
+            // guard.thread_local_requests.push(req);
 
-            self.request_condvar.notify_all();
+            // self.request_condvar.notify_all();
             true
         }
     }
@@ -145,11 +143,11 @@ impl<VM: VMBinding> GCRequester<VM> {
 
     #[cfg(feature = "thread_local_gc")]
     pub fn thread_local_gc_end(&self) {
-        let mut guard = self.request_sync.lock().unwrap();
-        guard.thread_local_request_count -= 1;
-        if guard.thread_local_request_count == 0 && guard.global_gc_requested {
-            self.request_condvar.notify_all();
-        }
+        // let mut guard = self.request_sync.lock().unwrap();
+        // guard.thread_local_request_count -= 1;
+        // if guard.thread_local_request_count == 0 && guard.global_gc_requested {
+        //     self.request_condvar.notify_all();
+        // }
     }
 
     #[cfg(not(feature = "thread_local_gc"))]

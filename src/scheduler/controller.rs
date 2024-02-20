@@ -8,11 +8,7 @@ use std::sync::Arc;
 use crate::plan::gc_requester::GCRequester;
 use crate::scheduler::gc_work::{EndOfGC, ScheduleCollection};
 use crate::scheduler::single_thread_gc_work::ScheduleSingleThreadCollection;
-#[cfg(feature = "thread_local_gc")]
-use crate::scheduler::thread_local_gc_work::ScheduleThreadlocalCollection;
 use crate::scheduler::{GCWork, WorkBucketStage};
-#[cfg(feature = "thread_local_gc")]
-use crate::util::VMMutatorThread;
 use crate::util::VMWorkerThread;
 use crate::vm::VMBinding;
 use crate::MMTK;
@@ -75,7 +71,7 @@ impl<VM: VMBinding> GCController<VM> {
                         );
                         thread_local_gc_requested = true;
                     }
-                    self.do_thread_local_gc_until_completion(req.tls);
+                    // self.do_thread_local_gc_until_completion(req.tls);
                 } else {
                     #[cfg(debug_assertions)]
                     {
@@ -182,23 +178,23 @@ impl<VM: VMBinding> GCController<VM> {
         false
     }
 
-    #[cfg(feature = "thread_local_gc")]
-    /// Coordinate workers to perform GC in response to a GC request.
-    pub fn do_thread_local_gc_until_completion(&mut self, tls: VMMutatorThread) {
-        let gc_start = std::time::Instant::now();
-        #[cfg(feature = "debug_publish_object")]
-        let id = crate::util::LOCAL_GC_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);
-        self.scheduler.work_buckets[WorkBucketStage::Unconstrained].add(
-            ScheduleThreadlocalCollection {
-                mutator_tls: tls,
-                start_time: gc_start,
-                #[cfg(feature = "debug_publish_object")]
-                id,
-            },
-        );
+    // #[cfg(feature = "thread_local_gc")]
+    // /// Coordinate workers to perform GC in response to a GC request.
+    // pub fn do_thread_local_gc_until_completion(&mut self, tls: VMMutatorThread) {
+    //     let gc_start = std::time::Instant::now();
+    //     #[cfg(feature = "debug_publish_object")]
+    //     let id = crate::util::LOCAL_GC_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);
+    //     self.scheduler.work_buckets[WorkBucketStage::Unconstrained].add(
+    //         ExecuteThreadlocalCollection {
+    //             mutator_tls: tls,
+    //             start_time: gc_start,
+    //             #[cfg(feature = "debug_publish_object")]
+    //             id,
+    //         },
+    //     );
 
-        // Notify only one worker at this time because there is only one work packet,
-        // namely `ScheduleCollection`.
-        self.scheduler.worker_monitor.resume(false);
-    }
+    //     // Notify only one worker at this time because there is only one work packet,
+    //     // namely `ScheduleCollection`.
+    //     self.scheduler.worker_monitor.resume(false);
+    // }
 }

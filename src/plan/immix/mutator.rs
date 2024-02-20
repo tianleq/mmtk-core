@@ -15,15 +15,10 @@ use crate::vm::VMBinding;
 use crate::MMTK;
 use enum_map::EnumMap;
 
-#[cfg(feature = "thread_local_gc")]
-const THREAD_LOCAL_GC_ACTIVE: u32 = 1;
-
 pub fn immix_mutator_prepare<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {
     #[cfg(feature = "thread_local_gc")]
     use crate::util::alloc::LargeObjectAllocator;
     let allocators: &mut Allocators<VM> = mutator.allocators.borrow_mut();
-    #[cfg(feature = "thread_local_gc")]
-    let thread_local_gc_active = mutator.thread_local_gc_status == THREAD_LOCAL_GC_ACTIVE;
 
     let immix_allocator = unsafe {
         allocators.get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
@@ -31,34 +26,16 @@ pub fn immix_mutator_prepare<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMW
     .downcast_mut::<ImmixAllocator<VM>>()
     .unwrap();
     immix_allocator.reset();
+
     #[cfg(feature = "thread_local_gc")]
     {
-        #[cfg(feature = "debug_publish_object")]
-        {
-            println!(
-                "####################### immix_mutator_prepare | req: {},  local gc active: {:?} | address: {:?} ###########################",
-                mutator.request_id, mutator.thread_local_gc_status, &mutator.thread_local_gc_status as *const u32
-            )
-        }
-        // let thread_local_gc_active = mutator.thread_local_gc_status == THREAD_LOCAL_GC_ACTIVE;
-        if thread_local_gc_active {
-            immix_allocator.thread_local_prepare();
-        } else {
-            immix_allocator.prepare();
-        }
-    }
-    #[cfg(feature = "thread_local_gc")]
-    {
+        immix_allocator.prepare();
         let los_allocator: &mut LargeObjectAllocator<VM> = unsafe {
             allocators.get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Los])
         }
         .downcast_mut::<LargeObjectAllocator<VM>>()
         .unwrap();
-        if thread_local_gc_active {
-            los_allocator.thread_local_prepare();
-        } else {
-            los_allocator.prepare();
-        }
+        los_allocator.prepare();
     }
 }
 
@@ -66,42 +43,131 @@ pub fn immix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMW
     #[cfg(feature = "thread_local_gc")]
     use crate::util::alloc::LargeObjectAllocator;
     let allocators: &mut Allocators<VM> = mutator.allocators.borrow_mut();
+
+    let immix_allocator = unsafe {
+        allocators.get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
+    }
+    .downcast_mut::<ImmixAllocator<VM>>()
+    .unwrap();
+    immix_allocator.reset();
+
     #[cfg(feature = "thread_local_gc")]
-    let thread_local_gc_active = mutator.thread_local_gc_status == THREAD_LOCAL_GC_ACTIVE;
     {
-        let immix_allocator = unsafe {
-            allocators
-                .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
-        }
-        .downcast_mut::<ImmixAllocator<VM>>()
-        .unwrap();
-        immix_allocator.reset();
-        #[cfg(feature = "thread_local_gc")]
         // For a thread local gc, it needs to sweep blocks
         // A global gc has dedicated work packets(SweepChunk) of sweeping blocks,
         // so no need to do it here
-        if thread_local_gc_active {
-            immix_allocator.thread_local_release();
-        } else {
-            immix_allocator.release();
-        }
-    }
-    #[cfg(feature = "thread_local_gc")]
-    {
+        immix_allocator.release();
         let los_allocator: &mut LargeObjectAllocator<VM> = unsafe {
             allocators.get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Los])
         }
         .downcast_mut::<LargeObjectAllocator<VM>>()
         .unwrap();
-        if thread_local_gc_active {
-            #[cfg(not(feature = "debug_publish_object"))]
-            los_allocator.thread_local_release();
-            #[cfg(feature = "debug_publish_object")]
-            los_allocator.thread_local_release(_tls);
-        } else {
-            los_allocator.release();
-        }
+        los_allocator.release();
     }
+}
+
+#[cfg(feature = "thread_local_gc")]
+pub fn immix_mutator_thread_local_prepare<VM: VMBinding>(mutator: &mut Mutator<VM>) {
+    use crate::util::alloc::LargeObjectAllocator;
+    let allocators: &mut Allocators<VM> = mutator.allocators.borrow_mut();
+
+    let immix_allocator = unsafe {
+        allocators.get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
+    }
+    .downcast_mut::<ImmixAllocator<VM>>()
+    .unwrap();
+    immix_allocator.reset();
+    immix_allocator.thread_local_prepare();
+    let los_allocator: &mut LargeObjectAllocator<VM> = unsafe {
+        allocators.get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Los])
+    }
+    .downcast_mut::<LargeObjectAllocator<VM>>()
+    .unwrap();
+    los_allocator.thread_local_prepare();
+}
+
+#[cfg(feature = "thread_local_gc")]
+pub fn immix_mutator_thread_local_release<VM: VMBinding>(mutator: &mut Mutator<VM>) {
+    use crate::util::alloc::LargeObjectAllocator;
+    let allocators: &mut Allocators<VM> = mutator.allocators.borrow_mut();
+
+    let immix_allocator = unsafe {
+        allocators.get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
+    }
+    .downcast_mut::<ImmixAllocator<VM>>()
+    .unwrap();
+    immix_allocator.reset();
+    immix_allocator.thread_local_release();
+    let los_allocator: &mut LargeObjectAllocator<VM> = unsafe {
+        allocators.get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Los])
+    }
+    .downcast_mut::<LargeObjectAllocator<VM>>()
+    .unwrap();
+    los_allocator.thread_local_release();
+}
+
+#[cfg(feature = "thread_local_gc")]
+pub fn immix_mutator_thread_local_alloc_copy<VM: VMBinding>(
+    mutator: &mut Mutator<VM>,
+    bytes: usize,
+    align: usize,
+    offset: usize,
+) -> crate::util::Address {
+    // {
+    //     if crate::util::public_bit::is_public::<VM>(_original) {
+    //         let result = self
+    //             .public_object_allocator
+    //             .alloc_as_collector(bytes, align, offset);
+    //         result
+    //     } else {
+    //         // This branch will only be taken in a local gc and private objects
+    //         // can only live in a block of the same owner
+
+    //         self.allocator.local_line_mark_state = self.local_line_mark_state.unwrap();
+    //         self.allocator.local_unavailable_line_mark_state =
+    //             self.local_unavailable_line_mark_state.unwrap();
+
+    //         #[cfg(debug_assertions)]
+    //         {
+    //             let block = Block::containing::<VM>(_original);
+    //             let mutator_id = block.owner();
+    //             debug_assert!(
+    //                 mutator_id == self.allocator.get_mutator(),
+    //                 "mutator_id: {}, allocator.mutator_id: {}",
+    //                 mutator_id,
+    //                 self.allocator.get_mutator()
+    //             );
+    //         }
+    //         self.allocator
+    //             .alloc_as_mutator(self.allocator.get_mutator(), bytes, align, offset)
+    //     }
+    // }
+
+    use crate::util::alloc::Allocator;
+    let allocators: &mut Allocators<VM> = mutator.allocators.borrow_mut();
+
+    let immix_allocator: &mut ImmixAllocator<VM> = unsafe {
+        allocators.get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
+    }
+    .downcast_mut::<ImmixAllocator<VM>>()
+    .unwrap();
+    immix_allocator.alloc(bytes, align, offset)
+}
+
+#[cfg(feature = "thread_local_gc")]
+fn immix_mutator_thread_local_post_copy<VM: VMBinding>(
+    mutator: &mut Mutator<VM>,
+    obj: crate::util::ObjectReference,
+    bytes: usize,
+) {
+    let allocators: &mut Allocators<VM> = mutator.allocators.borrow_mut();
+
+    let immix_allocator: &mut ImmixAllocator<VM> = unsafe {
+        allocators.get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
+    }
+    .downcast_mut::<ImmixAllocator<VM>>()
+    .unwrap();
+    immix_allocator.immix_space().post_copy(obj, bytes)
 }
 
 pub(in crate::plan) const RESERVED_ALLOCATORS: ReservedAllocators = ReservedAllocators {
@@ -132,13 +198,17 @@ pub fn create_immix_mutator<VM: VMBinding>(
         }),
         prepare_func: &immix_mutator_prepare,
         release_func: &immix_mutator_release,
+        #[cfg(feature = "thread_local_gc")]
+        thread_local_prepare_func: &immix_mutator_thread_local_prepare,
+        #[cfg(feature = "thread_local_gc")]
+        thread_local_release_func: &immix_mutator_thread_local_release,
+        thread_local_alloc_copy_func: &immix_mutator_thread_local_alloc_copy,
+        thread_local_post_copy_func: &immix_mutator_thread_local_post_copy,
     };
     let mutator_id = crate::util::MUTATOR_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);
     #[cfg(feature = "public_bit")]
     let barrier = Box::new(PublicObjectMarkingBarrier::new(
         PublicObjectMarkingBarrierSemantics::new(mmtk),
-        #[cfg(feature = "debug_publish_object")]
-        mutator_tls,
     ));
     #[cfg(not(feature = "public_bit"))]
     let barrier = Box::new(NoBarrier);

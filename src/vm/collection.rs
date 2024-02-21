@@ -66,12 +66,12 @@ pub trait Collection<VM: VMBinding> {
         object_graph_traversal_func: impl ObjectGraphTraversal<VM::VMEdge>,
     );
 
-    #[cfg(feature = "thread_local_gc")]
-    /// Resume the mutator triggering the local gc. When a local GC is finished, MMTk calls this method.
-    ///
-    /// Arguments:
-    /// * `tls`: The thread pointer of the mutator.
-    fn resume_from_thread_local_gc(tls: VMMutatorThread);
+    // #[cfg(feature = "thread_local_gc")]
+    // /// Resume the mutator triggering the local gc. When a local GC is finished, MMTk calls this method.
+    // ///
+    // /// Arguments:
+    // /// * `tls`: The thread pointer of the mutator.
+    // fn resume_from_thread_local_gc(tls: VMMutatorThread);
 
     // #[cfg(feature = "thread_local_gc")]
     // /// Block the current thread, waiting for all on-the-fly thread local gc to finish

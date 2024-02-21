@@ -1,8 +1,6 @@
 use crate::util::Address;
 use crate::util::ObjectReference;
 use crate::vm::VMBinding;
-#[cfg(feature = "thread_local_gc")]
-use crate::Mutator;
 
 /// A GC worker's copy allocator for copying GCs.
 /// Each copying policy should provide their implementation of PolicyCopyContext.
@@ -25,8 +23,4 @@ pub trait PolicyCopyContext: 'static + Send {
         offset: usize,
     ) -> Address;
     fn post_copy(&mut self, _obj: ObjectReference, _bytes: usize) {}
-    #[cfg(feature = "thread_local_gc")]
-    fn thread_local_prepare(&mut self, _mutator: &'static Mutator<Self::VM>) {}
-    #[cfg(feature = "thread_local_gc")]
-    fn thread_local_release<'a>(&mut self, _mutator: &'a mut Mutator<Self::VM>) {}
 }

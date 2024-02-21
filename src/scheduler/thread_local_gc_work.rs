@@ -80,10 +80,6 @@ impl<VM: VMBinding> ThreadlocalPrepare<VM> {
         trace!("Thread local Prepare Mutator");
         let mutator = VM::VMActivePlan::mutator(self.tls);
         mutator.thread_local_prepare();
-        // let mutator = <C::VM as VMBinding>::VMActivePlan::mutator(self.tls);
-        // PrepareCollector.do_work(worker, mmtk);
-        // trace!("Thread local Prepare Collector");
-        // worker.get_copy_context_mut().thread_local_prepare(mutator);
     }
 }
 
@@ -142,8 +138,6 @@ impl EndOfThreadLocalGC {
             .gc_trigger
             .policy
             .on_thread_local_gc_end(mmtk);
-
-        <VM as VMBinding>::VMCollection::resume_from_thread_local_gc(self.tls);
     }
 }
 
@@ -328,12 +322,12 @@ where
                     new_object
                 }
                 ToBeScanned(new_object) => {
-                    if mutator.request_id >= 4 {
-                        info!(
-                            "ToBeScanned | req: {} source: {:?} --> object: {:?}",
-                            mutator.request_id, _source, new_object
-                        );
-                    }
+                    // if mutator.request_id >= 4 {
+                    //     info!(
+                    //         "ToBeScanned | req: {} source: {:?} --> object: {:?}",
+                    //         mutator.request_id, _source, new_object
+                    //     );
+                    // }
                     VM::VMScanning::scan_object(
                         VMWorkerThread(VMThread::UNINITIALIZED), // worker tls is not being used by the openjdk binding
                         new_object,

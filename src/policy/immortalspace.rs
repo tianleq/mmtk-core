@@ -213,10 +213,6 @@ impl<VM: VMBinding> ImmortalSpace<VM> {
         self.mark_state.on_global_release::<VM>();
     }
 
-    // pub fn thread_local_prepare(&self, _tls: u32) {}
-
-    // pub fn thread_local_release(&self, _tls: u32) {}
-
     pub fn trace_object<Q: ObjectQueue>(
         &self,
         queue: &mut Q,

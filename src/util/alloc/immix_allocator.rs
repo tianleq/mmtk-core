@@ -14,8 +14,6 @@ use crate::util::opaque_pointer::VMThread;
 use crate::util::rust_util::unlikely;
 use crate::util::Address;
 use crate::vm::*;
-#[cfg(feature = "thread_local_gc")]
-use crossbeam::queue::SegQueue;
 
 #[repr(i32)]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -54,7 +52,7 @@ pub struct ImmixAllocator<VM: VMBinding> {
     #[cfg(feature = "thread_local_gc")]
     block_header: Option<Block>,
     #[cfg(feature = "thread_local_gc")]
-    local_blocks: Box<SegQueue<Block>>,
+    local_free_blocks: Box<Vec<Block>>,
     #[cfg(feature = "thread_local_gc")]
     /// line mark state of local gc
     pub local_line_mark_state: u8,
@@ -165,7 +163,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             // it may contain unmarked blocks(newly allocated)
             debug_assert!(
                 block.get_state() != BlockState::Unallocated,
-                "block: {:?} state: {:?}",
+                "mutator: {} | block: {:?} state: {:?}",
+                self.mutator_id,
                 block,
                 block.get_state()
             );
@@ -187,15 +186,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             if let crate::util::metadata::MetadataSpec::OnSide(side) =
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
             {
-                // #[cfg(feature = "debug_publish_object")]
-                // {
-                // use crate::util::VMMutatorThread;
-                //     let mutator = VM::VMActivePlan::mutator(VMMutatorThread(self.tls));
-                //     info!(
-                //         "req: {} | bulk clear mark state {:?}",
-                //         mutator.request_id, block
-                //     );
-                // }
                 side.bzero_metadata(block.start(), Block::BYTES);
             }
 
@@ -259,22 +249,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             );
             result
         }
-    }
-
-    #[cfg(feature = "thread_local_gc")]
-    pub fn alloc_as_mutator(
-        &mut self,
-        _mutator_id: u32,
-        size: usize,
-        align: usize,
-        offset: usize,
-    ) -> Address {
-        let rtn = self.alloc(size, align, offset);
-        debug_assert!(
-            !rtn.is_zero(),
-            "local gc cannot find space to evacuate private objects"
-        );
-        rtn
     }
 
     #[cfg(feature = "thread_local_gc")]
@@ -363,6 +337,12 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 current = self.next_block(block);
             }
         }
+
+        // Also release all local free blocks to the page resource
+        for block in self.local_free_blocks.drain(..) {
+            self.space.release_block(block);
+        }
+
         // verify thread local block list
         #[cfg(debug_assertions)]
         {
@@ -413,11 +393,11 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         }
     }
 
-    #[cfg(feature = "thread_local_gc")]
-    pub fn reset_local_block_list(&mut self) -> Box<SegQueue<Block>> {
-        let blocks = std::mem::replace(&mut self.local_blocks, Box::new(SegQueue::new()));
-        blocks
-    }
+    // #[cfg(feature = "thread_local_gc")]
+    // pub fn reset_local_block_list(&mut self) -> Box<Vec<Block>> {
+    //     let blocks = std::mem::replace(&mut self.local_blocks, Box::new(Vec::new()));
+    //     blocks
+    // }
 
     #[cfg(feature = "thread_local_gc")]
     /// This is the sweeping blocks work
@@ -445,12 +425,23 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             if block.thread_local_can_sweep(self.space, mark_hisogram, line_mark_state) {
                 // block will be reclaimed, need to remove it from the list
                 current = self.remove_block_from_list(block);
-                block.thread_local_sweep(self.space);
+                // Instead of returning the block to the global page resource,
+                // blocks will be kept locally by the mutator. Only after a global
+                // gc, all those locally cached blocks will be given back
+                block.clear_owner();
+                block.deinit();
+                self.local_free_blocks.push(block);
+                // block.thread_local_sweep(self.space);
             } else {
                 current = self.next_block(block);
             }
         }
-        self.space.thread_local_flush_page_resource();
+        // for block in &*self.local_free_blocks {
+        //     println!(
+        //         "mutator: {} | local free block: {:?}",
+        //         self.mutator_id, *block
+        //     );
+        // }
         // verify thread local block list
         #[cfg(debug_assertions)]
         {
@@ -487,6 +478,15 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         "local block list is corrupted, block: {:?} is missing",
                         block
                     );
+                    assert!(
+                        !self.local_free_blocks.contains(&block),
+                        "local free block: {:?} is still in the linked list",
+                        block
+                    );
+                    // println!(
+                    //     "mutator: {:?} | locally linked block: {:?}",
+                    //     self.mutator_id, block
+                    // );
                 }
 
                 current = self.next_block(block);
@@ -630,7 +630,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             #[cfg(feature = "thread_local_gc")]
             block_header: None,
             #[cfg(feature = "thread_local_gc")]
-            local_blocks: Box::new(SegQueue::new()),
+            local_free_blocks: Box::new(Vec::new()),
             #[cfg(feature = "thread_local_gc")]
             local_line_mark_state: _global_line_mark_state,
             #[cfg(feature = "thread_local_gc")]
@@ -815,7 +815,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
     // Get a clean block from ImmixSpace.
     fn acquire_clean_block(&mut self, size: usize, align: usize, offset: usize) -> Address {
-        match self.immix_space().get_clean_block(self.tls, self.copy) {
+        // when thread local gc is enabled, it will search the thread local free block list first
+        match self.try_get_clean_block() {
             None => {
                 #[cfg(feature = "thread_local_gc")]
                 // add an assertion here, assume collectors can always allocate new blocks
@@ -855,7 +856,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                                 // So only private blocks (in a local gc) need to be added to mutator's thread-local list
                                 // Add the block to collector's local list first, when releasing the collector, adding all those
                                 // blocks to mutator's local list
-                                self.local_blocks.push(block)
+                                panic!("local gc is now done by the mutator, ")
+                                // self.local_blocks.push(block)
                             }
                         }
                     } else {
@@ -878,6 +880,31 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 self.alloc(size, align, offset)
             }
         }
+    }
+
+    fn try_get_clean_block(&mut self) -> Option<Block> {
+        #[cfg(feature = "thread_local_gc")]
+        if let Some(block) = self.local_free_blocks.pop() {
+            trace!(
+                "{:?}: Acquired a new block {:?} -> {:?} from thread local buffer",
+                self.tls,
+                block.start(),
+                block.end()
+            );
+            // The following is no longer needed, TODO: get rid of it
+            block.set_owner(self.mutator_id);
+            block.init(false);
+            // Not sure if the following is needed
+            self.immix_space().chunk_map.set(
+                block.chunk(),
+                crate::util::heap::chunk_map::ChunkState::Allocated,
+            );
+            // self.immix_space()
+            //     .lines_consumed
+            //     .fetch_add(Block::LINES, atomic::Ordering::SeqCst);
+            return Some(block);
+        }
+        self.immix_space().get_clean_block(self.tls, self.copy)
     }
 
     /// Return whether the TLAB has been exhausted and we need to acquire a new block. Assumes that
@@ -995,6 +1022,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 block.owner(),
                 self.mutator_id
             );
+            // println!(
+            //     "mutator: {} | add block: {:?} to linked list",
+            //     self.mutator_id, block
+            // );
             self.blocks.push(block);
         }
     }

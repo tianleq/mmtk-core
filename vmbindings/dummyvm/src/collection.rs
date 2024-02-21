@@ -30,13 +30,9 @@ impl Collection<DummyVM> for VMCollection {
         unimplemented!()
     }
 
-    fn block_for_thread_local_gc(_tls: VMMutatorThread) {
-        unimplemented!()
-    }
-
-    fn resume_from_thread_local_gc(tls: VMMutatorThread) {
-        unimplemented!()
-    }
+    // fn resume_from_thread_local_gc(tls: VMMutatorThread) {
+    //     unimplemented!()
+    // }
 
     fn spawn_gc_thread(_tls: VMThread, _ctx: GCThreadContext<DummyVM>) {}
 

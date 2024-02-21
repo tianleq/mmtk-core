@@ -226,12 +226,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    pub fn thread_local_prepare(&self, _mutator_id: u32) {}
-
-    #[cfg(feature = "thread_local_gc")]
-    pub fn thread_local_release(&self, _mutator_id: u32) {}
-
-    #[cfg(feature = "thread_local_gc")]
     fn thread_local_trace_object(
         &self,
         #[cfg(feature = "debug_publish_object")] source: ObjectReference,

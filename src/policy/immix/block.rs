@@ -234,6 +234,7 @@ impl Block {
 
     /// Deinitalize a block before releasing.
     pub fn deinit(&self) {
+        #[cfg(feature = "public_bit")]
         crate::util::public_bit::bzero_public_bit(self.start(), Self::BYTES);
         self.set_state(BlockState::Unallocated);
         #[cfg(feature = "thread_local_gc")]
@@ -618,7 +619,7 @@ impl Block {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    fn clear_owner(&self) {
+    pub fn clear_owner(&self) {
         self.set_owner(0);
     }
 

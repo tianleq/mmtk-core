@@ -400,16 +400,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
     }
 
-    #[cfg(feature = "thread_local_gc")]
-    pub fn thread_local_flush_page_resource(&self) {
-        let id = crate::scheduler::current_worker_ordinal().unwrap();
-        // The following is no longer needed since local gc never push
-        // reusable blocks into the global reusable block list
-        // self.reusable_blocks.thread_local_flush(id);
-        #[cfg(target_pointer_width = "64")]
-        self.pr.thread_local_flush(id);
-    }
-
     /// Flush the thread-local queues in BlockPageResource
     pub fn flush_page_resource(&self) {
         self.reusable_blocks.flush_all();
@@ -1802,10 +1792,6 @@ pub struct ImmixCopyContext<VM: VMBinding> {
     allocator: ImmixAllocator<VM>,
     #[cfg(feature = "thread_local_gc")]
     public_object_allocator: ImmixAllocator<VM>,
-    #[cfg(feature = "thread_local_gc")]
-    local_line_mark_state: Option<u8>,
-    #[cfg(feature = "thread_local_gc")]
-    local_unavailable_line_mark_state: Option<u8>,
 }
 
 impl<VM: VMBinding> PolicyCopyContext for ImmixCopyContext<VM> {
@@ -1841,70 +1827,15 @@ impl<VM: VMBinding> PolicyCopyContext for ImmixCopyContext<VM> {
                     .alloc_as_collector(bytes, align, offset);
                 result
             } else {
+                unreachable!("global gc trying to evacuate private objects");
                 // This branch will only be taken in a local gc and private objects
-                // can only live in a block of the same owner
-
-                self.allocator.local_line_mark_state = self.local_line_mark_state.unwrap();
-                self.allocator.local_unavailable_line_mark_state =
-                    self.local_unavailable_line_mark_state.unwrap();
-
-                #[cfg(debug_assertions)]
-                {
-                    let block = Block::containing::<VM>(_original);
-                    let mutator_id = block.owner();
-                    debug_assert!(
-                        mutator_id == self.allocator.get_mutator(),
-                        "mutator_id: {}, allocator.mutator_id: {}",
-                        mutator_id,
-                        self.allocator.get_mutator()
-                    );
-                }
-                self.allocator
-                    .alloc_as_mutator(self.allocator.get_mutator(), bytes, align, offset)
+                // can only live in a block of the same owner (not ture anymore as
+                // local gc is now executed by the mutator iteself)
             }
         }
     }
     fn post_copy(&mut self, obj: ObjectReference, bytes: usize) {
         self.get_space().post_copy(obj, bytes)
-    }
-
-    #[cfg(feature = "thread_local_gc")]
-    fn thread_local_prepare(&mut self, mutator: &'static Mutator<VM>) {
-        self.allocator.reset();
-
-        // in a thread local gc, the allocator should have the same behavior as the mutator
-        self.allocator.set_mutator(mutator.mutator_id);
-        let immix_allocator = unsafe {
-            mutator
-                .allocators
-                .get_allocator(mutator.config.allocator_mapping[AllocationSemantics::Default])
-        }
-        .downcast_ref::<ImmixAllocator<VM>>()
-        .unwrap();
-        self.local_line_mark_state = Some(immix_allocator.local_line_mark_state);
-        self.local_unavailable_line_mark_state =
-            Some(immix_allocator.local_unavailable_line_mark_state);
-    }
-
-    // This will add blocks allocated by the collector thread back to
-    // mutator's thread-local list
-    #[cfg(feature = "thread_local_gc")]
-    fn thread_local_release<'a>(&mut self, mutator: &'a mut Mutator<VM>) {
-        self.allocator.reset();
-
-        self.local_line_mark_state = None;
-        self.local_unavailable_line_mark_state = None;
-
-        let immix_allocator = unsafe {
-            mutator
-                .allocators
-                .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
-        }
-        .downcast_mut::<ImmixAllocator<VM>>()
-        .unwrap();
-        let blocks = self.allocator.reset_local_block_list();
-        // add blocks to mutator's local linked list
-        immix_allocator.collect_blocks(*blocks);
     }
 }
 
@@ -1932,10 +1863,6 @@ impl<VM: VMBinding> ImmixCopyContext<VM> {
                 true,
                 Some(ImmixAllocSemantics::Public),
             ),
-            #[cfg(feature = "thread_local_gc")]
-            local_line_mark_state: None,
-            #[cfg(feature = "thread_local_gc")]
-            local_unavailable_line_mark_state: None,
         }
     }
 

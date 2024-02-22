@@ -263,26 +263,26 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         }
 
         if self.thread_local_mark(object, MARK_BIT) {
-            #[cfg(all(feature = "debug_publish_object", debug_assertions))]
-            use std::io::Write;
+            // #[cfg(all(feature = "debug_publish_object", debug_assertions))]
+            // use std::io::Write;
 
             // let counter = self.counter.fetch_add(1, Ordering::SeqCst);
-            debug_assert!(self.test_thread_local_mark(object, MARK_BIT));
-            #[cfg(all(feature = "debug_publish_object", debug_assertions))]
-            let mut log_file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(format!(
-                    "/home/tianleq/misc/log-los-{}.txt",
-                    mutator.mutator_id
-                ))
-                .unwrap();
-            writeln!(
-                log_file,
-                "mutator: {:?}, request_id: {} | {:?}.{:?} --> {:?}",
-                mutator.mutator_id, mutator.request_id, source, slot, object
-            )
-            .unwrap();
+            // debug_assert!(self.test_thread_local_mark(object, MARK_BIT));
+            // #[cfg(all(feature = "debug_publish_object", debug_assertions))]
+            // let mut log_file = std::fs::OpenOptions::new()
+            //     .create(true)
+            //     .append(true)
+            //     .open(format!(
+            //         "/home/tianleq/misc/log-los-{}.txt",
+            //         mutator.mutator_id
+            //     ))
+            //     .unwrap();
+            // writeln!(
+            //     log_file,
+            //     "mutator: {:?}, request_id: {} | {:?}.{:?} --> {:?}",
+            //     mutator.mutator_id, mutator.request_id, source, slot, object
+            // )
+            // .unwrap();
 
             return ThreadlocalTracedObjectType::ToBeScanned(object);
         }

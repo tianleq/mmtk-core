@@ -1058,26 +1058,26 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             }
 
             self.unlog_object_if_needed(object);
-            #[cfg(feature = "debug_publish_object")]
-            {
-                use std::io::Write;
+            // #[cfg(feature = "debug_publish_object")]
+            // {
+            //     use std::io::Write;
 
-                // if mutator.mutator_id > 30 {
-                let mut log_file = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(format!(
-                        "/home/tianleq/misc/log-immix-{}.txt",
-                        mutator.mutator_id
-                    ))
-                    .unwrap();
-                writeln!(
-                    log_file,
-                    "mutator: {:?}, request_id: {} | {:?}.{:?} --> {:?}",
-                    mutator.mutator_id, mutator.request_id, source, slot, object
-                )
-                .unwrap();
-            }
+            //     // if mutator.mutator_id > 30 {
+            //     let mut log_file = std::fs::OpenOptions::new()
+            //         .create(true)
+            //         .append(true)
+            //         .open(format!(
+            //             "/home/tianleq/misc/log-immix-{}.txt",
+            //             mutator.mutator_id
+            //         ))
+            //         .unwrap();
+            //     writeln!(
+            //         log_file,
+            //         "mutator: {:?}, request_id: {} | {:?}.{:?} --> {:?}",
+            //         mutator.mutator_id, mutator.request_id, source, slot, object
+            //     )
+            //     .unwrap();
+            // }
             return ThreadlocalTracedObjectType::ToBeScanned(object);
         }
         ThreadlocalTracedObjectType::Scanned(object)

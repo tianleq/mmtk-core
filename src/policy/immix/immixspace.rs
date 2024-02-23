@@ -981,7 +981,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self,
         mutator: &Mutator<VM>,
         #[cfg(feature = "debug_publish_object")] source: ObjectReference,
-        #[cfg(feature = "debug_publish_object")] slot: VM::VMEdge,
+        #[cfg(feature = "debug_publish_object")] _slot: VM::VMEdge,
         object: ObjectReference,
     ) -> ThreadlocalTracedObjectType {
         #[cfg(feature = "vo_bit")]
@@ -1091,7 +1091,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         mutator: &mut Mutator<VM>,
         object: ObjectReference,
         semantics: CopySemantics,
-        // worker: &mut GCWorker<VM>,
         nursery_collection: bool,
     ) -> ThreadlocalTracedObjectType {
         // public block is not degrag source, so it should not see
@@ -1790,8 +1789,8 @@ use crate::util::alloc::ImmixAllocator;
 /// Most immix plans use this copy context.
 pub struct ImmixCopyContext<VM: VMBinding> {
     allocator: ImmixAllocator<VM>,
-    #[cfg(feature = "thread_local_gc")]
-    public_object_allocator: ImmixAllocator<VM>,
+    // #[cfg(feature = "thread_local_gc")]
+    // public_object_allocator: ImmixAllocator<VM>,
 }
 
 impl<VM: VMBinding> PolicyCopyContext for ImmixCopyContext<VM> {
@@ -1799,15 +1798,15 @@ impl<VM: VMBinding> PolicyCopyContext for ImmixCopyContext<VM> {
 
     fn prepare(&mut self) {
         self.allocator.reset();
-        #[cfg(feature = "thread_local_gc")]
-        self.public_object_allocator.reset();
+        // #[cfg(feature = "thread_local_gc")]
+        // self.public_object_allocator.reset();
     }
     fn release(&mut self) {
         self.allocator.reset();
-        #[cfg(feature = "thread_local_gc")]
-        {
-            self.public_object_allocator.reset();
-        }
+        // #[cfg(feature = "thread_local_gc")]
+        // {
+        //     self.public_object_allocator.reset();
+        // }
     }
 
     fn alloc_copy(
@@ -1822,9 +1821,7 @@ impl<VM: VMBinding> PolicyCopyContext for ImmixCopyContext<VM> {
         #[cfg(feature = "thread_local_gc")]
         {
             if crate::util::public_bit::is_public::<VM>(_original) {
-                let result = self
-                    .public_object_allocator
-                    .alloc_as_collector(bytes, align, offset);
+                let result = self.allocator.alloc_as_collector(bytes, align, offset);
                 result
             } else {
                 unreachable!("global gc trying to evacuate private objects");
@@ -1854,15 +1851,15 @@ impl<VM: VMBinding> ImmixCopyContext<VM> {
                 true,
                 Some(ImmixAllocSemantics::Private),
             ),
-            #[cfg(feature = "thread_local_gc")]
-            public_object_allocator: ImmixAllocator::new(
-                tls.0,
-                u32::MAX,
-                space,
-                plan,
-                true,
-                Some(ImmixAllocSemantics::Public),
-            ),
+            // #[cfg(feature = "thread_local_gc")]
+            // public_object_allocator: ImmixAllocator::new(
+            //     tls.0,
+            //     u32::MAX,
+            //     space,
+            //     plan,
+            //     true,
+            //     Some(ImmixAllocSemantics::Public),
+            // ),
         }
     }
 

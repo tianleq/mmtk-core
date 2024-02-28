@@ -154,9 +154,10 @@ impl Block {
         }
     }
 
-    #[cfg(all(feature = "thread_local_gc", debug_assertions))]
+    #[cfg(feature = "thread_local_gc")]
     pub fn reset_publication(&self) {
         Self::BLOCK_PUBLICATION_TABLE.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
+        #[cfg(debug_assertions)]
         // Also rest all lines within the block
         Line::LINE_PUBLICATION_TABLE.bzero_metadata(self.start(), Self::BYTES);
     }
@@ -293,7 +294,7 @@ impl Block {
     #[cfg(feature = "thread_local_gc")]
     pub fn thread_local_can_sweep<VM: VMBinding>(
         &self,
-        space: &ImmixSpace<VM>,
+        _space: &ImmixSpace<VM>,
         mark_histogram: &mut Histogram,
         line_mark_state: Option<u8>,
     ) -> bool {
@@ -405,7 +406,7 @@ impl Block {
                     #[cfg(all(feature = "debug_publish_object", debug_assertions))]
                     {
                         // check if locally freed blocks exist in global reusable pool
-                        space.reusable_blocks.iterate_blocks(|block| {
+                        _space.reusable_blocks.iterate_blocks(|block| {
                             debug_assert!(
                                 self.0 != block.0,
                                 "Block: {:?} is now reclaimed and should not be in the reusable pool",

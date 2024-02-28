@@ -1547,10 +1547,9 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
         } else if KIND == TRACE_THREAD_LOCAL_DEFRAG {
             if Block::containing::<VM>(object).is_defrag_source() {
                 self.thread_local_trace_object_with_opportunistic_copy(
-                    mutator.mutator_id,
+                    mutator,
                     object,
                     copy.unwrap(),
-                    worker,
                     // This should not be nursery collection. Nursery collection does not use PolicyTraceObject.
                     false,
                 )

@@ -202,7 +202,9 @@ pub fn create_immix_mutator<VM: VMBinding>(
         thread_local_prepare_func: &immix_mutator_thread_local_prepare,
         #[cfg(feature = "thread_local_gc")]
         thread_local_release_func: &immix_mutator_thread_local_release,
+        #[cfg(feature = "thread_local_gc")]
         thread_local_alloc_copy_func: &immix_mutator_thread_local_alloc_copy,
+        #[cfg(feature = "thread_local_gc")]
         thread_local_post_copy_func: &immix_mutator_thread_local_post_copy,
     };
     let mutator_id = crate::util::MUTATOR_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);

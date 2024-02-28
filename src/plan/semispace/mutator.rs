@@ -3,9 +3,13 @@ use super::SemiSpace;
 use crate::plan::barriers::NoBarrier;
 use crate::plan::barriers::PublicObjectMarkingBarrier;
 use crate::plan::barriers::PublicObjectMarkingBarrierSemantics;
+#[cfg(feature = "thread_local_gc")]
 use crate::plan::mutator_context::generic_thread_local_alloc_copy;
+#[cfg(feature = "thread_local_gc")]
 use crate::plan::mutator_context::generic_thread_local_post_copy;
+#[cfg(feature = "thread_local_gc")]
 use crate::plan::mutator_context::generic_thread_local_prepare;
+#[cfg(feature = "thread_local_gc")]
 use crate::plan::mutator_context::generic_thread_local_release;
 use crate::plan::mutator_context::Mutator;
 use crate::plan::mutator_context::MutatorConfig;

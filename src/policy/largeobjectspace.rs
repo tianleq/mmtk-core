@@ -157,7 +157,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM>
     #[cfg(not(feature = "debug_publish_object"))]
     fn thread_local_trace_object<const KIND: super::gc_work::TraceKind>(
         &self,
-        mutator: &crate::Mutator<VM>,
+        mutator: &mut crate::Mutator<VM>,
         object: ObjectReference,
         _copy: Option<CopySemantics>,
     ) -> ThreadlocalTracedObjectType {
@@ -231,7 +231,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         #[cfg(feature = "debug_publish_object")] source: ObjectReference,
         #[cfg(feature = "debug_publish_object")] slot: VM::VMEdge,
         object: ObjectReference,
-        mutator: &crate::Mutator<VM>,
+        _mutator: &crate::Mutator<VM>,
     ) -> ThreadlocalTracedObjectType {
         #[cfg(not(feature = "debug_publish_object"))]
         if crate::util::public_bit::is_public::<VM>(object) {
@@ -252,11 +252,11 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             }
             #[cfg(debug_assertions)]
             {
-                let valid = self.get_object_owner(object) == mutator.mutator_id;
+                let valid = self.get_object_owner(object) == _mutator.mutator_id;
                 assert!(
                     valid,
                     "mutator: {:?}, request_id: {} immix source: {:?} --> los target: {:?} owner: {}",
-                    mutator.mutator_id, mutator.request_id, source, object,
+                    _mutator.mutator_id, _mutator.request_id, source, object,
                     self.get_object_owner(object)
                 );
             }
@@ -274,13 +274,13 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             //     .append(true)
             //     .open(format!(
             //         "/home/tianleq/misc/log-los-{}.txt",
-            //         mutator.mutator_id
+            //         _mutator.mutator_id
             //     ))
             //     .unwrap();
             // writeln!(
             //     log_file,
             //     "mutator: {:?}, request_id: {} | {:?}.{:?} --> {:?}",
-            //     mutator.mutator_id, mutator.request_id, source, slot, object
+            //     _mutator.mutator_id, _mutator.request_id, source, slot, object
             // )
             // .unwrap();
 

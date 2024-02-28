@@ -393,7 +393,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for Immix<VM> {
     #[cfg(not(feature = "debug_publish_object"))]
     fn thread_local_trace_object<const KIND: crate::policy::gc_work::TraceKind>(
         &self,
-        mutator: &Mutator<VM>,
+        mutator: &mut Mutator<VM>,
         object: ObjectReference,
     ) -> ThreadlocalTracedObjectType {
         if self.immix_space.in_space(object) {

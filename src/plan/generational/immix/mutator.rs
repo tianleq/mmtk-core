@@ -3,9 +3,13 @@ use crate::plan::barriers::ObjectBarrier;
 use crate::plan::generational::barrier::GenObjectBarrierSemantics;
 use crate::plan::generational::create_gen_space_mapping;
 use crate::plan::generational::immix::GenImmix;
+#[cfg(feature = "thread_local_gc")]
 use crate::plan::mutator_context::generic_thread_local_alloc_copy;
+#[cfg(feature = "thread_local_gc")]
 use crate::plan::mutator_context::generic_thread_local_post_copy;
+#[cfg(feature = "thread_local_gc")]
 use crate::plan::mutator_context::generic_thread_local_prepare;
+#[cfg(feature = "thread_local_gc")]
 use crate::plan::mutator_context::generic_thread_local_release;
 use crate::plan::mutator_context::Mutator;
 use crate::plan::mutator_context::MutatorConfig;

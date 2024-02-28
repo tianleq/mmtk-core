@@ -125,7 +125,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
     #[cfg(not(feature = "debug_publish_object"))]
     fn thread_local_trace_object<const KIND: super::gc_work::TraceKind>(
         &self,
-        _mutator: &crate::Mutator<VM>,
+        _mutator: &mut crate::Mutator<VM>,
         object: ObjectReference,
         _copy: Option<CopySemantics>,
     ) -> ThreadlocalTracedObjectType {

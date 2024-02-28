@@ -2,9 +2,13 @@ use super::MarkCompact; // Add
 use crate::plan::barriers::NoBarrier;
 use crate::plan::mutator_context::create_allocator_mapping;
 use crate::plan::mutator_context::create_space_mapping;
+#[cfg(feature = "thread_local_gc")]
 use crate::plan::mutator_context::generic_thread_local_alloc_copy;
+#[cfg(feature = "thread_local_gc")]
 use crate::plan::mutator_context::generic_thread_local_post_copy;
+#[cfg(feature = "thread_local_gc")]
 use crate::plan::mutator_context::generic_thread_local_prepare;
+#[cfg(feature = "thread_local_gc")]
 use crate::plan::mutator_context::generic_thread_local_release;
 use crate::plan::mutator_context::Mutator;
 use crate::plan::mutator_context::MutatorConfig;

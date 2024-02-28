@@ -882,7 +882,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         }
     }
 
-    fn try_get_clean_block(&mut self) -> Option<Block> {
+    fn try_get_clean_block(&mut self) -> Option<crate::policy::immix::block::Block> {
         #[cfg(feature = "thread_local_gc")]
         if let Some(block) = self.local_free_blocks.pop() {
             trace!(

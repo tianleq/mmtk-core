@@ -291,18 +291,18 @@ where
                 continue;
             }
             #[cfg(not(feature = "debug_publish_object"))]
-            let new_object =
-                match self
-                    .plan
-                    .thread_local_trace_object::<KIND>(mutator, object, self.worker())
-                {
-                    Scanned(new_object) => new_object,
-                    ToBeScanned(new_object) => {
-                        VM::VMScanning::scan_object(self.worker().tls, new_object, self);
-                        self.plan.thread_local_post_scan_object(mutator, new_object);
-                        new_object
-                    }
-                };
+            let new_object = match self.plan.thread_local_trace_object::<KIND>(mutator, object) {
+                Scanned(new_object) => new_object,
+                ToBeScanned(new_object) => {
+                    VM::VMScanning::scan_object(
+                        VMWorkerThread(VMThread::UNINITIALIZED),
+                        new_object,
+                        self,
+                    );
+                    self.plan.thread_local_post_scan_object(mutator, new_object);
+                    new_object
+                }
+            };
 
             #[cfg(feature = "debug_publish_object")]
             let new_object = match self
@@ -370,25 +370,25 @@ where
         let mutator = VM::VMActivePlan::mutator(self.tls);
 
         #[cfg(not(feature = "debug_publish_object"))]
-        let new_object =
-            match self
-                .plan
-                .thread_local_trace_object::<KIND>(mutator, object, self.worker())
-            {
-                Scanned(new_object) => {
-                    debug_assert!(
-                        object.is_live(),
-                        "object: {:?} is supposed to be alive.",
-                        object
-                    );
-                    new_object
-                }
-                ToBeScanned(new_object) => {
-                    VM::VMScanning::scan_object(self.worker().tls, new_object, self);
-                    self.plan.thread_local_post_scan_object(mutator, new_object);
-                    new_object
-                }
-            };
+        let new_object = match self.plan.thread_local_trace_object::<KIND>(mutator, object) {
+            Scanned(new_object) => {
+                debug_assert!(
+                    object.is_live(),
+                    "object: {:?} is supposed to be alive.",
+                    object
+                );
+                new_object
+            }
+            ToBeScanned(new_object) => {
+                VM::VMScanning::scan_object(
+                    VMWorkerThread(VMThread::UNINITIALIZED),
+                    new_object,
+                    self,
+                );
+                self.plan.thread_local_post_scan_object(mutator, new_object);
+                new_object
+            }
+        };
 
         #[cfg(feature = "debug_publish_object")]
         let new_object = match self.plan.thread_local_trace_object::<KIND>(
@@ -424,19 +424,15 @@ where
         let mutator = VM::VMActivePlan::mutator(self.tls);
 
         #[cfg(not(feature = "debug_publish_object"))]
-        let new_object =
-            match self
-                .plan
-                .thread_local_trace_object::<KIND>(mutator, object, self.worker())
-            {
-                Scanned(new_object) => new_object,
-                _ => {
-                    panic!(
-                        "live object: {:?} must have been traced/scanned already",
-                        object
-                    );
-                }
-            };
+        let new_object = match self.plan.thread_local_trace_object::<KIND>(mutator, object) {
+            Scanned(new_object) => new_object,
+            _ => {
+                panic!(
+                    "live object: {:?} must have been traced/scanned already",
+                    object
+                );
+            }
+        };
 
         #[cfg(feature = "debug_publish_object")]
         let new_object = match self.plan.thread_local_trace_object::<KIND>(

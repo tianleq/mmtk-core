@@ -1,10 +1,15 @@
 use crate::plan::barriers::ObjectBarrier;
 use crate::plan::generational::barrier::GenObjectBarrierSemantics;
 use crate::plan::immix;
-use crate::plan::mutator_context::{
-    create_space_mapping, generic_thread_local_alloc_copy, generic_thread_local_post_copy,
-    generic_thread_local_prepare, generic_thread_local_release, MutatorConfig,
-};
+#[cfg(feature = "thread_local_gc")]
+use crate::plan::mutator_context::generic_thread_local_alloc_copy;
+#[cfg(feature = "thread_local_gc")]
+use crate::plan::mutator_context::generic_thread_local_post_copy;
+#[cfg(feature = "thread_local_gc")]
+use crate::plan::mutator_context::generic_thread_local_prepare;
+#[cfg(feature = "thread_local_gc")]
+use crate::plan::mutator_context::generic_thread_local_release;
+use crate::plan::mutator_context::{create_space_mapping, MutatorConfig};
 use crate::plan::sticky::immix::global::StickyImmix;
 use crate::util::alloc::allocators::Allocators;
 use crate::util::alloc::AllocatorSelector;

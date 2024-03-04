@@ -71,9 +71,15 @@ pub fn create_stickyimmix_mutator<VM: VMBinding>(
         allocation_count: 0,
         #[cfg(feature = "public_object_analysis")]
         bytes_allocated: 0,
-        #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
+        #[cfg(all(
+            feature = "thread_local_gc",
+            any(feature = "debug_publish_object", feature = "public_object_analysis")
+        ))]
         request_id: 0,
-        #[cfg(feature = "public_object_analysis")]
-        global_request_id: 0,
+        #[cfg(all(
+            feature = "thread_local_gc",
+            any(feature = "public_object_analysis", feature = "debug_publish_object")
+        ))]
+        request_active: false,
     }
 }

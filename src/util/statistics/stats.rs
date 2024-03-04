@@ -239,13 +239,38 @@ impl Stats {
 
         #[cfg(feature = "public_object_analysis")]
         {
-            let stats = crate::util::REQUEST_SCOPE_OBJECTS_STATS.lock().unwrap();
+            let stats = crate::util::STATISTICS.lock().unwrap();
+            println!("----All Scope----");
             println!(
                 "Allocation count: {}, Allocation Bytes: {}, Public count: {}, Public Bytes: {}",
-                stats.allocation_count,
-                stats.allocation_bytes,
-                stats.public_count,
-                stats.public_bytes
+                stats.all_scope_allocation_count,
+                stats.all_scope_allocation_bytes,
+                stats.all_scope_public_count,
+                stats.all_scope_public_bytes
+            );
+            println!("----Harness Scope----");
+            println!(
+                "Allocation count: {}, Allocation Bytes: {}, Public count: {}, Public Bytes: {}",
+                stats.harness_scope_allocation_count,
+                stats.harness_scope_allocation_bytes,
+                stats.harness_scope_public_count,
+                stats.harness_scope_public_bytes
+            );
+            println!("----Request Scope----");
+            println!(
+                "Allocation count: {}, Allocation Bytes: {}, Public count: {}, Public Bytes: {}",
+                stats.request_scope_allocation_count,
+                stats.request_scope_allocation_bytes,
+                stats.request_scope_public_count,
+                stats.request_scope_public_bytes
+            );
+            println!("----Per Request Scope----");
+            println!(
+                "Allocation count: {}, Allocation Bytes: {}, Public count: {}, Public Bytes: {}",
+                stats.per_request_scope_allocation_count,
+                stats.per_request_scope_allocation_bytes,
+                stats.per_request_scope_public_count,
+                stats.per_request_scope_public_bytes
             );
         }
 

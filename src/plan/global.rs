@@ -409,16 +409,6 @@ pub trait Plan: 'static + Sync + Downcast {
     fn is_object_published(&self, _object: ObjectReference) -> bool {
         false
     }
-
-    #[cfg(feature = "public_object_analysis")]
-    fn activate_public_object_analysis(&self) {
-        unimplemented!()
-    }
-
-    #[cfg(feature = "public_object_analysis")]
-    fn is_public_object_analysis_active(&self) -> bool {
-        false
-    }
 }
 
 impl_downcast!(Plan assoc VM);
@@ -1223,22 +1213,6 @@ impl<VM: VMBinding> CommonPlan<VM> {
         self.nonmoving.release();
         self.base.release(tls, full_heap)
     }
-
-    // #[cfg(feature = "thread_local_gc")]
-    // pub fn thread_local_prepare(&self, mutator_id: u32) {
-    //     self.immortal.thread_local_prepare(mutator_id);
-    //     self.los.thread_local_prepare(mutator_id);
-    //     self.nonmoving.thread_local_prepare(mutator_id);
-    //     self.base.thread_local_release(mutator_id);
-    // }
-
-    // #[cfg(feature = "thread_local_gc")]
-    // pub fn thread_local_release(&self, mutator_id: u32) {
-    //     self.immortal.thread_local_release(mutator_id);
-    //     self.los.thread_local_release(mutator_id);
-    //     self.nonmoving.thread_local_release(mutator_id);
-    //     self.base.thread_local_release(mutator_id);
-    // }
 
     pub fn stacks_prepared(&self) -> bool {
         self.base.stacks_prepared()

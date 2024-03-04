@@ -543,10 +543,15 @@ pub struct PublicObjectMarkingBarrierSemantics<VM: VMBinding> {
     number_of_objects_published: usize,
     #[cfg(feature = "public_object_analysis")]
     number_of_bytes_published: usize,
+    #[cfg(feature = "public_object_analysis")]
+    tls: VMMutatorThread,
 }
 
 impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
-    pub fn new(mmtk: &'static MMTK<VM>) -> Self {
+    pub fn new(
+        mmtk: &'static MMTK<VM>,
+        #[cfg(feature = "public_object_analysis")] tls: VMMutatorThread,
+    ) -> Self {
         Self {
             mmtk,
             #[cfg(any(
@@ -556,6 +561,8 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
             number_of_objects_published: 0,
             #[cfg(feature = "public_object_analysis")]
             number_of_bytes_published: 0,
+            #[cfg(feature = "public_object_analysis")]
+            tls,
         }
     }
 
@@ -568,16 +575,29 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
         closure.do_closure();
         #[cfg(feature = "public_object_analysis")]
         {
+            use crate::vm::ActivePlan;
+            let mutator = VM::VMActivePlan::mutator(self.tls);
             let newly_published_count = closure.get_number_of_objects_published() + 1;
             let newly_published_bytes = closure.get_number_of_bytes_published()
                 + VM::VMObjectModel::get_current_size(value);
             self.number_of_objects_published += newly_published_count;
             self.number_of_bytes_published += newly_published_bytes;
+            {
+                let mut stats = crate::util::STATISTICS.lock().unwrap();
 
-            let mut stats = crate::util::REQUEST_SCOPE_OBJECTS_STATS.lock().unwrap();
-            if stats.active {
-                stats.public_count += newly_published_count;
-                stats.public_bytes += newly_published_bytes;
+                stats.all_scope_public_bytes += newly_published_bytes;
+                stats.all_scope_public_count += newly_published_count;
+
+                stats.harness_scope_public_bytes += newly_published_bytes;
+                stats.harness_scope_public_count += newly_published_count;
+
+                stats.request_scope_public_bytes += newly_published_bytes;
+                stats.request_scope_public_count += newly_published_count;
+                #[cfg(feature = "thread_local_gc")]
+                if mutator.request_active {
+                    stats.per_request_scope_public_bytes += newly_published_bytes;
+                    stats.per_request_scope_public_count += newly_published_count;
+                }
             }
         }
         #[cfg(feature = "debug_publish_object_overhead")]

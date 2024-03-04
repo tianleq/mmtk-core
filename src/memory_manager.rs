@@ -25,6 +25,8 @@ use crate::util::constants::{LOG_BYTES_IN_PAGE, MIN_OBJECT_SIZE};
 use crate::util::heap::layout::vm_layout_constants::HEAP_END;
 use crate::util::heap::layout::vm_layout_constants::HEAP_START;
 use crate::util::opaque_pointer::*;
+#[cfg(feature = "public_object_analysis")]
+use crate::util::STATISTICS;
 use crate::util::{Address, ObjectReference};
 use crate::vm::edge_shape::MemorySlice;
 use crate::vm::ActivePlan;
@@ -744,6 +746,11 @@ pub fn add_phantom_candidate<VM: VMBinding>(mmtk: &MMTK<VM>, reff: ObjectReferen
 /// * `tls`: The thread that calls the function (and triggers a collection).
 pub fn harness_begin<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
     mmtk.harness_begin(tls);
+    #[cfg(feature = "public_object_analysis")]
+    {
+        let mut stats = STATISTICS.lock().unwrap();
+        stats.clear_harness_scope();
+    }
 }
 
 /// Generic hook to allow benchmarks to be harnessed. We stop collecting
@@ -1007,8 +1014,6 @@ pub fn mmtk_handle_user_triggered_local_gc<VM: VMBinding>(
 
 pub fn mmtk_handle_user_triggered_global_gc<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
     mmtk.plan.handle_user_collection_request(tls, true, false);
-    #[cfg(feature = "public_object_analysis")]
-    mmtk.plan.activate_public_object_analysis();
 }
 
 pub fn compute_allocator_mem_layout_checksum<VM: VMBinding>() -> usize {
@@ -1023,61 +1028,6 @@ pub fn compute_mutator_mem_layout_checksum<VM: VMBinding>() -> usize {
     std::mem::size_of::<Mutator<VM>>()
 }
 
-// #[cfg(feature = "public_object_analysis")]
-// pub fn mmtk_analyze_object_publication<VM: VMBinding>(tls: VMMutatorThread, id: i32) {
-//     // use std::fs::OpenOptions;
-//     // use std::io::Write;
-
-//     let mutator = VM::VMActivePlan::mutator(tls);
-//     let number_of_objects_published = mutator.barrier().get_number_of_objects_published();
-//     let number_of_bytes_published = mutator.barrier().get_number_of_bytes_published();
-//     let allocation_count = mutator.allocation_count;
-//     let bytes_allocated = mutator.bytes_allocated;
-//     // let mut log_file = OpenOptions::new()
-//     //     .append(true)
-//     //     .create(true)
-//     //     .open("/tmp/object_publication.log")
-//     //     .unwrap();
-//     // write!(
-//     //     log_file,
-//     //     "ID: {}, A: {}, P: {}, TB: {}, PB: {}",
-//     //     id,
-//     //     allocation_count,
-//     //     number_of_objects_published,
-//     //     bytes_allocated,
-//     //     number_of_bytes_published
-//     // )
-//     // .unwrap();
-//     println!("*********************************");
-//     println!(
-//         "ID: {}, A: {}, P: {}, TB: {}, PB: {}",
-//         id,
-//         allocation_count,
-//         number_of_objects_published,
-//         bytes_allocated,
-//         number_of_bytes_published
-//     );
-
-//     println!("*********************************")
-// }
-
-#[cfg(feature = "public_object_analysis")]
-pub fn mmtk_print_object_publication<VM: VMBinding>(tls: VMMutatorThread, id: i32) {
-    let mutator = VM::VMActivePlan::mutator(tls);
-    let number_of_objects_published = mutator.barrier().get_number_of_objects_published();
-    let number_of_bytes_published = mutator.barrier().get_number_of_bytes_published();
-    let allocation_count = mutator.allocation_count;
-    let bytes_allocated = mutator.bytes_allocated;
-    println!(
-        "ID: {}, A: {}, P: {}, TB: {}, PB: {}",
-        id,
-        allocation_count,
-        number_of_objects_published,
-        bytes_allocated,
-        number_of_bytes_published
-    );
-}
-
 #[cfg(feature = "public_object_analysis")]
 pub fn mmtk_clear_object_publication_info<VM: VMBinding>(tls: VMMutatorThread) {
     let mutator = VM::VMActivePlan::mutator(tls);
@@ -1086,27 +1036,6 @@ pub fn mmtk_clear_object_publication_info<VM: VMBinding>(tls: VMMutatorThread) {
     mutator.allocation_count = 0;
     mutator.bytes_allocated = 0;
 }
-
-// #[cfg(feature = "debug_publish_object_overhead")]
-// pub fn mmtk_debug_publish_object_overhead<VM: VMBinding>(tls: VMMutatorThread, id: i32) {
-//     use std::io::Write;
-
-//     let mutator = VM::VMActivePlan::mutator(tls);
-//     let number_of_objects_published = mutator.barrier().get_number_of_objects_published();
-//     let slowpath_taken = mutator.barrier().get_slowpath_taken_count();
-//     let total_writes = mutator.barrier().get_total_write_count();
-//     let mut log_file = std::fs::OpenOptions::new()
-//         .append(true)
-//         .create(true)
-//         .open("/home/tianleq/misc/object_publication.log")
-//         .unwrap();
-//     writeln!(
-//         log_file,
-//         "GLOBAL_ID: {}, MUTATOR_ID: {}, TOTAL_WRITES: {}, SLOWPATH_TAKEN: {}, OBJECTS_PUBLISHED: {}",
-//         id, mutator.mutator_id, total_writes, slowpath_taken, number_of_objects_published
-//     )
-//     .unwrap();
-// }
 
 /// Generic hook to allow benchmarks to be harnessed. We do a full heap
 /// GC, and then start recording statistics for MMTk.
@@ -1118,12 +1047,8 @@ pub fn request_starting<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
     mmtk.request_starting();
     #[cfg(feature = "public_object_analysis")]
     {
-        let mut stats = crate::util::REQUEST_SCOPE_OBJECTS_STATS.lock().unwrap();
-        stats.allocation_count = 0;
-        stats.allocation_bytes = 0;
-        stats.public_bytes = 0;
-        stats.public_count = 0;
-        stats.active = true;
+        let mut stats = crate::util::STATISTICS.lock().unwrap();
+        stats.clear_request_scope();
     }
 }
 
@@ -1134,9 +1059,4 @@ pub fn request_starting<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
 /// * `mmtk`: A reference to an MMTk instance.
 pub fn request_finished<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
     mmtk.request_finished();
-    #[cfg(feature = "public_object_analysis")]
-    {
-        let mut stats = crate::util::REQUEST_SCOPE_OBJECTS_STATS.lock().unwrap();
-        stats.active = false;
-    }
 }

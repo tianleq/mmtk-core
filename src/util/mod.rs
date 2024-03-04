@@ -80,8 +80,8 @@ mod int_array_freelist;
 /// on demand direct from the OS (via mmap).
 mod raw_memory_freelist;
 
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU32;
+// use std::sync::atomic::AtomicUsize;
 
 pub use self::address::Address;
 pub use self::address::ObjectReference;
@@ -89,21 +89,50 @@ pub use self::opaque_pointer::*;
 pub use self::reference_processor::ReferenceProcessor;
 
 pub(crate) static MUTATOR_ID_GENERATOR: AtomicU32 = AtomicU32::new(1);
-pub(crate) static DEBUG_SET_PUBLIC: AtomicBool = AtomicBool::new(false);
+
 #[cfg(feature = "public_object_analysis")]
 #[derive(Default)]
-pub(crate) struct RequestScopeObjectsStats {
-    pub active: bool,
-    pub allocation_count: usize,
-    pub allocation_bytes: usize,
-    pub public_count: usize,
-    pub public_bytes: usize,
+pub(crate) struct Statistics {
+    pub per_request_scope_allocation_count: usize,
+    pub per_request_scope_allocation_bytes: usize,
+    pub per_request_scope_public_count: usize,
+    pub per_request_scope_public_bytes: usize,
+
+    pub request_scope_allocation_count: usize,
+    pub request_scope_allocation_bytes: usize,
+    pub request_scope_public_count: usize,
+    pub request_scope_public_bytes: usize,
+    pub harness_scope_allocation_count: usize,
+    pub harness_scope_allocation_bytes: usize,
+    pub harness_scope_public_count: usize,
+    pub harness_scope_public_bytes: usize,
+    pub all_scope_allocation_count: usize,
+    pub all_scope_allocation_bytes: usize,
+    pub all_scope_public_count: usize,
+    pub all_scope_public_bytes: usize,
+}
+
+#[cfg(feature = "public_object_analysis")]
+impl Statistics {
+    pub fn clear_harness_scope(&mut self) {
+        self.harness_scope_allocation_bytes = 0;
+        self.harness_scope_allocation_count = 0;
+        self.harness_scope_public_bytes = 0;
+        self.harness_scope_public_count = 0;
+    }
+
+    pub fn clear_request_scope(&mut self) {
+        self.request_scope_allocation_bytes = 0;
+        self.request_scope_allocation_count = 0;
+        self.request_scope_public_bytes = 0;
+        self.request_scope_public_count = 0;
+    }
 }
 
 #[cfg(feature = "public_object_analysis")]
 lazy_static! {
-    pub(crate) static ref REQUEST_SCOPE_OBJECTS_STATS: std::sync::Mutex<RequestScopeObjectsStats> =
-        std::sync::Mutex::new(RequestScopeObjectsStats::default());
+    pub(crate) static ref STATISTICS: std::sync::Mutex<Statistics> =
+        std::sync::Mutex::new(Statistics::default());
 }
 
 #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]

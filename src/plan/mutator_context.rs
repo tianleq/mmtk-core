@@ -91,14 +91,20 @@ pub struct Mutator<VM: VMBinding> {
     #[cfg(feature = "thread_local_gc")]
     pub finalizable_candidates:
         Box<Vec<<VM::VMReferenceGlue as crate::vm::ReferenceGlue<VM>>::FinalizableType>>,
+    #[cfg(all(
+        feature = "thread_local_gc",
+        any(feature = "public_object_analysis", feature = "debug_publish_object")
+    ))]
+    pub request_id: usize,
+    #[cfg(all(
+        feature = "thread_local_gc",
+        any(feature = "public_object_analysis", feature = "debug_publish_object")
+    ))]
+    pub request_active: bool,
     #[cfg(feature = "public_object_analysis")]
     pub allocation_count: usize,
     #[cfg(feature = "public_object_analysis")]
     pub bytes_allocated: usize,
-    #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
-    pub request_id: usize,
-    #[cfg(feature = "public_object_analysis")]
-    pub global_request_id: u32,
 }
 
 impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
@@ -209,10 +215,19 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         {
             self.allocation_count += 1;
             self.bytes_allocated += _bytes;
-            let mut stats = crate::util::REQUEST_SCOPE_OBJECTS_STATS.lock().unwrap();
-            if stats.active {
-                stats.allocation_count += 1;
-                stats.allocation_bytes += _bytes;
+            let mut stats = crate::util::STATISTICS.lock().unwrap();
+            stats.all_scope_allocation_bytes += _bytes;
+            stats.all_scope_allocation_count += 1;
+
+            stats.harness_scope_allocation_bytes += _bytes;
+            stats.harness_scope_allocation_count += 1;
+
+            stats.request_scope_allocation_bytes += _bytes;
+            stats.request_scope_allocation_count += 1;
+            #[cfg(feature = "thread_local_gc")]
+            if self.request_active {
+                stats.per_request_scope_allocation_bytes += _bytes;
+                stats.per_request_scope_allocation_count += 1;
             }
         }
     }

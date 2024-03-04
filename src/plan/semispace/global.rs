@@ -114,10 +114,6 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
         self.fromspace_mut()
             .set_copy_for_sft_trace(Some(CopySemantics::DefaultCopy));
         self.tospace_mut().set_copy_for_sft_trace(None);
-        #[cfg(feature = "public_object_analysis")]
-        if self.is_public_object_analysis_active() {
-            self.fromspace().activate_public_object_analysis();
-        }
     }
 
     fn prepare_worker(&self, worker: &mut GCWorker<VM>) {
@@ -181,17 +177,6 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
             // object is not in copyspace, so it is not moved
             crate::util::public_bit::is_public::<VM>(object)
         }
-    }
-
-    #[cfg(feature = "public_object_analysis")]
-    fn is_public_object_analysis_active(&self) -> bool {
-        self.public_object_analysis_active.load(Ordering::Relaxed)
-    }
-
-    #[cfg(feature = "public_object_analysis")]
-    fn activate_public_object_analysis(&self) {
-        self.public_object_analysis_active
-            .store(true, Ordering::Relaxed);
     }
 }
 

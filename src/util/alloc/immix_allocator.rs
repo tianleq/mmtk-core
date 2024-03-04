@@ -386,10 +386,12 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 current = self.next_block(block);
             }
             #[cfg(feature = "debug_publish_object")]
-            for b in self.blocks.iter() {
-                local_blocks.retain(|&block| *b != block);
+            {
+                for b in self.blocks.iter() {
+                    local_blocks.retain(|&block| *b != block);
+                }
+                debug_assert!(local_blocks.is_empty(), "inconsistent local block list");
             }
-            debug_assert!(local_blocks.is_empty(), "inconsistent local block list");
         }
     }
 

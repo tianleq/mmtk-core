@@ -29,11 +29,7 @@ impl<VM: VMBinding> ExecuteThreadlocalCollection<VM> {
             crate::scheduler::worker::current_worker_ordinal().unwrap()
         );
 
-        // Tell GC trigger that GC started.
-        // We now know what kind of GC this is (e.g. nursery vs mature in gen copy, defrag vs fast in Immix)
-        // TODO: Depending on the OS scheduling, other workers can run so fast that they can finish
-        // everything in the `Unconstrained` and the `Prepare` buckets before we execute the next
-        // statement. Consider if there is a better place to call `on_gc_start`.
+        // A hook of local gc, no-op at the moment
         self.mmtk
             .plan
             .base()
@@ -273,15 +269,7 @@ where
             "slots len != object len"
         );
         let mutator = VM::VMActivePlan::mutator(self.tls);
-        // #[cfg(feature = "debug_publish_object")]
-        // for r in &self.edge_buffer {
-        //     info!(
-        //         "req: {} | root slot: {:?} --> object: {:?}",
-        //         mutator.request_id,
-        //         *r,
-        //         r.load()
-        //     );
-        // }
+
         while !self.edge_buffer.is_empty() {
             let slot = self.edge_buffer.pop_front().unwrap();
             #[cfg(feature = "debug_publish_object")]
@@ -322,12 +310,6 @@ where
                     new_object
                 }
                 ToBeScanned(new_object) => {
-                    // if mutator.request_id >= 4 {
-                    //     info!(
-                    //         "ToBeScanned | req: {} source: {:?} --> object: {:?}",
-                    //         mutator.request_id, _source, new_object
-                    //     );
-                    // }
                     VM::VMScanning::scan_object(
                         VMWorkerThread(VMThread::UNINITIALIZED), // worker tls is not being used by the openjdk binding
                         new_object,
@@ -504,14 +486,9 @@ where
         Self {
             mmtk,
             tls,
-            // worker,
             phantom: PhantomData,
         }
     }
-
-    // pub fn worker(&self) -> &'static mut GCWorker<VM> {
-    //     unsafe { &mut *self.worker }
-    // }
 
     pub fn do_finalization(&self) {
         let mutator = VM::VMActivePlan::mutator(self.tls);
@@ -528,7 +505,8 @@ where
             if crate::util::public_bit::is_public::<VM>(reff) {
                 // public object is untouched, so nothing needs to be done
                 continue;
-            } else if reff.is_live() {
+            }
+            if reff.is_live() {
                 // live object indicates that the object has already been traced/scanned during transitive closure phase
                 // so no need to do the closure again
                 let object = closure.do_object_tracing(f.get_reference());

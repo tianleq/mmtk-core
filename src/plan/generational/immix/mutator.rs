@@ -3,9 +3,9 @@ use crate::plan::barriers::ObjectBarrier;
 use crate::plan::generational::barrier::GenObjectBarrierSemantics;
 use crate::plan::generational::create_gen_space_mapping;
 use crate::plan::generational::immix::GenImmix;
-#[cfg(feature = "thread_local_gc")]
+#[cfg(feature = "thread_local_gc_copying")]
 use crate::plan::mutator_context::generic_thread_local_alloc_copy;
-#[cfg(feature = "thread_local_gc")]
+#[cfg(feature = "thread_local_gc_copying")]
 use crate::plan::mutator_context::generic_thread_local_post_copy;
 #[cfg(feature = "thread_local_gc")]
 use crate::plan::mutator_context::generic_thread_local_prepare;
@@ -48,9 +48,9 @@ pub fn create_genimmix_mutator<VM: VMBinding>(
         thread_local_prepare_func: &generic_thread_local_prepare,
         #[cfg(feature = "thread_local_gc")]
         thread_local_release_func: &generic_thread_local_release,
-        #[cfg(feature = "thread_local_gc")]
+        #[cfg(feature = "thread_local_gc_copying")]
         thread_local_alloc_copy_func: &generic_thread_local_alloc_copy,
-        #[cfg(feature = "thread_local_gc")]
+        #[cfg(feature = "thread_local_gc_copying")]
         thread_local_post_copy_func: &generic_thread_local_post_copy,
     };
 

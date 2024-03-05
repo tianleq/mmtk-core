@@ -47,47 +47,12 @@ impl<VM: VMBinding> GCController<VM> {
         // GCWorker so we manually initialize the worker here.
         self.coordinator_worker.tls = tls;
 
-        #[cfg(all(feature = "thread_local_gc", debug_assertions))]
-        let mut thread_local_gc_requested;
-        #[cfg(all(feature = "thread_local_gc", debug_assertions))]
-        let mut global_gc_requested;
         loop {
             debug!("[STWController: Waiting for request...]");
-            let requests = self.requester.wait_for_request();
+            self.requester.wait_for_request();
             debug!("[STWController: Request recieved.]");
-            #[cfg(all(feature = "thread_local_gc", debug_assertions))]
-            {
-                thread_local_gc_requested = false;
-                global_gc_requested = false;
-            }
-            #[cfg(feature = "thread_local_gc")]
-            for req in requests {
-                if req.thread_local {
-                    #[cfg(debug_assertions)]
-                    {
-                        debug_assert!(
-                            !global_gc_requested,
-                            "local gc and global gc should be mutually exclusive"
-                        );
-                        thread_local_gc_requested = true;
-                    }
-                    // self.do_thread_local_gc_until_completion(req.tls);
-                } else {
-                    #[cfg(debug_assertions)]
-                    {
-                        debug_assert!(
-                            !thread_local_gc_requested,
-                            "local gc and global gc should be mutually exclusive"
-                        );
-                        global_gc_requested = true;
-                    }
 
-                    debug_assert!(!req.thread_local, "This should be a global gc");
-                    self.do_gc_until_completion(req.single_thread);
-                }
-            }
-            #[cfg(not(feature = "thread_local_gc"))]
-            self.do_gc_until_completion(requests[0].single_thread);
+            self.do_gc_until_completion(false);
             debug!("[STWController: Worker threads complete!]");
         }
     }
@@ -177,24 +142,4 @@ impl<VM: VMBinding> GCController<VM> {
         // If all of the above failed, it means GC has finished.
         false
     }
-
-    // #[cfg(feature = "thread_local_gc")]
-    // /// Coordinate workers to perform GC in response to a GC request.
-    // pub fn do_thread_local_gc_until_completion(&mut self, tls: VMMutatorThread) {
-    //     let gc_start = std::time::Instant::now();
-    //     #[cfg(feature = "debug_publish_object")]
-    //     let id = crate::util::LOCAL_GC_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);
-    //     self.scheduler.work_buckets[WorkBucketStage::Unconstrained].add(
-    //         ExecuteThreadlocalCollection {
-    //             mutator_tls: tls,
-    //             start_time: gc_start,
-    //             #[cfg(feature = "debug_publish_object")]
-    //             id,
-    //         },
-    //     );
-
-    //     // Notify only one worker at this time because there is only one work packet,
-    //     // namely `ScheduleCollection`.
-    //     self.scheduler.worker_monitor.resume(false);
-    // }
 }

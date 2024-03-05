@@ -106,43 +106,13 @@ pub fn immix_mutator_thread_local_release<VM: VMBinding>(mutator: &mut Mutator<V
     los_allocator.thread_local_release();
 }
 
-#[cfg(feature = "thread_local_gc")]
+#[cfg(feature = "thread_local_gc_copying")]
 pub fn immix_mutator_thread_local_alloc_copy<VM: VMBinding>(
     mutator: &mut Mutator<VM>,
     bytes: usize,
     align: usize,
     offset: usize,
 ) -> crate::util::Address {
-    // {
-    //     if crate::util::public_bit::is_public::<VM>(_original) {
-    //         let result = self
-    //             .public_object_allocator
-    //             .alloc_as_collector(bytes, align, offset);
-    //         result
-    //     } else {
-    //         // This branch will only be taken in a local gc and private objects
-    //         // can only live in a block of the same owner
-
-    //         self.allocator.local_line_mark_state = self.local_line_mark_state.unwrap();
-    //         self.allocator.local_unavailable_line_mark_state =
-    //             self.local_unavailable_line_mark_state.unwrap();
-
-    //         #[cfg(debug_assertions)]
-    //         {
-    //             let block = Block::containing::<VM>(_original);
-    //             let mutator_id = block.owner();
-    //             debug_assert!(
-    //                 mutator_id == self.allocator.get_mutator(),
-    //                 "mutator_id: {}, allocator.mutator_id: {}",
-    //                 mutator_id,
-    //                 self.allocator.get_mutator()
-    //             );
-    //         }
-    //         self.allocator
-    //             .alloc_as_mutator(self.allocator.get_mutator(), bytes, align, offset)
-    //     }
-    // }
-
     use crate::util::alloc::Allocator;
     let allocators: &mut Allocators<VM> = mutator.allocators.borrow_mut();
 
@@ -154,7 +124,7 @@ pub fn immix_mutator_thread_local_alloc_copy<VM: VMBinding>(
     immix_allocator.alloc(bytes, align, offset)
 }
 
-#[cfg(feature = "thread_local_gc")]
+#[cfg(feature = "thread_local_gc_copying")]
 fn immix_mutator_thread_local_post_copy<VM: VMBinding>(
     mutator: &mut Mutator<VM>,
     obj: crate::util::ObjectReference,
@@ -202,9 +172,9 @@ pub fn create_immix_mutator<VM: VMBinding>(
         thread_local_prepare_func: &immix_mutator_thread_local_prepare,
         #[cfg(feature = "thread_local_gc")]
         thread_local_release_func: &immix_mutator_thread_local_release,
-        #[cfg(feature = "thread_local_gc")]
+        #[cfg(feature = "thread_local_gc_copying")]
         thread_local_alloc_copy_func: &immix_mutator_thread_local_alloc_copy,
-        #[cfg(feature = "thread_local_gc")]
+        #[cfg(feature = "thread_local_gc_copying")]
         thread_local_post_copy_func: &immix_mutator_thread_local_post_copy,
     };
     let mutator_id = crate::util::MUTATOR_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);

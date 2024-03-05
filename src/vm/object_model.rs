@@ -343,7 +343,7 @@ pub trait ObjectModel<VM: VMBinding> {
         copy_context: &mut GCWorkerCopyContext<VM>,
     ) -> ObjectReference;
 
-    #[cfg(feature = "thread_local_gc")]
+    #[cfg(feature = "thread_local_gc_copying")]
     /// Copy an object and return the address of the new object. Usually in the implementation of this method,
     /// `alloc_copy()` and `post_copy()` from [`GCWorkerCopyContext`](util/copy/struct.GCWorkerCopyContext.html)
     /// are used for copying.

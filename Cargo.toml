@@ -55,7 +55,7 @@ rand = "0.8.5"
 built = { version = "=0.6.0", features = ["git2"] }
 
 [features]
-default = ["public_bit"]
+default = ["public_bit", "thread_local_gc_ibm_style"]
 
 # This feature is only supported on x86-64 for now
 # It's manually added to CI scripts
@@ -109,6 +109,12 @@ debug_publish_object_overhead = ["public_bit"]
 
 #Enable thread local gc
 thread_local_gc = ["public_bit"]
+
+#Enable ibm style thread local gc
+thread_local_gc_ibm_style = ["thread_local_gc", "immix_non_moving"]
+
+#Enable ibm style thread local gc
+thread_local_gc_copying = ["thread_local_gc"]
 
 #Enable object publication analysis
 public_object_analysis = []

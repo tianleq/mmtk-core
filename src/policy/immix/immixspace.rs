@@ -62,8 +62,6 @@ pub struct ImmixSpace<VM: VMBinding> {
     space_args: ImmixSpaceArgs,
     #[cfg(feature = "thread_local_gc")]
     bytes_published: AtomicUsize,
-    #[cfg(feature = "thread_local_gc")]
-    objects_traced: AtomicUsize,
 }
 
 /// Some arguments for Immix Space.
@@ -396,7 +394,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             scheduler: scheduler.clone(),
             space_args,
             bytes_published: AtomicUsize::new(0),
-            objects_traced: AtomicUsize::new(0),
         }
     }
 
@@ -455,20 +452,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         _user_triggered_collection: bool,
         _full_heap_system_gc: bool,
     ) -> bool {
-        // self.defrag.decide_whether_to_defrag(
-        //     emergency_collection,
-        //     collect_whole_heap,
-        //     collection_attempts,
-        //     user_triggered_collection,
-        //     self.reusable_blocks.len() == 0,
-        //     full_heap_system_gc,
-        // );
-        // self.defrag.in_defrag()
-        #[cfg(feature = "immix_non_moving")]
+        #[cfg(feature = "thread_local_gc_ibm_style")]
         return false;
-        #[cfg(not(feature = "immix_non_moving"))]
+        #[cfg(feature = "thread_local_gc_copying")]
         return true;
-        // false
     }
 
     /// Get work packet scheduler
@@ -599,7 +586,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         {
             // clear published bytes
             self.bytes_published.store(0, Ordering::Relaxed);
-            self.objects_traced.store(0, Ordering::Relaxed);
         }
 
         did_defrag
@@ -883,8 +869,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             ForwardingWord::clear_forwarding_bits::<VM>(object);
             object
         } else {
-            #[cfg(feature = "thread_local_gc")]
-            self.objects_traced.fetch_add(1, Ordering::SeqCst);
             // We won the forwarding race; actually forward and copy the object if it is not pinned
             // and we have sufficient space in our copy allocator
             let new_object = if self.is_pinned(object)
@@ -1058,33 +1042,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             }
 
             self.unlog_object_if_needed(object);
-            // #[cfg(feature = "debug_publish_object")]
-            // {
-            //     use std::io::Write;
 
-            //     // if mutator.mutator_id > 30 {
-            //     let mut log_file = std::fs::OpenOptions::new()
-            //         .create(true)
-            //         .append(true)
-            //         .open(format!(
-            //             "/home/tianleq/misc/log-immix-{}.txt",
-            //             mutator.mutator_id
-            //         ))
-            //         .unwrap();
-            //     writeln!(
-            //         log_file,
-            //         "mutator: {:?}, request_id: {} | {:?}.{:?} --> {:?}",
-            //         mutator.mutator_id, mutator.request_id, source, slot, object
-            //     )
-            //     .unwrap();
-            // }
             return ThreadlocalTracedObjectType::ToBeScanned(object);
         }
         ThreadlocalTracedObjectType::Scanned(object)
     }
 
     /// Trace object and do evacuation if required.
-    #[cfg(feature = "thread_local_gc")]
+    #[cfg(feature = "thread_local_gc_copying")]
     #[allow(clippy::assertions_on_constants)]
     pub fn thread_local_trace_object_with_opportunistic_copy(
         &self,
@@ -1256,13 +1221,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             let state = if crate::util::public_bit::is_public::<VM>(object) {
                 #[cfg(debug_assertions)]
                 {
-                    // The following assertion only applies to a moving setting because public
+                    // The following assertion only applies to a copying local gc because public
                     // objects are evacuated. However, in a non-moving setting, public objects
                     // and private objects can share the same line and depending on the scanning
                     // order, it is possible that private objects get scanned first and mark the
                     // lines as private.
 
-                    #[cfg(not(feature = "immix_non_moving"))]
+                    #[cfg(feature = "thread_local_gc_copying")]
                     {
                         // Before the global gc starts, line mark state is reset,
                         // So public objects' line mark state is gone
@@ -1288,7 +1253,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             } else {
                 #[cfg(debug_assertions)]
                 {
-                    #[cfg(not(feature = "immix_non_moving"))]
+                    #[cfg(feature = "thread_local_gc_copying")]
                     // the invariant is that when marking private objects,
                     // the line must not have been marked as public
                     // (public objects have been evacuated)
@@ -1538,28 +1503,33 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
         &self,
         mutator: &mut Mutator<VM>,
         object: ObjectReference,
-        copy: Option<CopySemantics>,
+        _copy: Option<CopySemantics>,
     ) -> ThreadlocalTracedObjectType {
         if KIND == TRACE_THREAD_LOCAL_FAST {
-            #[cfg(not(feature = "immix_non_moving"))]
+            #[cfg(feature = "thread_local_gc_copying")]
             debug_assert!(false, "local gc always do defrag");
             self.thread_local_trace_object_without_moving(mutator, object)
         } else if KIND == TRACE_THREAD_LOCAL_DEFRAG {
-            if Block::containing::<VM>(object).is_defrag_source() {
-                self.thread_local_trace_object_with_opportunistic_copy(
-                    mutator,
-                    object,
-                    copy.unwrap(),
-                    // This should not be nursery collection. Nursery collection does not use PolicyTraceObject.
-                    false,
-                )
-            } else {
-                debug_assert!(
-                    Block::containing::<VM>(object).is_block_published(),
-                    "private block should be defrag source"
-                );
-                self.thread_local_trace_object_without_moving(mutator, object)
+            #[cfg(feature = "thread_local_gc_copying")]
+            {
+                if Block::containing::<VM>(object).is_defrag_source() {
+                    self.thread_local_trace_object_with_opportunistic_copy(
+                        mutator,
+                        object,
+                        _copy.unwrap(),
+                        // This should not be nursery collection. Nursery collection does not use PolicyTraceObject.
+                        false,
+                    )
+                } else {
+                    debug_assert!(
+                        Block::containing::<VM>(object).is_block_published(),
+                        "private block should be defrag source"
+                    );
+                    self.thread_local_trace_object_without_moving(mutator, object)
+                }
             }
+            #[cfg(not(feature = "thread_local_gc_copying"))]
+            unreachable!()
         } else {
             unreachable!()
         }
@@ -1575,7 +1545,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
         copy: Option<CopySemantics>,
     ) -> ThreadlocalTracedObjectType {
         if KIND == TRACE_THREAD_LOCAL_FAST {
-            #[cfg(not(feature = "immix_non_moving"))]
+            #[cfg(feature = "thread_local_gc_copying")]
             debug_assert!(false, "local gc always do defrag");
             #[cfg(not(feature = "debug_publish_object"))]
             return self.thread_local_trace_object_without_moving(mutator, object);
@@ -1616,7 +1586,10 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
     }
 
     fn thread_local_may_move_objects<const KIND: TraceKind>() -> bool {
-        true
+        #[cfg(feature = "thread_local_gc_copying")]
+        return true;
+        #[cfg(feature = "thread_local_gc_ibm_style")]
+        return false;
     }
 }
 

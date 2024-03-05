@@ -310,10 +310,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 );
                 current = self.remove_block_from_list(block);
             } else {
-                // since a global gc evacuates public objects, local blocks should be private again
+                // In a copying local gc setting, a global gc evacuates public objects, local blocks should be private again
                 #[cfg(debug_assertions)]
                 {
-                    #[cfg(not(feature = "immix_non_moving"))]
+                    #[cfg(feature = "thread_local_gc_copying")]
                     debug_assert!(
                         block.are_lines_valid(Line::public_line_mark_state(
                             self.local_line_mark_state
@@ -323,7 +323,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     if block.get_state() == BlockState::Unmarked
                         && !crate::policy::immix::BLOCK_ONLY
                     {
-                        #[cfg(not(feature = "immix_non_moving"))]
+                        #[cfg(feature = "thread_local_gc_copying")]
                         // live public objects have been evacuated to anonymous blocks
                         // only private objects left
                         debug_assert!(
@@ -332,7 +332,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         );
                     }
                 }
-                #[cfg(not(feature = "immix_non_moving"))]
+                #[cfg(feature = "thread_local_gc_copying")]
                 block.reset_publication();
                 current = self.next_block(block);
             }
@@ -431,17 +431,11 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 block.clear_owner();
                 block.deinit();
                 self.local_free_blocks.push(block);
-                // block.thread_local_sweep(self.space);
             } else {
                 current = self.next_block(block);
             }
         }
-        // for block in &*self.local_free_blocks {
-        //     println!(
-        //         "mutator: {} | local free block: {:?}",
-        //         self.mutator_id, *block
-        //     );
-        // }
+
         // verify thread local block list
         #[cfg(debug_assertions)]
         {
@@ -483,10 +477,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         "local free block: {:?} is still in the linked list",
                         block
                     );
-                    // println!(
-                    //     "mutator: {:?} | locally linked block: {:?}",
-                    //     self.mutator_id, block
-                    // );
                 }
 
                 current = self.next_block(block);

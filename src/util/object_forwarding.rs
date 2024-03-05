@@ -100,7 +100,7 @@ pub fn forward_object<VM: VMBinding>(
     new_object
 }
 
-#[cfg(feature = "thread_local_gc")]
+#[cfg(feature = "thread_local_gc_copying")]
 pub fn thread_local_forward_object<VM: VMBinding>(
     object: ObjectReference,
     semantics: CopySemantics,

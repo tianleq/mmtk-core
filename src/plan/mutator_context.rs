@@ -33,11 +33,11 @@ pub struct MutatorConfig<VM: VMBinding> {
     #[cfg(feature = "thread_local_gc")]
     /// Plan-specific code for mutator release. The VMWorkerThread is the worker thread that executes this release function.
     pub thread_local_release_func: &'static (dyn Fn(&mut Mutator<VM>) + Send + Sync),
-    #[cfg(feature = "thread_local_gc")]
+    #[cfg(feature = "thread_local_gc_copying")]
     /// Plan-specific code for mutator prepare. The VMWorkerThread is the worker thread that executes this prepare function.
     pub thread_local_alloc_copy_func:
         &'static (dyn Fn(&mut Mutator<VM>, usize, usize, usize) -> Address + Send + Sync),
-    #[cfg(feature = "thread_local_gc")]
+    #[cfg(feature = "thread_local_gc_copying")]
     /// Plan-specific code for mutator release. The VMWorkerThread is the worker thread that executes this release function.
     pub thread_local_post_copy_func:
         &'static (dyn Fn(&mut Mutator<VM>, ObjectReference, usize) + Send + Sync),
@@ -232,12 +232,12 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         &mut *self.barrier
     }
 
-    #[cfg(feature = "thread_local_gc")]
+    #[cfg(feature = "thread_local_gc_copying")]
     fn alloc_copy(&mut self, size: usize, align: usize, offset: usize) -> Address {
         (*self.config.thread_local_alloc_copy_func)(self, size, align, offset)
     }
 
-    #[cfg(feature = "thread_local_gc")]
+    #[cfg(feature = "thread_local_gc_copying")]
     fn post_copy(&mut self, obj: ObjectReference, bytes: usize) {
         (*self.config.thread_local_post_copy_func)(self, obj, bytes)
     }
@@ -315,10 +315,10 @@ pub trait MutatorContext<VM: VMBinding>: Send + 'static {
     /// The safety of this function is ensured by a down-cast check.
     unsafe fn barrier_impl<B: Barrier<VM>>(&mut self) -> &mut B;
 
-    #[cfg(feature = "thread_local_gc")]
+    #[cfg(feature = "thread_local_gc_copying")]
     fn alloc_copy(&mut self, size: usize, align: usize, offset: usize) -> Address;
 
-    #[cfg(feature = "thread_local_gc")]
+    #[cfg(feature = "thread_local_gc_copying")]
     fn post_copy(&mut self, obj: ObjectReference, bytes: usize);
 
     #[cfg(feature = "thread_local_gc")]
@@ -511,7 +511,7 @@ pub fn generic_thread_local_prepare<VM: VMBinding>(_mutator: &mut Mutator<VM>) {
 #[cfg(feature = "thread_local_gc")]
 pub fn generic_thread_local_release<VM: VMBinding>(_mutator: &mut Mutator<VM>) {}
 
-#[cfg(feature = "thread_local_gc")]
+#[cfg(feature = "thread_local_gc_copying")]
 pub fn generic_thread_local_alloc_copy<VM: VMBinding>(
     _mutator: &mut Mutator<VM>,
     _size: usize,
@@ -521,7 +521,7 @@ pub fn generic_thread_local_alloc_copy<VM: VMBinding>(
     Address::ZERO
 }
 
-#[cfg(feature = "thread_local_gc")]
+#[cfg(feature = "thread_local_gc_copying")]
 pub fn generic_thread_local_post_copy<VM: VMBinding>(
     _mutator: &mut Mutator<VM>,
     _obj: ObjectReference,

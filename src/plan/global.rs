@@ -774,30 +774,6 @@ impl<VM: VMBinding> BasePlan<VM> {
         self.vm_space.release();
     }
 
-    // #[cfg(feature = "thread_local_gc")]
-    // pub fn thread_local_prepare(&self, _tls: u32) {
-    //     #[cfg(feature = "code_space")]
-    //     self.code_space.thread_local_prepare(_tls);
-    //     #[cfg(feature = "code_space")]
-    //     self.code_lo_space.thread_local_prepare(_tls);
-    //     #[cfg(feature = "ro_space")]
-    //     self.ro_space.thread_local_prepare(_tls);
-    //     #[cfg(feature = "vm_space")]
-    //     self.vm_space.thread_local_prepare(_tls);
-    // }
-
-    // #[cfg(feature = "thread_local_gc")]
-    // pub fn thread_local_release(&self, _tls: u32) {
-    //     #[cfg(feature = "code_space")]
-    //     self.code_space.thread_local_release(_tls);
-    //     #[cfg(feature = "code_space")]
-    //     self.code_lo_space.thread_local_release(_tls);
-    //     #[cfg(feature = "ro_space")]
-    //     self.ro_space.thread_local_release(_tls);
-    //     #[cfg(feature = "vm_space")]
-    //     self.vm_space.thread_local_release(_tls);
-    // }
-
     pub fn set_collection_kind<P: Plan>(&self, plan: &P) {
         self.cur_collection_attempts.store(
             if self.is_user_triggered_collection() {
@@ -1223,22 +1199,6 @@ impl<VM: VMBinding> CommonPlan<VM> {
         self.nonmoving.release();
         self.base.release(tls, full_heap)
     }
-
-    // #[cfg(feature = "thread_local_gc")]
-    // pub fn thread_local_prepare(&self, mutator_id: u32) {
-    //     self.immortal.thread_local_prepare(mutator_id);
-    //     self.los.thread_local_prepare(mutator_id);
-    //     self.nonmoving.thread_local_prepare(mutator_id);
-    //     self.base.thread_local_release(mutator_id);
-    // }
-
-    // #[cfg(feature = "thread_local_gc")]
-    // pub fn thread_local_release(&self, mutator_id: u32) {
-    //     self.immortal.thread_local_release(mutator_id);
-    //     self.los.thread_local_release(mutator_id);
-    //     self.nonmoving.thread_local_release(mutator_id);
-    //     self.base.thread_local_release(mutator_id);
-    // }
 
     pub fn stacks_prepared(&self) -> bool {
         self.base.stacks_prepared()

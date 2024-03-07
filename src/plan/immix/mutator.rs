@@ -113,7 +113,7 @@ pub fn immix_mutator_thread_local_alloc_copy<VM: VMBinding>(
     align: usize,
     offset: usize,
 ) -> crate::util::Address {
-    use crate::util::alloc::Allocator;
+    use crate::util::alloc::immix_allocator::ImmixAllocSemantics;
     let allocators: &mut Allocators<VM> = mutator.allocators.borrow_mut();
 
     let immix_allocator: &mut ImmixAllocator<VM> = unsafe {
@@ -121,7 +121,7 @@ pub fn immix_mutator_thread_local_alloc_copy<VM: VMBinding>(
     }
     .downcast_mut::<ImmixAllocator<VM>>()
     .unwrap();
-    immix_allocator.alloc(bytes, align, offset)
+    immix_allocator.alloc_copy(bytes, align, offset, ImmixAllocSemantics::Private)
 }
 
 #[cfg(feature = "thread_local_gc_copying")]

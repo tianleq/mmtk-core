@@ -81,9 +81,6 @@ define_side_metadata_specs!(
     IX_BLOCK_OWNER   = (global: false, log_num_of_bits: 5, log_bytes_in_region: crate::policy::immix::block::Block::LOG_BYTES),
     // Keep track of blocks published by immix
     IX_BLOCK_PUBLICATION = (global: false, log_num_of_bits: 0, log_bytes_in_region: crate::policy::immix::block::Block::LOG_BYTES),
-    // local doubly linked list of blocks
-    IX_BLOCK_LINKED_LIST_PREV = (global: false, log_num_of_bits: 6, log_bytes_in_region: crate::policy::immix::block::Block::LOG_BYTES),
-    IX_BLOCK_LINKED_LIST_NEXT = (global: false, log_num_of_bits: 6, log_bytes_in_region: crate::policy::immix::block::Block::LOG_BYTES),
     // Keep track of lines published by immix
     IX_LINE_PUBLICATION  = (global: false, log_num_of_bits: 0, log_bytes_in_region: crate::policy::immix::line::Line::LOG_BYTES),
     // Mark chunks (any plan that uses the chunk map should include this spec in their local sidemetadata specs)

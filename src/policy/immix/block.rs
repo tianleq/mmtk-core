@@ -112,14 +112,6 @@ impl Block {
     pub const BLOCK_PUBLICATION_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_PUBLICATION;
 
-    #[cfg(feature = "thread_local_gc")]
-    pub const BLOCK_LINKED_LIST_PREV_TABLE: SideMetadataSpec =
-        crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_LINKED_LIST_PREV;
-
-    #[cfg(feature = "thread_local_gc")]
-    pub const BLOCK_LINKED_LIST_NEXT_TABLE: SideMetadataSpec =
-        crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_LINKED_LIST_NEXT;
-
     /// Get the chunk containing the block.
     pub fn chunk(&self) -> Chunk {
         Chunk::from_unaligned_address(self.0)

@@ -323,10 +323,12 @@ impl Block {
             let line_mark_state = line_mark_state.unwrap();
             let publish_state = Line::public_line_mark_state(line_mark_state);
 
+            let is_published = self.is_block_published();
+
             for line in self.lines() {
                 #[cfg(debug_assertions)]
                 {
-                    #[cfg(not(feature = "immix_non_moving"))]
+                    #[cfg(feature = "thread_local_gc_copying")]
                     {
                         if line.is_public_line() {
                             assert!(
@@ -336,17 +338,27 @@ impl Block {
                                 self.owner(),
                                 line.get_line_mark_state()
                             );
+                            assert!(
+                                is_published,
+                                "private block: {:?} contains public line: {:?} after a local gc",
+                                self, line
+                            );
                         } else {
                             assert!(
                                 !line.is_published(publish_state),
                                 "private line: {:?} is marked as public, block: {:?}, {:?}",
                                 line,
                                 self.owner(),
-                                self.is_block_published()
+                                is_published
+                            );
+                            assert!(
+                                !is_published,
+                                "public block: {:?} contains private line: {:?} after a local gc",
+                                self, line
                             );
                         }
                     }
-                    #[cfg(feature = "immix_non_moving")]
+                    #[cfg(feature = "thread_local_gc_ibm_style")]
                     {
                         if !line.is_public_line() {
                             assert!(
@@ -391,7 +403,9 @@ impl Block {
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_region_swept::<VM, _>(self, false);
                 // liveness of public block is unknown during thread-local gc
-                // so conservatively treat it as live
+                // so conservatively treat it as live (this check may not be
+                // necessary since public blocks are treated as reusable after
+                // a local gc and they are given back to the immixspace)
                 if self.is_block_published() {
                     false
                 } else {
@@ -417,13 +431,11 @@ impl Block {
                         unavailable_lines: marked_lines as _,
                     });
 
-                    // local gc should not touch global state if possible
-                    // if adding the blocks to the global reusable block list
-                    // then once the block becomes free, it has to be removed
-                    // from the global reusable block list, which is hard in
-                    // a local gc
-                    // So the following is not needed
-                    // space.reusable_blocks.push(*self)
+                    // only add public blocks to global reusable block list
+                    if is_published {
+                        self.set_owner(u32::MAX);
+                        _space.reusable_blocks.push(*self);
+                    }
                 } else {
                     // Clear mark state.
                     self.set_state(BlockState::Unmarked);

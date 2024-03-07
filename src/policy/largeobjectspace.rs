@@ -94,10 +94,12 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
         #[cfg(not(feature = "thread_local_gc"))]
         self.treadmill.add_to_treadmill(object, alloc);
     }
+
     #[cfg(feature = "is_mmtk_object")]
     fn is_mmtk_object(&self, addr: Address) -> bool {
         crate::util::metadata::vo_bit::is_vo_bit_set_for_addr::<VM>(addr).is_some()
     }
+
     fn sft_trace_object(
         &self,
         queue: &mut VectorObjectQueue,
@@ -229,7 +231,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     fn thread_local_trace_object(
         &self,
         #[cfg(feature = "debug_publish_object")] source: ObjectReference,
-        #[cfg(feature = "debug_publish_object")] slot: VM::VMEdge,
+        #[cfg(feature = "debug_publish_object")] _slot: VM::VMEdge,
         object: ObjectReference,
         _mutator: &crate::Mutator<VM>,
     ) -> ThreadlocalTracedObjectType {
@@ -263,27 +265,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         }
 
         if self.thread_local_mark(object, MARK_BIT) {
-            // #[cfg(all(feature = "debug_publish_object", debug_assertions))]
-            // use std::io::Write;
-
-            // let counter = self.counter.fetch_add(1, Ordering::SeqCst);
-            // debug_assert!(self.test_thread_local_mark(object, MARK_BIT));
-            // #[cfg(all(feature = "debug_publish_object", debug_assertions))]
-            // let mut log_file = std::fs::OpenOptions::new()
-            //     .create(true)
-            //     .append(true)
-            //     .open(format!(
-            //         "/home/tianleq/misc/log-los-{}.txt",
-            //         _mutator.mutator_id
-            //     ))
-            //     .unwrap();
-            // writeln!(
-            //     log_file,
-            //     "mutator: {:?}, request_id: {} | {:?}.{:?} --> {:?}",
-            //     _mutator.mutator_id, _mutator.request_id, source, slot, object
-            // )
-            // .unwrap();
-
             return ThreadlocalTracedObjectType::ToBeScanned(object);
         }
         ThreadlocalTracedObjectType::Scanned(object)

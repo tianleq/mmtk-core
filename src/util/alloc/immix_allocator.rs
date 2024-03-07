@@ -399,14 +399,15 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             if block.thread_local_can_sweep(self.space, mark_hisogram, line_mark_state) {
                 // block will be reclaimed, need to remove it from the list
 
-                // Instead of returning the block to the global page resource,
-                // blocks will be kept locally by the mutator. Only after a global
-                // gc, all those locally cached blocks will be given back
+                // release free blocks for now, may cache those blocks locally
                 block.clear_owner();
-                block.deinit();
-                self.local_free_blocks.push(block);
+                self.space.release_block(block);
+                // block.deinit();
+                // self.local_free_blocks.push(block);
             } else {
-                blocks.push(block);
+                if !block.is_block_published() {
+                    blocks.push(block);
+                }
             }
         }
         self.local_blocks.extend(blocks);
@@ -414,6 +415,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         // verify thread local block list
         #[cfg(debug_assertions)]
         {
+            let mut reusable_count = 0;
             for &block in self.local_blocks.iter() {
                 if crate::policy::immix::BLOCK_ONLY {
                     // After a local gc, public block may be BlockState::Unmarked
@@ -430,6 +432,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         "local block list is corrupted"
                     )
                 }
+                if block.get_state().is_reusable() {
+                    reusable_count += 1;
+                }
 
                 #[cfg(feature = "debug_publish_object")]
                 {
@@ -445,6 +450,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     );
                 }
             }
+            assert!(
+                reusable_count <= 1,
+                "private objects are not strictly evacuated in the local gc"
+            );
         }
     }
 }
@@ -713,10 +722,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
     /// Get a recyclable block from ImmixSpace.
     fn acquire_recyclable_block(&mut self) -> bool {
-        match self
-            .immix_space()
-            .get_reusable_block(self.copy, self.mutator_id, None)
-        {
+        match self.immix_space().get_reusable_block(self.copy) {
             Some(block) => {
                 trace!("{:?}: acquire_recyclable_block -> {:?}", self.tls, block);
 
@@ -727,39 +733,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             _ => false,
         }
     }
-
-    // #[cfg(feature = "thread_local_gc")]
-    // /// Get a recyclable block from ImmixSpace.
-    // fn acquire_recyclable_block(&mut self) -> bool {
-    //     // Search the local block list, looking for reusable blocks
-    //     // let mut current = self.block_header;
-    //     // while let Some(block) = current {
-    //     for &block in self.local_blocks.iter() {
-    //         debug_assert!(
-    //             self.mutator_id == block.owner(),
-    //             "local block list is corrupted. Block: {:?} 's owner is {:?}, current mutator: {:?}",
-    //             block, block.owner(), self.mutator_id
-    //         );
-
-    //         if block.get_state().is_reusable() {
-    //             trace!("{:?}: acquire_recyclable_block -> {:?}", self.tls, block);
-    //             // Set the hole-searching cursor to the start of this block.
-    //             self.line = Some(block.start_line());
-    //             // The following effectively pop the reusable block from the local block list
-    //             block.set_state(BlockState::Marked);
-    //             // #[cfg(all(feature = "debug_publish_object", debug_assertions))]
-    //             // info!(
-    //             //     "acquire a reusable block: {:?} from local block list.",
-    //             //     block
-    //             // );
-    //             return true;
-    //         }
-    //         // else {
-    //         //     current = self.next_block(block);
-    //         // }
-    //     }
-    //     false
-    // }
 
     // Get a clean block from ImmixSpace.
     fn acquire_clean_block(&mut self, size: usize, align: usize, offset: usize) -> Address {
@@ -847,9 +820,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 block.chunk(),
                 crate::util::heap::chunk_map::ChunkState::Allocated,
             );
-            // self.immix_space()
-            //     .lines_consumed
-            //     .fetch_add(Block::LINES, atomic::Ordering::SeqCst);
+
             return Some(block);
         }
         self.immix_space().get_clean_block(self.tls, self.copy)

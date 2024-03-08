@@ -511,7 +511,7 @@ impl Block {
             for line in self.lines() {
                 #[cfg(all(feature = "thread_local_gc", debug_assertions))]
                 {
-                    #[cfg(not(feature = "immix_non_moving"))]
+                    #[cfg(feature = "thread_local_gc_copying")]
                     {
                         if line.is_public_line() {
                             // public line bit is bulk set during page allocation, some lines may not have objects, so mark state can be 0
@@ -532,7 +532,7 @@ impl Block {
                             );
                         }
                     }
-                    #[cfg(feature = "immix_non_moving")]
+                    #[cfg(feature = "thread_local_gc_ibm_style")]
                     {
                         if !line.is_public_line() {
                             assert!(
@@ -597,10 +597,16 @@ impl Block {
                         unavailable_lines: marked_lines as _,
                     });
 
-                    // If thread local gc is enabled, looking for reusable blocks
-                    // from local list
                     #[cfg(not(feature = "thread_local_gc"))]
                     space.reusable_blocks.push(*self);
+                    // If thread local gc is enabled, only public blocks
+                    // can be reused
+                    #[cfg(feature = "thread_local_gc_copying")]
+                    {
+                        if self.is_block_published() {
+                            space.reusable_blocks.push(*self);
+                        }
+                    }
                 } else {
                     // Clear mark state.
                     self.set_state(BlockState::Unmarked);

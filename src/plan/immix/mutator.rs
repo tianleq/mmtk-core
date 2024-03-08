@@ -53,8 +53,7 @@ pub fn immix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMW
 
     #[cfg(feature = "thread_local_gc")]
     {
-        // For a thread local gc, it needs to sweep blocks
-        // A global gc has dedicated work packets(SweepChunk) of sweeping blocks,
+        // For a thread local gc, it needs to sweep blocks from its local block list
         // so no need to do it here
         immix_allocator.release();
         let los_allocator: &mut LargeObjectAllocator<VM> = unsafe {

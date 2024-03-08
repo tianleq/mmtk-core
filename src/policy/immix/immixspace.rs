@@ -710,17 +710,15 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         vo_bit::helper::on_trace_object::<VM>(object);
 
         #[cfg(feature = "thread_local_gc")]
-        let is_local_object = !crate::util::public_bit::is_public::<VM>(object);
+        let is_private_object = !crate::util::public_bit::is_public::<VM>(object);
         #[cfg(not(feature = "thread_local_gc"))]
         let is_local_object = false;
 
         #[cfg(all(debug_assertions, feature = "thread_local_gc"))]
         {
-            if !is_local_object {
-                debug_assert!(
-                    Block::containing::<VM>(object).is_block_published(),
-                    "public block is corrupted"
-                );
+            let is_published = Block::containing::<VM>(object).is_block_published();
+            if !is_private_object {
+                debug_assert!(is_published, "public block is corrupted");
             } else {
                 #[cfg(feature = "debug_publish_object")]
                 {
@@ -731,9 +729,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                             usize,
                         >(object);
                     if metadata != usize::try_from(owner).unwrap() {
+                        // private objects can live in reusable public blocks
                         debug_assert!(
                             metadata
-                                == usize::try_from(owner).unwrap(),
+                                == usize::try_from(owner).unwrap() || is_published,
                             "object: {:?}, metadata: {:?}, block owner: {:?}, forwarding status: {:?}, marked: {:?}",
                             object,
                             metadata,
@@ -775,11 +774,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             new_object
         } else if self.is_marked(object) {
             #[cfg(feature = "thread_local_gc")]
-            debug_assert!(is_local_object, "public object cannot be left in-place");
+            assert!(is_private_object, "public object cannot be left in-place");
             // We won the forwarding race but the object is already marked so we clear the
             // forwarding status and return the unmoved object
             debug_assert!(
-                nursery_collection || self.defrag.space_exhausted() || self.is_pinned(object) || is_local_object,
+                nursery_collection || self.defrag.space_exhausted() || self.is_pinned(object) || is_private_object,
                 "Forwarded object is the same as original object {} even though it should have been copied",
                 object,
             );
@@ -808,14 +807,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             // and we have sufficient space in our copy allocator
             let new_object = if self.is_pinned(object)
                 || (!nursery_collection && self.defrag.space_exhausted())
-                || is_local_object
+                || is_private_object
             {
                 #[cfg(feature = "thread_local_gc_copying")]
                 {
-                    if !is_local_object {
+                    if !is_private_object {
                         println!("defrag space exhausted: {}", self.defrag.space_exhausted());
                     }
-                    debug_assert!(is_local_object, "public object cannot be left in-place");
+                    debug_assert!(is_private_object, "public object cannot be left in-place");
                 }
                 #[cfg(all(feature = "debug_publish_object", feature = "thread_local_gc"))]
                 {
@@ -851,7 +850,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 #[cfg(feature = "thread_local_gc")]
                 {
                     debug_assert!(
-                        !is_local_object,
+                        !is_private_object,
                         "private object should be left in place in a global gc"
                     );
                     debug_assert!(
@@ -959,14 +958,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
 
         if self.thread_local_attempt_mark(object, self.mark_state) {
-            #[cfg(not(feature = "debug_publish_object"))]
             let local_state = self.local_line_mark_state(mutator);
-            #[cfg(feature = "debug_publish_object")]
-            let local_state = if crate::util::public_bit::is_public::<VM>(object) {
-                Line::public_line_mark_state(self.line_mark_state.load(Ordering::Acquire))
-            } else {
-                self.local_line_mark_state(mutator)
-            };
             // Mark block and lines
             if !super::BLOCK_ONLY {
                 if !super::MARK_LINE_AT_SCAN_TIME {
@@ -1593,6 +1585,7 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
         self.reset_object_mark();
         #[cfg(all(feature = "thread_local_gc", debug_assertions))]
         self.reset_public_line_mark();
+
         // Iterate over all blocks in this chunk
         for block in self.chunk.iter_region::<Block>() {
             let state = block.get_state();
@@ -1600,6 +1593,10 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
             if state == BlockState::Unallocated {
                 continue;
             }
+            #[cfg(feature = "thread_local_gc")]
+            let is_public = block.is_block_published();
+            #[cfg(not(feature = "thread_local_gc"))]
+            let is_public = false;
             // Check if this block needs to be defragmented.
             let is_defrag_source = if !super::DEFRAG {
                 false
@@ -1609,6 +1606,10 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
             } else if let Some(defrag_threshold) = self.defrag_threshold {
                 // This GC is a defrag GC.
                 block.get_holes() > defrag_threshold
+            } else if is_public {
+                // public objects have to be evacuated during a global gc,
+                // so all public blocks need to be defrag source
+                true
             } else {
                 // Not a defrag GC.
                 false

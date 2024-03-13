@@ -23,11 +23,7 @@ impl<VM: VMBinding> ExecuteThreadlocalCollection<VM> {
     pub fn execute(&mut self) {
         let mutator = VM::VMActivePlan::mutator(self.mutator_tls);
         mutator.thread_local_gc_status = THREAD_LOCAL_GC_ACTIVE;
-        trace!(
-            "ScheduleThreadlocalCollection {:?} executed by GC Thread {}",
-            mutator.mutator_id,
-            crate::scheduler::worker::current_worker_ordinal().unwrap()
-        );
+        info!("Start of Thread local GC {:?}", mutator.mutator_id,);
 
         // A hook of local gc, no-op at the moment
         self.mmtk

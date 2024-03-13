@@ -174,8 +174,8 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    pub fn thread_local_flush(&self, id: usize) {
-        self.block_queue.flush(id);
+    pub fn thread_local_flush(&self, blocks: impl IntoIterator<Item = B>) {
+        self.block_queue.flush_blocks(blocks);
     }
 }
 
@@ -398,6 +398,17 @@ impl<B: Region> BlockPool<B> {
         }
         for array in &self.worker_local_freed_blocks {
             array.iterate_blocks(f);
+        }
+    }
+    #[cfg(feature = "thread_local_gc")]
+    pub fn flush_blocks(&self, blocks: impl IntoIterator<Item = B>) {
+        let queue = BlockQueue::new();
+        for block in blocks {
+            let result = unsafe { queue.push_relaxed(block) };
+            debug_assert!(result.is_ok());
+        }
+        if !queue.is_empty() {
+            self.global_freed_blocks.write().push(queue);
         }
     }
 }

@@ -180,7 +180,8 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     fn get_object_owner(&self, _object: ObjectReference) -> Option<u32> {
         if self.immix_space.in_space(_object) {
             return Some(self.immix_space.get_object_owner(_object));
-        } else if self.common.get_los().in_space(_object) {
+        }
+        if self.common.get_los().in_space(_object) {
             return Some(self.common.get_los().get_object_owner(_object));
         }
         None

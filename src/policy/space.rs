@@ -51,8 +51,9 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         // Should we poll to attempt to GC?
         // - If tls is collector, we cannot attempt a GC.
         // - If gc is disabled, we cannot attempt a GC.
-        let should_poll = VM::VMActivePlan::is_mutator(tls)
-            && VM::VMActivePlan::global().should_trigger_gc_when_heap_is_full();
+        let is_mutator = VM::VMActivePlan::is_mutator(tls);
+        let should_poll =
+            is_mutator && VM::VMActivePlan::global().should_trigger_gc_when_heap_is_full();
         // Is a GC allowed here? If we should poll but are not allowed to poll, we will panic.
         // initialize_collection() has to be called so we know GC is initialized.
         let allow_gc = should_poll && VM::VMActivePlan::global().is_initialized();
@@ -62,6 +63,15 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         let pages_reserved = pr.reserve_pages(pages);
         trace!("Pages reserved");
         trace!("Polling ..");
+
+        #[cfg(feature = "thread_local_gc_copying")]
+        let should_poll = if should_poll {
+            // tls is s mutator, if local gc is active, we cannot trigger a global gc
+            VM::VMActivePlan::mutator(VMMutatorThread(tls)).thread_local_gc_status
+                == crate::scheduler::thread_local_gc_work::THREAD_LOCAL_GC_INACTIVE
+        } else {
+            false
+        };
 
         if should_poll {
             if let Some(kind) =

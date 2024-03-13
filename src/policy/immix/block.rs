@@ -352,9 +352,10 @@ impl Block {
                                 is_published
                             );
                             assert!(
-                                !is_published,
+                                !is_published || !line.is_marked(line_mark_state),
                                 "public block: {:?} contains private line: {:?} after a local gc",
-                                self, line
+                                self,
+                                line
                             );
                         }
                     }
@@ -430,12 +431,6 @@ impl Block {
                     self.set_state(BlockState::Reusable {
                         unavailable_lines: marked_lines as _,
                     });
-
-                    // only add public blocks to global reusable block list
-                    if is_published {
-                        self.set_owner(u32::MAX);
-                        _space.reusable_blocks.push(*self);
-                    }
                 } else {
                     // Clear mark state.
                     self.set_state(BlockState::Unmarked);
@@ -451,17 +446,6 @@ impl Block {
                 false
             }
         }
-    }
-
-    #[cfg(feature = "thread_local_gc")]
-    pub fn thread_local_sweep<VM: VMBinding>(&self, space: &ImmixSpace<VM>) {
-        #[cfg(feature = "debug_publish_object")]
-        debug_assert!(
-            !self.is_block_published(),
-            "public block cannot be released in local gc"
-        );
-        self.clear_owner();
-        space.release_block(*self);
     }
 
     /// Sweep this block.
@@ -681,8 +665,8 @@ impl ReusableBlockPool {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    pub fn thread_local_flush(&self, id: usize) {
-        self.queue.flush(id);
+    pub fn thread_local_flush_blocks(&self, blocks: impl IntoIterator<Item = Block>) {
+        self.queue.flush_blocks(blocks);
     }
 
     /// Flush the block queue

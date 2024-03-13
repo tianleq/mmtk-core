@@ -168,7 +168,7 @@ impl Line {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    pub fn publish_lines_for_object<VM: VMBinding>(object: ObjectReference, state: u8) {
+    pub fn publish_lines_of_object<VM: VMBinding>(object: ObjectReference, state: u8) {
         // mark line as public
         let (start_line, end_line) = Self::mark_lines_for_object_impl::<VM>(object, state, false);
 

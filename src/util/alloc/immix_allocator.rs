@@ -53,14 +53,14 @@ pub struct ImmixAllocator<VM: VMBinding> {
     #[cfg(feature = "thread_local_gc")]
     local_free_blocks: Box<Vec<Block>>,
     #[cfg(feature = "thread_local_gc")]
+    local_reusable_blocks: Box<Vec<Block>>,
+    #[cfg(feature = "thread_local_gc")]
     /// line mark state of local gc
     pub local_line_mark_state: u8,
     #[cfg(feature = "thread_local_gc")]
     pub local_unavailable_line_mark_state: u8,
     #[cfg(feature = "thread_local_gc")]
     semantic: Option<ImmixAllocSemantics>,
-    #[cfg(all(feature = "debug_publish_object", feature = "thread_local_gc"))]
-    blocks: Box<Vec<Block>>,
 }
 
 impl<VM: VMBinding> ImmixAllocator<VM> {
@@ -94,15 +94,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         block,
                     );
                 }
-                #[cfg(feature = "thread_local_gc_copying")]
-                for line in block.lines() {
-                    debug_assert!(
-                        line.get_line_mark_state() == 0,
-                        "local block {:?}'s line: {:?} 's mark state is not cleared properly",
-                        block,
-                        line,
-                    );
-                }
+
                 assert!(
                     block.owner() == self.mutator_id,
                     "block: {:?} owner: {} != mutator: {}",
@@ -127,10 +119,12 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 == (self.local_line_mark_state & Line::GLOBAL_LINE_MARK_STATE_MASK)
         );
 
+        // move local reusable blocks to local blocks
+        self.local_blocks
+            .extend(self.local_reusable_blocks.drain(..));
+
         // A local gc does not have PrepareBlockState work packets
         // So resetting the state manually
-        // let mut current = self.block_header;
-        // while let Some(block) = current {
         for &block in self.local_blocks.iter() {
             // local list should not contain unallocated blocks
             // it may contain unmarked blocks(newly allocated)
@@ -152,8 +146,11 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             let is_defrag_source = false;
             #[cfg(feature = "thread_local_gc_copying")]
             let is_defrag_source = true;
+
             // in a local gc, always do the defrag even if it is a public block
-            // all private objects will be evacuated
+            // all private objects will be evacuated (this is no longer necessary
+            // as local gc always doing evacuation regardless of block being defrag
+            // source or not)
             block.set_as_defrag_source(is_defrag_source);
 
             // clear object mark bit
@@ -225,30 +222,15 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    // This function is only called when evacuating public objects. It will move public objects to
-    // some anonymous block
-    pub fn alloc_copy(
-        &mut self,
-        size: usize,
-        align: usize,
-        offset: usize,
-        semantic: ImmixAllocSemantics,
-    ) -> Address {
-        //  mutator id is u32::MAX, which means this is an anonymous block
-        debug_assert!(
-            semantic == ImmixAllocSemantics::Private || self.mutator_id == u32::MAX,
-            "{:?} with mutator id: {}",
-            semantic,
-            self.mutator_id
-        );
-
+    pub fn alloc_copy(&mut self, size: usize, align: usize, offset: usize) -> Address {
+        // Evacuating private objects, acquire clean blocks only.
         #[cfg(not(feature = "extra_header"))]
         {
             let rtn = self.alloc_impl(size, align, offset, true);
             debug_assert!(
-                u32::MAX == Block::from_unaligned_address(rtn).owner(),
+                self.mutator_id == Block::from_unaligned_address(rtn).owner(),
                 "mutator_id: {} != block owner: {}",
-                u32::MAX,
+                self.mutator_id,
                 Block::from_unaligned_address(rtn).owner()
             );
 
@@ -259,9 +241,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         {
             let rtn = self.alloc_impl(size + VM::EXTRA_HEADER_BYTES, align, offset, true);
             debug_assert!(
-                u32::MAX == Block::from_unaligned_address(rtn).owner(),
+                self.mutator_id == Block::from_unaligned_address(rtn).owner(),
                 "mutator_id: {} != block owner: {}",
-                u32::MAX,
+                self.mutator_id,
                 Block::from_unaligned_address(rtn).owner()
             );
             if !rtn.is_zero() {
@@ -322,24 +304,34 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 // block.reset_publication();
                 #[cfg(feature = "thread_local_gc_copying")]
                 if !block.is_block_published() {
-                    blocks.push(block);
+                    if block.get_state().is_reusable() {
+                        self.local_reusable_blocks.push(block)
+                    } else {
+                        blocks.push(block);
+                    }
                 }
             }
         }
         // keep local blocks list accurate
         self.local_blocks.extend(blocks);
 
-        // Also release all local free blocks to the page resource
+        // // Also release all local free blocks to the page resource
         for block in self.local_free_blocks.drain(..) {
+            #[cfg(debug_assertions)]
+            {
+                assert!(
+                    block.get_state() == BlockState::Unallocated,
+                    "local free block list contains {:?} block: {:?}",
+                    block.get_state(),
+                    block
+                );
+            }
             self.space.release_block(block);
         }
 
         // verify thread local block list
         #[cfg(debug_assertions)]
         {
-            // let mut current = self.block_header;
-            let mut local_blocks = Vec::new();
-            // while let Some(block) = current {
             for &block in self.local_blocks.iter() {
                 if crate::policy::immix::BLOCK_ONLY {
                     // After a global gc, local list should not have blocks whose state
@@ -366,13 +358,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     block.owner(),
                     self.mutator_id,
                 );
-                local_blocks.push(block);
             }
-            #[cfg(feature = "debug_publish_object")]
-            for b in self.blocks.iter() {
-                local_blocks.retain(|&block| *b != block);
-            }
-            debug_assert!(local_blocks.is_empty(), "inconsistent local block list");
         }
     }
 
@@ -396,23 +382,48 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
         let mark_hisogram = &mut histogram;
         let mut blocks = vec![];
+        let mut global_reusable_blocks = vec![];
         for block in self.local_blocks.drain(..) {
             debug_assert!(self.mutator_id == block.owner());
 
             if block.thread_local_can_sweep(self.space, mark_hisogram, line_mark_state) {
                 // release free blocks for now, may cache those blocks locally
                 block.clear_owner();
-                self.space.release_block(block);
-                // block.deinit();
-                // self.local_free_blocks.push(block);
+                // self.space.release_block(block);
+                block.deinit();
+                self.local_free_blocks.push(block);
+                info!("block: {:?} is free after local gc", block);
             } else {
                 // public blocks will be removed from the local block list
-                if !block.is_block_published() {
-                    blocks.push(block);
+                let published = block.is_block_published();
+                if block.get_state().is_reusable() {
+                    if published {
+                        // public reusable block
+                        block.set_owner(u32::MAX);
+                        global_reusable_blocks.push(block);
+                    } else {
+                        // private reusable block
+                        self.local_reusable_blocks.push(block);
+                    }
+                } else {
+                    // block is not reusable, add to local block list
+                    if !published {
+                        blocks.push(block);
+                    }
                 }
             }
         }
         self.local_blocks.extend(blocks);
+
+        // Give back free blocks
+        self.space
+            .thread_local_release_blocks(self.local_free_blocks.drain(..));
+        // Give back public reusable blocks
+        self.space
+            .reusable_blocks
+            .thread_local_flush_blocks(global_reusable_blocks.drain(..));
+
+        debug_assert_eq!(self.local_free_blocks.len(), 0);
 
         // verify thread local block list
         #[cfg(debug_assertions)]
@@ -442,11 +453,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
                 #[cfg(feature = "debug_publish_object")]
                 {
-                    assert!(
-                        self.blocks.contains(&block),
-                        "local block list is corrupted, block: {:?} is missing",
-                        block
-                    );
                     assert!(
                         !self.local_free_blocks.contains(&block),
                         "local free block: {:?} is still in the linked list",
@@ -602,11 +608,11 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             #[cfg(feature = "thread_local_gc")]
             local_free_blocks: Box::new(Vec::new()),
             #[cfg(feature = "thread_local_gc")]
+            local_reusable_blocks: Box::new(Vec::new()),
+            #[cfg(feature = "thread_local_gc")]
             local_line_mark_state: _global_line_mark_state,
             #[cfg(feature = "thread_local_gc")]
             local_unavailable_line_mark_state: _global_line_mark_state,
-            #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object",))]
-            blocks: Box::new(Vec::new()),
         };
     }
 
@@ -727,6 +733,22 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
     /// Get a recyclable block from ImmixSpace.
     fn acquire_recyclable_block(&mut self) -> bool {
+        #[cfg(feature = "thread_local_gc")]
+        if let Some(block) = self.local_reusable_blocks.pop() {
+            trace!(
+                "{:?}: Acquired a reusable block {:?} -> {:?} from thread local buffer",
+                self.tls,
+                block.start(),
+                block.end()
+            );
+            debug_assert!(!self.copy, "evacuation should always acquire a clean page");
+            block.init(self.copy);
+            // Set the hole-searching cursor to the start of this block.
+            self.line = Some(block.start_line());
+            // add local reusable block to local block list
+            self.local_blocks.push(block);
+            return true;
+        }
         match self.immix_space().get_reusable_block(self.copy) {
             Some(block) => {
                 trace!("{:?}: acquire_recyclable_block -> {:?}", self.tls, block);
@@ -782,8 +804,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                                 // So only private blocks (in a local gc) need to be added to mutator's thread-local list
                                 // Add the block to collector's local list first, when releasing the collector, adding all those
                                 // blocks to mutator's local list
-                                panic!("local gc is now done by the mutator, ")
-                                // self.local_blocks.push(block)
+                                panic!("local gc is now done by the mutator")
                             }
                         }
                     } else {
@@ -792,7 +813,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                             VM::VMActivePlan::is_mutator(self.tls),
                             "Only mutator thread should reach here"
                         );
-                        // Only add freshly allocated block into the local list
+                        // Only add freshly allocated block into the local block list
                         self.local_blocks.push(block);
                     }
                 }

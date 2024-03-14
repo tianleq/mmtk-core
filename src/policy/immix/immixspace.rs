@@ -828,45 +828,20 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             } else {
                 // We are forwarding objects. When the copy allocator allocates the block, it should
                 // mark the block. So we do not need to explicitly mark it here.
-
+                #[cfg(not(feature = "thread_local_gc"))]
                 // Clippy complains if the "vo_bit" feature is not enabled.
                 #[allow(clippy::let_and_return)]
                 let new_object =
                     ForwardingWord::forward_object::<VM>(object, semantics, copy_context);
 
+                // When local gc is enabled, global gc only evacuates public object
+                #[cfg(feature = "thread_local_gc")]
+                let new_object =
+                    ForwardingWord::forward_public_object::<VM>(object, semantics, copy_context);
+
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_object_forwarded::<VM>(new_object);
 
-                #[cfg(feature = "thread_local_gc")]
-                {
-                    debug_assert!(
-                        !is_private_object,
-                        "private object should be left in place in a global gc"
-                    );
-                    debug_assert!(
-                        crate::util::public_bit::is_public::<VM>(object),
-                        "public bit on object: {:?} is corrupted",
-                        object
-                    );
-
-                    #[cfg(all(debug_assertions, feature = "debug_publish_object"))]
-                    {
-                        let metadata_1 = crate::util::public_bit::unset_public_bit::<VM>(object);
-                        let metadata_2 = crate::util::public_bit::set_public_bit::<VM>(new_object);
-                        debug_assert!(metadata_1 != metadata_2);
-                        debug_assert!(
-                            crate::util::public_bit::is_public::<VM>(new_object),
-                            "public bit on object: {:?} is corrupted",
-                            new_object
-                        );
-                    }
-                    #[cfg(not(feature = "debug_publish_object"))]
-                    {
-                        // not sure if it is necessary to eagerly clear the public bit
-                        crate::util::public_bit::unset_public_bit::<VM>(object);
-                        crate::util::public_bit::set_public_bit::<VM>(new_object);
-                    }
-                }
                 #[cfg(all(feature = "debug_publish_object", feature = "thread_local_gc"))]
                 {
                     crate::util::object_extra_header_metadata::store_extra_header_metadata::<
@@ -1476,7 +1451,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 object,
                 ForwardingWord::get_forwarding_status::<VM>(object),
             );
-            crate::util::public_bit::is_public::<VM>(new_object)
+
+            let is_published = crate::util::public_bit::is_public::<VM>(new_object);
+
+            info!(
+                "object: {:?}, new_object: {:?}, published: {}",
+                object, new_object, is_published
+            );
+            is_published
         } else {
             // object has not been forwarded yet, the public bit read before is still valid
             is_published
@@ -1655,16 +1637,16 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
             // Check if this block needs to be defragmented.
             let is_defrag_source = if !super::DEFRAG {
                 false
+            } else if is_public {
+                // public objects have to be evacuated during a global gc,
+                // so all public blocks need to be defrag source
+                true
             } else if super::DEFRAG_EVERY_BLOCK {
                 // Set every block as defrag source if so desired.
                 true
             } else if let Some(defrag_threshold) = self.defrag_threshold {
                 // This GC is a defrag GC.
                 block.get_holes() > defrag_threshold
-            } else if is_public {
-                // public objects have to be evacuated during a global gc,
-                // so all public blocks need to be defrag source
-                true
             } else {
                 // Not a defrag GC.
                 false

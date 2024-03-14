@@ -402,10 +402,14 @@ impl<B: Region> BlockPool<B> {
     }
     #[cfg(feature = "thread_local_gc")]
     pub fn flush_blocks(&self, blocks: impl IntoIterator<Item = B>) {
-        let queue = BlockQueue::new();
+        let mut queue = BlockQueue::new();
         for block in blocks {
-            let result = unsafe { queue.push_relaxed(block) };
-            debug_assert!(result.is_ok());
+            if let Err(block) = unsafe { queue.push_relaxed(block) } {
+                self.global_freed_blocks.write().push(queue);
+                queue = BlockQueue::new();
+                let result = unsafe { queue.push_relaxed(block) };
+                debug_assert!(result.is_ok());
+            }
         }
         if !queue.is_empty() {
             self.global_freed_blocks.write().push(queue);

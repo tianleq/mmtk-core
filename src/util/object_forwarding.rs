@@ -101,6 +101,36 @@ pub fn forward_object<VM: VMBinding>(
 }
 
 #[cfg(feature = "thread_local_gc_copying")]
+pub fn forward_public_object<VM: VMBinding>(
+    object: ObjectReference,
+    semantics: CopySemantics,
+    copy_context: &mut GCWorkerCopyContext<VM>,
+) -> ObjectReference {
+    debug_assert!(crate::util::public_bit::is_public::<VM>(object));
+    let new_object = VM::VMObjectModel::copy(object, semantics, copy_context);
+    // make sure the public bit is set before forwarding bit gets updated
+    // otherwise, there will be a race in assertion (a gc thread may see forwarded object without public bit being set)
+    crate::util::public_bit::set_public_bit::<VM>(new_object);
+    if let Some(shift) = forwarding_bits_offset_in_forwarding_pointer::<VM>() {
+        VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC.store_atomic::<VM, usize>(
+            object,
+            new_object.to_raw_address().as_usize() | ((FORWARDED as usize) << shift),
+            None,
+            Ordering::SeqCst,
+        )
+    } else {
+        write_forwarding_pointer::<VM>(object, new_object);
+        VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC.store_atomic::<VM, u8>(
+            object,
+            FORWARDED,
+            None,
+            Ordering::SeqCst,
+        );
+    }
+    new_object
+}
+
+#[cfg(feature = "thread_local_gc_copying")]
 pub fn thread_local_forward_object<VM: VMBinding>(
     object: ObjectReference,
     semantics: CopySemantics,
@@ -114,7 +144,7 @@ pub fn thread_local_forward_object<VM: VMBinding>(
         "thread local gc move public object"
     );
     if let Some(shift) = forwarding_bits_offset_in_forwarding_pointer::<VM>() {
-        // no race since exactly one gc thread doing the work
+        // no race since mutator doing the work itself
         // and those metadata are in header
         unsafe {
             VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC.store::<VM, usize>(

@@ -60,8 +60,6 @@ pub struct ImmixSpace<VM: VMBinding> {
     scheduler: Arc<GCWorkScheduler<VM>>,
     /// Some settings for this space
     space_args: ImmixSpaceArgs,
-    #[cfg(feature = "thread_local_gc")]
-    bytes_published: AtomicUsize,
 }
 
 /// Some arguments for Immix Space.
@@ -385,7 +383,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             mark_state: Self::MARKED_STATE,
             scheduler: scheduler.clone(),
             space_args,
-            bytes_published: AtomicUsize::new(0),
         }
     }
 
@@ -398,15 +395,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Get the number of defrag headroom pages.
     pub fn defrag_headroom_pages(&self) -> usize {
-        #[cfg(not(feature = "thread_local_gc"))]
-        let bytes_published = 0;
-        #[cfg(feature = "thread_local_gc")]
-        let bytes_published = if super::NEVER_MOVE_OBJECTS {
-            0
-        } else {
-            self.bytes_published.load(Ordering::Acquire)
-        };
-        self.defrag.defrag_headroom_pages(self) + bytes_published
+        self.defrag.defrag_headroom_pages(self)
     }
 
     /// Check if current GC is a defrag GC.
@@ -567,12 +556,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
 
         self.lines_consumed.store(0, Ordering::Relaxed);
-
-        #[cfg(feature = "thread_local_gc")]
-        {
-            // clear published bytes
-            self.bytes_published.store(0, Ordering::Relaxed);
-        }
 
         did_defrag
     }
@@ -1467,9 +1450,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             Line::publish_lines_of_object::<VM>(object, state);
         }
         Block::containing::<VM>(object).publish(false);
-        let object_size = VM::VMObjectModel::get_current_size(object);
-        self.bytes_published
-            .fetch_add(object_size, Ordering::SeqCst);
     }
 
     #[cfg(feature = "thread_local_gc")]

@@ -299,9 +299,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         );
                     }
                 }
-                // ?????
-                // #[cfg(feature = "thread_local_gc_copying")]
-                // block.reset_publication();
                 #[cfg(feature = "thread_local_gc_copying")]
                 if !block.is_block_published() {
                     if block.get_state().is_reusable() {
@@ -389,10 +386,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             if block.thread_local_can_sweep(self.space, mark_hisogram, line_mark_state) {
                 // release free blocks for now, may cache those blocks locally
                 block.clear_owner();
-                // self.space.release_block(block);
                 block.deinit();
                 self.local_free_blocks.push(block);
-                info!("block: {:?} is free after local gc", block);
             } else {
                 // public blocks will be removed from the local block list
                 let published = block.is_block_published();
@@ -603,8 +598,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             semantic: _semantic,
             #[cfg(feature = "thread_local_gc")]
             local_blocks: Box::new(Vec::new()),
-            // #[cfg(feature = "thread_local_gc")]
-            // block_header: None,
             #[cfg(feature = "thread_local_gc")]
             local_free_blocks: Box::new(Vec::new()),
             #[cfg(feature = "thread_local_gc")]
@@ -839,8 +832,14 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 block.start(),
                 block.end()
             );
-            // The following is no longer needed, TODO: get rid of it
-            block.set_owner(self.mutator_id);
+
+            debug_assert!(
+                block.owner() == self.mutator_id,
+                "block: {:?} owner: {}, mutator: {}",
+                block,
+                block.owner(),
+                self.mutator_id
+            );
             block.init(self.copy);
             // Not sure if the following is needed
             self.immix_space().chunk_map.set(

@@ -100,14 +100,6 @@ impl<VM: VMBinding> ThreadlocalRelease<VM> {
         let mutator = VM::VMActivePlan::mutator(self.tls);
         // self.plan.base().gc_trigger.policy.on_gc_release(mmtk);
 
-        // Since now the mutator is doing the local gc, all allocation is
-        // done by the mutator itself, so the following is no longer valid/needed
-
-        // Mutators need to be aware of all memory allocated by the collector
-        // So collector must be released before mutator
-        // trace!("Thread local Release Collector");
-        // worker.get_copy_context_mut().thread_local_release(mutator);
-
         trace!("Thread local Release Mutator");
         mutator.thread_local_release();
     }
@@ -527,7 +519,6 @@ where
         let mut finalizable_processor = self.mmtk.finalizable_processor.lock().unwrap();
         finalizable_processor.add_ready_for_finalize_objects(ready_for_finalize);
 
-        // Maybe should leave this to the global gc ???
         // Finalization thread is expecting a gc thread to wake it up, since
         // local gc is done by the mutator itself, finalization cannot be done after a
         // local gc.

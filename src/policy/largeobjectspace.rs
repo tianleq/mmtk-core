@@ -343,8 +343,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                     "local los object exists in global los treadmill"
                 );
                 crate::util::public_bit::unset_public_bit::<VM>(object);
-                // #[cfg(feature = "debug_publish_object")]
-                // info!("release public los object: {:?}", object);
             }
 
             self.pr

@@ -175,6 +175,12 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
 
     #[cfg(feature = "thread_local_gc")]
     pub fn thread_local_flush(&self, blocks: impl IntoIterator<Item = B>) {
+        use itertools::Itertools;
+
+        let pages = 1 << Self::LOG_PAGES;
+        let blocks = blocks.into_iter().collect_vec();
+        self.common().accounting.release(pages * blocks.len());
+
         self.block_queue.flush_blocks(blocks);
     }
 }

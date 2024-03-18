@@ -74,6 +74,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         &self,
         _space_full: bool,
         _space: Option<&dyn Space<Self::VM>>,
+        _tls: VMMutatorThread,
     ) -> bool {
         false
     }
@@ -176,7 +177,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         }
     }
 
-    #[cfg(feature = "thread_local_gc")]
+    #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
     fn get_object_owner(&self, _object: ObjectReference) -> Option<u32> {
         if self.immix_space.in_space(_object) {
             return Some(self.immix_space.get_object_owner(_object));

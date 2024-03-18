@@ -82,7 +82,7 @@ impl<VM: VMBinding> GCTrigger<VM> {
         #[cfg(feature = "thread_local_gc")]
         if self
             .policy
-            .is_thread_local_gc_required(space_full, space, plan)
+            .is_thread_local_gc_required(space_full, space, plan, _tls)
         {
             // TODO need a way to tell whether this is a global gc or local gc
             let result = plan.base().gc_requester.request_thread_local_gc(_tls);
@@ -134,6 +134,7 @@ pub trait GCTriggerPolicy<VM: VMBinding>: Sync + Send {
         space_full: bool,
         space: Option<&dyn Space<VM>>,
         plan: &dyn Plan<VM = VM>,
+        tls: VMMutatorThread,
     ) -> bool;
     #[cfg(feature = "thread_local_gc")]
     fn on_thread_local_gc_start(&self, _mmtk: &'static MMTK<VM>) {}
@@ -181,8 +182,9 @@ impl<VM: VMBinding> GCTriggerPolicy<VM> for FixedHeapSizeTrigger {
         space_full: bool,
         space: Option<&dyn Space<VM>>,
         plan: &dyn Plan<VM = VM>,
+        tls: VMMutatorThread,
     ) -> bool {
-        plan.thread_local_collection_required(space_full, space)
+        plan.thread_local_collection_required(space_full, space, tls)
     }
 
     #[cfg(feature = "thread_local_gc")]
@@ -458,6 +460,7 @@ impl<VM: VMBinding> GCTriggerPolicy<VM> for MemBalancerTrigger {
         _space_full: bool,
         _space: Option<&dyn Space<VM>>,
         _plan: &dyn Plan<VM = VM>,
+        _tls: VMMutatorThread,
     ) -> bool {
         false
     }

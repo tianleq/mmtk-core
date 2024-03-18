@@ -63,4 +63,7 @@ pub trait ActivePlan<VM: VMBinding> {
     ) -> ObjectReference {
         panic!("MMTk cannot trace object {:?} as it does not belong to any MMTk space. If the object is known to the VM, the binding can override this method and handle its tracing.", object)
     }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn execute_thread_local_gc(tls: VMMutatorThread);
 }

@@ -1495,19 +1495,16 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
         } else if KIND == TRACE_THREAD_LOCAL_DEFRAG {
             #[cfg(feature = "thread_local_gc_copying")]
             {
-                if Block::containing::<VM>(object).is_defrag_source() {
-                    self.thread_local_trace_object_with_opportunistic_copy(
-                        mutator,
-                        object,
-                        _copy.unwrap(),
-                        // This should not be nursery collection. Nursery collection does not use PolicyTraceObject.
-                        // false,
-                    )
-                } else {
-                    #[cfg(feature = "thread_local_gc_copying")]
-                    panic!("local gc always do defrag");
-                    // self.thread_local_trace_object_without_moving(mutator, object)
-                }
+                // local gc always evacuate private objects
+                // Now private objects may live in public blocks (due to public reusable blocks)
+                // However, those public blocks will not be visited during sweeping phase
+                self.thread_local_trace_object_with_opportunistic_copy(
+                    mutator,
+                    object,
+                    _copy.unwrap(),
+                    // This should not be nursery collection. Nursery collection does not use PolicyTraceObject.
+                    // false,
+                )
             }
             #[cfg(not(feature = "thread_local_gc_copying"))]
             unreachable!()
@@ -1530,21 +1527,6 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
             debug_assert!(false, "local gc always do defrag");
             self.thread_local_trace_object_without_moving(mutator, _source, _slot, object)
         } else if KIND == TRACE_THREAD_LOCAL_DEFRAG {
-            // if Block::containing::<VM>(object).is_defrag_source() {
-            //     self.thread_local_trace_object_with_opportunistic_copy(
-            //         mutator,
-            //         _source,
-            //         _slot,
-            //         object,
-            //         copy.unwrap(),
-            //         // // This should not be nursery collection. Nursery collection does not use PolicyTraceObject.
-            //         // false,
-            //     )
-            // } else {
-            //     #[cfg(feature = "thread_local_gc_copying")]
-            //     panic!("local gc always do defrag");
-            // }
-
             // local gc always evacuate private objects
             // Now private objects may live in public blocks (due to public reusable blocks)
             // However, those public blocks will not be visited during sweeping phase

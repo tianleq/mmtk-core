@@ -97,10 +97,118 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
                 assert!(
                     block.owner() == self.mutator_id,
-                    "block: {:?} owner: {} != mutator: {}",
+                    "block: {:?} | block state: {:?} | owner: {} != mutator: {}",
                     block,
+                    block.get_state(),
                     block.owner(),
                     self.mutator_id
+                );
+            }
+        }
+    }
+
+    // This function is only called after a global gc
+    #[cfg(feature = "thread_local_gc")]
+    pub fn release(&mut self) {
+        self.local_line_mark_state = self.space.line_mark_state.load(atomic::Ordering::Acquire);
+        self.local_unavailable_line_mark_state = self.local_line_mark_state;
+
+        // clear local reusable block list so that it can be rebuilt
+        self.local_blocks
+            .extend(self.local_reusable_blocks.drain(..));
+
+        // remove freed blocks from the local block list
+        // After the global gc, freed blocks have been given back to the global block page resource,
+        // so simply remove those from the local block list. Also remove public blocks from the local
+        // block list
+        let mut blocks = vec![];
+        for block in self.local_blocks.drain(..) {
+            if block.get_state() == BlockState::Unallocated {
+                debug_assert!(
+                    block.owner() == 0,
+                    "block: {:?} state is Unallocated but owner is {}",
+                    block,
+                    block.owner()
+                );
+            } else {
+                // In a copying local gc setting, a global gc evacuates public objects, local blocks should be private again
+                #[cfg(debug_assertions)]
+                {
+                    #[cfg(feature = "thread_local_gc_copying")]
+                    debug_assert!(
+                        block.are_lines_valid(Line::public_line_mark_state(
+                            self.local_line_mark_state
+                        )),
+                        "local block contains public lines after global gc"
+                    );
+                    if block.get_state() == BlockState::Unmarked
+                        && !crate::policy::immix::BLOCK_ONLY
+                    {
+                        #[cfg(feature = "thread_local_gc_copying")]
+                        // live public objects have been evacuated to anonymous blocks
+                        // only private objects left
+                        debug_assert!(
+                            block.is_block_full(self.local_line_mark_state),
+                            "block state and line state are inconsistent"
+                        );
+                    }
+                }
+                #[cfg(feature = "thread_local_gc_copying")]
+                if !block.is_block_published() {
+                    if block.get_state().is_reusable() {
+                        debug_assert!(block.owner() == self.mutator_id);
+                        self.local_reusable_blocks.push(block)
+                    } else {
+                        blocks.push(block);
+                    }
+                }
+            }
+        }
+        // keep local blocks list accurate
+        self.local_blocks.extend(blocks);
+
+        // // Also release all local free blocks to the page resource
+        for block in self.local_free_blocks.drain(..) {
+            #[cfg(debug_assertions)]
+            {
+                assert!(
+                    block.get_state() == BlockState::Unallocated,
+                    "local free block list contains {:?} block: {:?}",
+                    block.get_state(),
+                    block
+                );
+            }
+            self.space.release_block(block);
+        }
+
+        // verify thread local block list
+        #[cfg(debug_assertions)]
+        {
+            for &block in self.local_blocks.iter() {
+                if crate::policy::immix::BLOCK_ONLY {
+                    // After a global gc, local list should not have blocks whose state
+                    // is BlockState::Unmarked or BlockState::Unallocated
+                    debug_assert!(
+                        (block.get_state() != BlockState::Unmarked
+                            && block.get_state() != BlockState::Unallocated),
+                        "Block: {:?},  state: {:?} found",
+                        block,
+                        block.get_state()
+                    );
+                } else {
+                    debug_assert!(
+                        block.get_state() != BlockState::Unallocated,
+                        "Block: {:?},  state: {:?} found",
+                        block,
+                        block.get_state()
+                    );
+                }
+                debug_assert!(
+                    block.owner() == self.mutator_id,
+                    "Block: {:?} owner: {:?} should not in mutator: {:?} 's local list",
+                    block,
+                    block.owner(),
+                    self.mutator_id,
                 );
             }
         }
@@ -172,6 +280,111 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     side.bzero_metadata(block.start(), Block::BYTES);
                 }
             }
+        }
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    /// This is the sweeping blocks work
+    pub fn thread_local_release(&mut self) {
+        // Update local line_unavail_state for hole searching after this GC.
+        self.local_unavailable_line_mark_state = self.local_line_mark_state;
+        self.thread_local_sweep_impl();
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn thread_local_sweep_impl(&mut self) {
+        // TODO defrag in local gc is different, needs to be revisited
+        let mut histogram = self.space.defrag.new_histogram();
+        let line_mark_state = if crate::policy::immix::BLOCK_ONLY {
+            None
+        } else {
+            Some(self.local_line_mark_state)
+        };
+        debug_assert!(self.local_reusable_blocks.is_empty());
+        let mark_hisogram = &mut histogram;
+        let mut blocks = vec![];
+        let mut global_reusable_blocks = vec![];
+        for block in self.local_blocks.drain(..) {
+            debug_assert!(self.mutator_id == block.owner());
+
+            if block.thread_local_can_sweep(self.space, mark_hisogram, line_mark_state) {
+                // release free blocks for now, may cache those blocks locally
+                block.clear_owner();
+                block.deinit();
+                self.local_free_blocks.push(block);
+            } else {
+                // public blocks will be removed from the local block list
+                let published = block.is_block_published();
+                if block.get_state().is_reusable() {
+                    if published {
+                        // public reusable block
+                        block.set_owner(u32::MAX);
+                        global_reusable_blocks.push(block);
+                    } else {
+                        debug_assert!(block.owner() == self.mutator_id);
+                        // private reusable block
+                        self.local_reusable_blocks.push(block);
+                    }
+                } else {
+                    // block is not reusable, add to local block list
+                    if !published {
+                        blocks.push(block);
+                    }
+                }
+            }
+        }
+        self.local_blocks.extend(blocks);
+
+        // Give back free blocks
+        self.space
+            .thread_local_release_blocks(self.local_free_blocks.drain(..));
+        // Give back public reusable blocks
+        self.space
+            .reusable_blocks
+            .thread_local_flush_blocks(global_reusable_blocks.drain(..));
+
+        debug_assert_eq!(self.local_free_blocks.len(), 0);
+
+        // verify thread local block list
+        #[cfg(debug_assertions)]
+        {
+            #[cfg(feature = "thread_local_gc_copying")]
+            let mut reusable_count = 0;
+            for &block in self.local_blocks.iter() {
+                if crate::policy::immix::BLOCK_ONLY {
+                    // After a local gc, public block may be BlockState::Unmarked
+                    debug_assert!(
+                        block.is_block_published()
+                            || (block.get_state() != BlockState::Unmarked
+                                && block.get_state() != BlockState::Unallocated)
+                    );
+                } else {
+                    // After a local gc, public block may be BlockState::Unmarked
+                    debug_assert!(block.get_state() != BlockState::Unallocated);
+                    debug_assert!(
+                        block.owner() == self.mutator_id,
+                        "local block list is corrupted"
+                    )
+                }
+                #[cfg(feature = "thread_local_gc_copying")]
+                if block.get_state().is_reusable() {
+                    reusable_count += 1;
+                }
+
+                #[cfg(feature = "debug_publish_object")]
+                {
+                    assert!(
+                        !self.local_free_blocks.contains(&block),
+                        "local free block: {:?} is still in the linked list",
+                        block
+                    );
+                }
+            }
+            #[cfg(feature = "thread_local_gc_copying")]
+            assert!(
+                reusable_count <= 1,
+                "private objects are not strictly evacuated in the local gc"
+            );
         }
     }
 
@@ -255,211 +468,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             } else {
                 rtn
             }
-        }
-    }
-
-    // This function is only called after a global gc
-    #[cfg(feature = "thread_local_gc")]
-    pub fn release(&mut self) {
-        self.local_line_mark_state = self.space.line_mark_state.load(atomic::Ordering::Acquire);
-        self.local_unavailable_line_mark_state = self.local_line_mark_state;
-
-        // remove freed blocks from the local block list
-        // After the global gc, freed blocks have been given back to the global block page resource,
-        // so simply remove those from the local block list
-        let mut blocks = vec![];
-        for block in self.local_blocks.drain(..) {
-            if block.get_state() == BlockState::Unallocated {
-                debug_assert!(
-                    block.owner() == 0,
-                    "block: {:?} state is Unallocated but owner is {}",
-                    block,
-                    block.owner()
-                );
-            } else {
-                // In a copying local gc setting, a global gc evacuates public objects, local blocks should be private again
-                #[cfg(debug_assertions)]
-                {
-                    #[cfg(feature = "thread_local_gc_copying")]
-                    debug_assert!(
-                        block.are_lines_valid(Line::public_line_mark_state(
-                            self.local_line_mark_state
-                        )),
-                        "local block contains public lines after global gc"
-                    );
-                    if block.get_state() == BlockState::Unmarked
-                        && !crate::policy::immix::BLOCK_ONLY
-                    {
-                        #[cfg(feature = "thread_local_gc_copying")]
-                        // live public objects have been evacuated to anonymous blocks
-                        // only private objects left
-                        debug_assert!(
-                            block.is_block_full(self.local_line_mark_state),
-                            "block state and line state are inconsistent"
-                        );
-                    }
-                }
-                #[cfg(feature = "thread_local_gc_copying")]
-                if !block.is_block_published() {
-                    if block.get_state().is_reusable() {
-                        self.local_reusable_blocks.push(block)
-                    } else {
-                        blocks.push(block);
-                    }
-                }
-            }
-        }
-        // keep local blocks list accurate
-        self.local_blocks.extend(blocks);
-
-        // // Also release all local free blocks to the page resource
-        for block in self.local_free_blocks.drain(..) {
-            #[cfg(debug_assertions)]
-            {
-                assert!(
-                    block.get_state() == BlockState::Unallocated,
-                    "local free block list contains {:?} block: {:?}",
-                    block.get_state(),
-                    block
-                );
-            }
-            self.space.release_block(block);
-        }
-
-        // verify thread local block list
-        #[cfg(debug_assertions)]
-        {
-            for &block in self.local_blocks.iter() {
-                if crate::policy::immix::BLOCK_ONLY {
-                    // After a global gc, local list should not have blocks whose state
-                    // is BlockState::Unmarked or BlockState::Unallocated
-                    debug_assert!(
-                        (block.get_state() != BlockState::Unmarked
-                            && block.get_state() != BlockState::Unallocated),
-                        "Block: {:?},  state: {:?} found",
-                        block,
-                        block.get_state()
-                    );
-                } else {
-                    debug_assert!(
-                        block.get_state() != BlockState::Unallocated,
-                        "Block: {:?},  state: {:?} found",
-                        block,
-                        block.get_state()
-                    );
-                }
-                debug_assert!(
-                    block.owner() == self.mutator_id,
-                    "Block: {:?} owner: {:?} should not in mutator: {:?} 's local list",
-                    block,
-                    block.owner(),
-                    self.mutator_id,
-                );
-            }
-        }
-    }
-
-    #[cfg(feature = "thread_local_gc")]
-    /// This is the sweeping blocks work
-    pub fn thread_local_release(&mut self) {
-        // Update local line_unavail_state for hole searching after this GC.
-        self.local_unavailable_line_mark_state = self.local_line_mark_state;
-        self.thread_local_sweep_impl();
-    }
-
-    #[cfg(feature = "thread_local_gc")]
-    fn thread_local_sweep_impl(&mut self) {
-        // TODO defrag in local gc is different, needs to be revisited
-        let mut histogram = self.space.defrag.new_histogram();
-        let line_mark_state = if crate::policy::immix::BLOCK_ONLY {
-            None
-        } else {
-            Some(self.local_line_mark_state)
-        };
-
-        let mark_hisogram = &mut histogram;
-        let mut blocks = vec![];
-        let mut global_reusable_blocks = vec![];
-        for block in self.local_blocks.drain(..) {
-            debug_assert!(self.mutator_id == block.owner());
-
-            if block.thread_local_can_sweep(self.space, mark_hisogram, line_mark_state) {
-                // release free blocks for now, may cache those blocks locally
-                block.clear_owner();
-                block.deinit();
-                self.local_free_blocks.push(block);
-            } else {
-                // public blocks will be removed from the local block list
-                let published = block.is_block_published();
-                if block.get_state().is_reusable() {
-                    if published {
-                        // public reusable block
-                        block.set_owner(u32::MAX);
-                        global_reusable_blocks.push(block);
-                    } else {
-                        // private reusable block
-                        self.local_reusable_blocks.push(block);
-                    }
-                } else {
-                    // block is not reusable, add to local block list
-                    if !published {
-                        blocks.push(block);
-                    }
-                }
-            }
-        }
-        self.local_blocks.extend(blocks);
-
-        // Give back free blocks
-        self.space
-            .thread_local_release_blocks(self.local_free_blocks.drain(..));
-        // Give back public reusable blocks
-        self.space
-            .reusable_blocks
-            .thread_local_flush_blocks(global_reusable_blocks.drain(..));
-
-        debug_assert_eq!(self.local_free_blocks.len(), 0);
-
-        // verify thread local block list
-        #[cfg(debug_assertions)]
-        {
-            #[cfg(feature = "thread_local_gc_copying")]
-            let mut reusable_count = 0;
-            for &block in self.local_blocks.iter() {
-                if crate::policy::immix::BLOCK_ONLY {
-                    // After a local gc, public block may be BlockState::Unmarked
-                    debug_assert!(
-                        block.is_block_published()
-                            || (block.get_state() != BlockState::Unmarked
-                                && block.get_state() != BlockState::Unallocated)
-                    );
-                } else {
-                    // After a local gc, public block may be BlockState::Unmarked
-                    debug_assert!(block.get_state() != BlockState::Unallocated);
-                    debug_assert!(
-                        block.owner() == self.mutator_id,
-                        "local block list is corrupted"
-                    )
-                }
-                #[cfg(feature = "thread_local_gc_copying")]
-                if block.get_state().is_reusable() {
-                    reusable_count += 1;
-                }
-
-                #[cfg(feature = "debug_publish_object")]
-                {
-                    assert!(
-                        !self.local_free_blocks.contains(&block),
-                        "local free block: {:?} is still in the linked list",
-                        block
-                    );
-                }
-            }
-            #[cfg(feature = "thread_local_gc_copying")]
-            assert!(
-                reusable_count <= 1,
-                "private objects are not strictly evacuated in the local gc"
-            );
         }
     }
 }
@@ -738,6 +746,11 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             block.init(self.copy);
             // Set the hole-searching cursor to the start of this block.
             self.line = Some(block.start_line());
+            debug_assert!(
+                block.owner() == self.mutator_id,
+                "block owner: {}",
+                block.owner()
+            );
             // add local reusable block to local block list
             self.local_blocks.push(block);
             return true;

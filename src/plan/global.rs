@@ -179,12 +179,7 @@ pub trait Plan: 'static + Sync + Downcast {
     fn base_mut(&mut self) -> &mut BasePlan<Self::VM>;
     fn schedule_collection(&'static self, _scheduler: &GCWorkScheduler<Self::VM>);
     fn schedule_single_thread_collection(&'static self, _worker: &mut GCWorker<Self::VM>) {}
-    fn do_thread_local_collection(
-        &'static self,
-        _tls: VMMutatorThread,
-        _mmtk: &'static MMTK<Self::VM>,
-    ) {
-    }
+
     fn common(&self) -> &CommonPlan<Self::VM> {
         panic!("Common Plan not handled!")
     }
@@ -265,6 +260,7 @@ pub trait Plan: 'static + Sync + Downcast {
         &self,
         _space_full: bool,
         _space: Option<&dyn Space<Self::VM>>,
+        _tls: VMMutatorThread,
     ) -> bool {
         false
     }
@@ -272,6 +268,14 @@ pub trait Plan: 'static + Sync + Downcast {
     #[cfg(feature = "thread_local_gc")]
     fn handle_thread_local_collection(&self, tls: VMMutatorThread, mmtk: &'static MMTK<Self::VM>) {
         self.base().handle_thread_local_collection(tls, mmtk);
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn do_thread_local_collection(
+        &'static self,
+        _tls: VMMutatorThread,
+        _mmtk: &'static MMTK<Self::VM>,
+    ) {
     }
 
     // Note: The following methods are about page accounting. The default implementation should
@@ -400,7 +404,7 @@ pub trait Plan: 'static + Sync + Downcast {
     #[cfg(feature = "thread_local_gc")]
     fn publish_object(&self, _object: ObjectReference);
 
-    #[cfg(feature = "thread_local_gc")]
+    #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
     fn get_object_owner(&self, _object: ObjectReference) -> Option<u32> {
         Option::None
     }

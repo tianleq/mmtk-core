@@ -72,12 +72,6 @@ impl<VM: VMBinding> GCRequester<VM> {
 
         let guard = self.request_sync.lock().unwrap();
 
-        // if guard.global_gc_requested {
-        //     // If global gc has been requested, then skip the local gc
-        //     false
-        // } else {
-        //     true
-        // }
         !guard.global_gc_requested
     }
 

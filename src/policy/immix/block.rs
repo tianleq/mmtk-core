@@ -404,10 +404,8 @@ impl Block {
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_region_swept::<VM, _>(self, false);
                 // liveness of public block is unknown during thread-local gc
-                // so conservatively treat it as live (this check may not be
-                // necessary since public blocks are treated as reusable after
-                // a local gc and they are given back to the immixspace)
-                if self.is_block_published() {
+                // so conservatively treat it as alive
+                if is_published {
                     false
                 } else {
                     #[cfg(all(feature = "debug_publish_object", debug_assertions))]

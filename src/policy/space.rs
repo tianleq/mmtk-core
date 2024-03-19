@@ -92,7 +92,7 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
                     // Current thread is in VM (not safe so no global gc can happen), it can safely do a
                     // local gc
                     #[cfg(feature = "thread_local_gc")]
-                    VM::VMActivePlan::execute_thread_local_gc(VMMutatorThread(tls));
+                    VM::VMActivePlan::request_thread_local_gc(VMMutatorThread(tls));
 
                     #[cfg(not(feature = "thread_local_gc"))]
                     panic!("thread local gc feature is not enabled");

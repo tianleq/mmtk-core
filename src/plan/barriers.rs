@@ -536,27 +536,11 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
 
 pub struct PublicObjectMarkingBarrierSemantics<VM: VMBinding> {
     mmtk: &'static MMTK<VM>,
-    #[cfg(any(
-        feature = "public_object_analysis",
-        feature = "debug_publish_object_overhead"
-    ))]
-    number_of_objects_published: usize,
-    #[cfg(feature = "public_object_analysis")]
-    number_of_bytes_published: usize,
 }
 
 impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
     pub fn new(mmtk: &'static MMTK<VM>) -> Self {
-        Self {
-            mmtk,
-            #[cfg(any(
-                feature = "public_object_analysis",
-                feature = "debug_publish_object_overhead"
-            ))]
-            number_of_objects_published: 0,
-            #[cfg(feature = "public_object_analysis")]
-            number_of_bytes_published: 0,
-        }
+        Self { mmtk }
     }
 
     fn trace_public_object(&mut self, _src: ObjectReference, value: ObjectReference) {
@@ -571,11 +555,19 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
             let newly_published_count = closure.get_number_of_objects_published() + 1;
             let newly_published_bytes = closure.get_number_of_bytes_published()
                 + VM::VMObjectModel::get_current_size(value);
-            self.number_of_objects_published += newly_published_count;
-            self.number_of_bytes_published += newly_published_bytes;
 
-            let mut stats = crate::util::REQUEST_SCOPE_OBJECTS_STATS.lock().unwrap();
-            if stats.active {
+            {
+                let mut stats = crate::util::REQUEST_SCOPE_OBJECTS_STATS.lock().unwrap();
+                stats.public_count += newly_published_count;
+                stats.public_bytes += newly_published_bytes;
+            }
+            {
+                let mut stats = crate::util::HARNESS_SCOPE_OBJECTS_STATS.lock().unwrap();
+                stats.public_count += newly_published_count;
+                stats.public_bytes += newly_published_bytes;
+            }
+            {
+                let mut stats = crate::util::ALL_SCOPE_OBJECTS_STATS.lock().unwrap();
                 stats.public_count += newly_published_count;
                 stats.public_bytes += newly_published_bytes;
             }
@@ -626,28 +618,6 @@ impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM>
         }
     }
 
-    #[cfg(any(
-        feature = "public_object_analysis",
-        feature = "debug_publish_object_overhead"
-    ))]
-    fn get_number_of_objects_published(&self) -> usize {
-        self.number_of_objects_published
-    }
-
-    #[cfg(feature = "public_object_analysis")]
-    fn clear_number_of_objects_published(&mut self) {
-        self.number_of_objects_published = 0;
-    }
-
-    #[cfg(feature = "public_object_analysis")]
-    fn get_number_of_bytes_published(&self) -> usize {
-        self.number_of_bytes_published
-    }
-
-    #[cfg(feature = "public_object_analysis")]
-    fn clear_number_of_bytes_published(&mut self) {
-        self.number_of_bytes_published = 0;
-    }
     #[cfg(all(feature = "debug_publish_object", debug_assertions))]
     fn get_object_owner(&self, _object: ObjectReference) -> u32 {
         self.mmtk.get_plan().get_object_owner(_object).unwrap()

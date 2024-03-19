@@ -209,8 +209,18 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         {
             self.allocation_count += 1;
             self.bytes_allocated += _bytes;
-            let mut stats = crate::util::REQUEST_SCOPE_OBJECTS_STATS.lock().unwrap();
-            if stats.active {
+            {
+                let mut stats = crate::util::REQUEST_SCOPE_OBJECTS_STATS.lock().unwrap();
+                stats.allocation_count += 1;
+                stats.allocation_bytes += _bytes;
+            }
+            {
+                let mut stats = crate::util::HARNESS_SCOPE_OBJECTS_STATS.lock().unwrap();
+                stats.allocation_count += 1;
+                stats.allocation_bytes += _bytes;
+            }
+            {
+                let mut stats = crate::util::ALL_SCOPE_OBJECTS_STATS.lock().unwrap();
                 stats.allocation_count += 1;
                 stats.allocation_bytes += _bytes;
             }

@@ -144,7 +144,14 @@ impl<VM: VMBinding> MMTK<VM> {
         self.inside_harness.store(true, Ordering::SeqCst);
         self.plan.base().stats.start_all();
         self.scheduler.enable_stat();
-        crate::util::DEBUG_SET_PUBLIC.store(true, Ordering::Release);
+        #[cfg(feature = "public_object_analysis")]
+        {
+            let mut stats = crate::util::HARNESS_SCOPE_OBJECTS_STATS.lock().unwrap();
+            stats.allocation_count = 0;
+            stats.allocation_bytes = 0;
+            stats.public_bytes = 0;
+            stats.public_count = 0;
+        }
     }
 
     pub fn harness_end(&'static self) {

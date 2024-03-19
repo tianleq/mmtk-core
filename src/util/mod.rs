@@ -80,7 +80,6 @@ mod int_array_freelist;
 /// on demand direct from the OS (via mmap).
 mod raw_memory_freelist;
 
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU32;
 
 pub use self::address::Address;
@@ -89,11 +88,9 @@ pub use self::opaque_pointer::*;
 pub use self::reference_processor::ReferenceProcessor;
 
 pub(crate) static MUTATOR_ID_GENERATOR: AtomicU32 = AtomicU32::new(1);
-pub(crate) static DEBUG_SET_PUBLIC: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "public_object_analysis")]
 #[derive(Default)]
-pub(crate) struct RequestScopeObjectsStats {
-    pub active: bool,
+pub(crate) struct Statistics {
     pub allocation_count: usize,
     pub allocation_bytes: usize,
     pub public_count: usize,
@@ -102,8 +99,12 @@ pub(crate) struct RequestScopeObjectsStats {
 
 #[cfg(feature = "public_object_analysis")]
 lazy_static! {
-    pub(crate) static ref REQUEST_SCOPE_OBJECTS_STATS: std::sync::Mutex<RequestScopeObjectsStats> =
-        std::sync::Mutex::new(RequestScopeObjectsStats::default());
+    pub(crate) static ref REQUEST_SCOPE_OBJECTS_STATS: std::sync::Mutex<Statistics> =
+        std::sync::Mutex::new(Statistics::default());
+    pub(crate) static ref HARNESS_SCOPE_OBJECTS_STATS: std::sync::Mutex<Statistics> =
+        std::sync::Mutex::new(Statistics::default());
+    pub(crate) static ref ALL_SCOPE_OBJECTS_STATS: std::sync::Mutex<Statistics> =
+        std::sync::Mutex::new(Statistics::default());
 }
 
 #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]

@@ -3,7 +3,6 @@ use crate::policy::markcompactspace::MarkCompactSpace;
 use crate::policy::markcompactspace::{TRACE_KIND_FORWARD, TRACE_KIND_MARK};
 use crate::scheduler::gc_work::PlanProcessEdges;
 use crate::scheduler::gc_work::*;
-use crate::scheduler::single_thread_gc_work::SingleThreadPlanProcessEdges;
 use crate::scheduler::GCWork;
 use crate::scheduler::GCWorker;
 use crate::scheduler::WorkBucketStage;
@@ -90,11 +89,4 @@ impl<VM: VMBinding> crate::scheduler::GCWorkContext for MarkCompactGCWorkContext
     type VM = VM;
     type PlanType = MarkCompact<VM>;
     type ProcessEdgesWorkType = MarkingProcessEdges<VM>;
-
-    type SingleThreadProcessEdgesWorkType =
-        SingleThreadPlanProcessEdges<VM, MarkCompact<VM>, TRACE_KIND_MARK>;
-
-    // #[cfg(feature = "thread_local_gc")]
-    // type ThreadlocalProcessEdgesWorkType =
-    //     SingleThreadPlanProcessEdges<VM, MarkCompact<VM>, TRACE_KIND_MARK>;
 }

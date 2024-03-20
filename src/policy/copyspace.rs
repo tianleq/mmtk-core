@@ -20,8 +20,6 @@ pub struct CopySpace<VM: VMBinding> {
     common: CommonSpace<VM>,
     pr: MonotonePageResource<VM>,
     from_space: AtomicBool,
-    #[cfg(feature = "public_object_analysis")]
-    public_object_analysis_active: AtomicBool,
 }
 
 impl<VM: VMBinding> SFT for CopySpace<VM> {
@@ -156,8 +154,6 @@ impl<VM: VMBinding> CopySpace<VM> {
             },
             common,
             from_space: AtomicBool::new(from_space),
-            #[cfg(feature = "public_object_analysis")]
-            public_object_analysis_active: AtomicBool::new(false),
         }
     }
 
@@ -172,13 +168,6 @@ impl<VM: VMBinding> CopySpace<VM> {
             side_forwarding_status_table
                 .bzero_metadata(self.common.start, self.pr.cursor() - self.common.start);
         }
-        #[cfg(feature = "public_object_analysis")]
-        {
-            debug_assert!(
-                !self.public_object_analysis_active.load(Ordering::Relaxed),
-                "public object analysis flag is not cleared properly"
-            )
-        }
     }
 
     pub fn release(&self) {
@@ -191,11 +180,6 @@ impl<VM: VMBinding> CopySpace<VM> {
         }
         self.common.metadata.reset();
         self.from_space.store(false, Ordering::SeqCst);
-        #[cfg(feature = "public_object_analysis")]
-        {
-            self.public_object_analysis_active
-                .store(false, Ordering::Relaxed);
-        }
     }
 
     #[cfg(feature = "vo_bit")]
@@ -289,65 +273,6 @@ impl<VM: VMBinding> CopySpace<VM> {
                 );
             }
 
-            // #[cfg(feature = "public_object_analysis")]
-            // {
-            //     use crate::util::object_extra_header_metadata::BOTTOM_HALF_MASK;
-            //     use crate::util::object_extra_header_metadata::SHIFT;
-            //     use crate::util::object_extra_header_metadata::TOP_HALF_MASK;
-            //     use crate::util::LiveObjectsInfo;
-            //     use crate::util::LIVE_OBJECTS;
-
-            //     if self.public_object_analysis_active.load(Ordering::Relaxed) {
-            //         let object_size = VM::VMObjectModel::get_current_size(object);
-            //         let metadata =
-            //             crate::util::object_extra_header_metadata::get_extra_header_metadata::<
-            //                 VM,
-            //                 usize,
-            //             >(object);
-            //         let mutator_id = u32::try_from(metadata & BOTTOM_HALF_MASK).unwrap();
-            //         let request_id = u32::try_from((metadata & TOP_HALF_MASK) >> SHIFT).unwrap();
-            //         let mut public_bytes = 0;
-            //         let is_pubic = crate::util::public_bit::is_public::<VM>(object);
-            //         if is_pubic {
-            //             public_bytes = object_size;
-            //         }
-            //         let mut map = LIVE_OBJECTS.lock().unwrap();
-            //         if map.contains_key(&mutator_id) {
-            //             let details = map.get_mut(&mutator_id).unwrap();
-            //             if details.contains_key(&request_id) {
-            //                 let info = details.get_mut(&request_id).unwrap();
-            //                 info.public_bytes += public_bytes;
-            //                 info.public_count += if is_pubic { 1 } else { 0 };
-            //                 info.total_bytes += object_size;
-            //                 info.total_count += 1;
-            //             } else {
-            //                 // first time come across objects allocated in this request
-            //                 details.insert(
-            //                     request_id,
-            //                     LiveObjectsInfo {
-            //                         total_count: 1,
-            //                         total_bytes: object_size,
-            //                         public_count: if is_pubic { 1 } else { 0 },
-            //                         public_bytes,
-            //                     },
-            //                 );
-            //             }
-            //         } else {
-            //             map.insert(
-            //                 mutator_id,
-            //                 std::collections::HashMap::<u32, LiveObjectsInfo>::from([(
-            //                     request_id,
-            //                     LiveObjectsInfo {
-            //                         total_count: 1,
-            //                         total_bytes: object_size,
-            //                         public_count: if is_pubic { 1 } else { 0 },
-            //                         public_bytes,
-            //                     },
-            //                 )]),
-            //             );
-            //         }
-            //     }
-            // }
             #[cfg(feature = "public_bit")]
             {
                 let is_pubic = crate::util::public_bit::is_public::<VM>(object);
@@ -413,12 +338,6 @@ impl<VM: VMBinding> CopySpace<VM> {
             // object has not been forwarded yet, the public bit read before is still valid
             is_published
         }
-    }
-
-    #[cfg(feature = "public_object_analysis")]
-    pub fn activate_public_object_analysis(&self) {
-        self.public_object_analysis_active
-            .store(true, Ordering::Relaxed);
     }
 }
 

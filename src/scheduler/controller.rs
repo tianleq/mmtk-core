@@ -7,7 +7,6 @@ use std::sync::Arc;
 
 use crate::plan::gc_requester::GCRequester;
 use crate::scheduler::gc_work::{EndOfGC, ScheduleCollection};
-use crate::scheduler::single_thread_gc_work::ScheduleSingleThreadCollection;
 use crate::scheduler::{GCWork, WorkBucketStage};
 use crate::util::VMWorkerThread;
 use crate::vm::VMBinding;
@@ -52,27 +51,21 @@ impl<VM: VMBinding> GCController<VM> {
             self.requester.wait_for_request();
             debug!("[STWController: Request recieved.]");
 
-            self.do_gc_until_completion(false);
+            self.do_gc_until_completion();
             debug!("[STWController: Worker threads complete!]");
         }
     }
 
     /// Coordinate workers to perform GC in response to a GC request.
-    pub fn do_gc_until_completion(&mut self, single_thread: bool) {
+    pub fn do_gc_until_completion(&mut self) {
         let gc_start = std::time::Instant::now();
 
         debug_assert!(
             self.scheduler.worker_monitor.debug_is_sleeping(),
             "Workers are still doing work when GC started."
         );
-        if single_thread {
-            // Add a ScheduleCollection work packet.  It is the seed of other work packets.
-            self.scheduler.work_buckets[WorkBucketStage::Unconstrained]
-                .add(ScheduleSingleThreadCollection);
-        } else {
-            // Add a ScheduleCollection work packet.  It is the seed of other work packets.
-            self.scheduler.work_buckets[WorkBucketStage::Unconstrained].add(ScheduleCollection);
-        }
+        // Add a ScheduleCollection work packet.  It is the seed of other work packets.
+        self.scheduler.work_buckets[WorkBucketStage::Unconstrained].add(ScheduleCollection);
 
         // Notify only one worker at this time because there is only one work packet,
         // namely `ScheduleCollection`.

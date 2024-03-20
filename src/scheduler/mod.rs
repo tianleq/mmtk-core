@@ -31,5 +31,3 @@ pub use gc_work::ProcessEdgesWork;
 // We should do some refactoring related to Scanning::SCAN_MUTATORS_IN_SAFEPOINT
 // to make sure this type is not exposed to the bindings.
 pub use gc_work::ScanStackRoot;
-
-pub(crate) mod single_thread_gc_work;

@@ -1,3 +1,4 @@
+#[cfg(feature = "thread_local_gc")]
 use crate::util::VMMutatorThread;
 use crate::vm::VMBinding;
 use std::marker::PhantomData;
@@ -73,26 +74,6 @@ impl<VM: VMBinding> GCRequester<VM> {
         let guard = self.request_sync.lock().unwrap();
 
         !guard.global_gc_requested
-    }
-
-    pub fn request_single_thread_gc(&self) {
-        // if self.request_flag.load(Ordering::Relaxed) {
-        //     return;
-        // }
-        // #[cfg(feature = "thread_local_gc")]
-        // {
-        //     VM::VMCollection::wait_for_thread_local_gc_to_finish();
-        // }
-
-        // let mut guard = self.request_sync.lock().unwrap();
-        // if !self.request_flag.load(Ordering::Relaxed) {
-        //     self.request_flag.store(true, Ordering::Relaxed);
-        //     guard.global_gc_requested = true;
-        //     guard.request_count += 1;
-        //     guard.single_thread = true;
-        //     self.request_condvar.notify_all();
-        // }
-        unimplemented!()
     }
 
     pub fn clear_request(&self) {

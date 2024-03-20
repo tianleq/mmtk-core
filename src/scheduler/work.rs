@@ -51,7 +51,4 @@ pub trait GCWorkContext {
     // We should use SFTProcessEdges as the default value for this associate type. However, this requires
     // `associated_type_defaults` which has not yet been stablized.
     type ProcessEdgesWorkType: ProcessEdgesWork<VM = Self::VM>;
-    type SingleThreadProcessEdgesWorkType: ProcessEdgesWork<VM = Self::VM>;
-    // #[cfg(feature = "thread_local_gc")]
-    // type ThreadlocalProcessEdgesWorkType: ProcessEdgesWork<VM = Self::VM>;
 }

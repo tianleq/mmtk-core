@@ -239,13 +239,21 @@ impl Stats {
 
         #[cfg(feature = "public_object_analysis")]
         {
-            let stats = crate::util::REQUEST_SCOPE_OBJECTS_STATS.lock().unwrap();
+            let stats = crate::util::ALL_SCOPE_OBJECTS_STATS.lock().unwrap();
+            println!("All Scope: ");
             println!(
-                "Allocation count: {}, Allocation Bytes: {}, Public count: {}, Public Bytes: {}",
-                stats.allocation_count,
+                "Allocation Bytes: {}, Public Bytes: {}, Rate: {}",
                 stats.allocation_bytes,
-                stats.public_count,
-                stats.public_bytes
+                stats.public_bytes,
+                (stats.public_bytes as f64 / stats.allocation_bytes as f64) * 100 as f64
+            );
+            let stats = crate::util::HARNESS_SCOPE_OBJECTS_STATS.lock().unwrap();
+            println!("Harness Scope: ");
+            println!(
+                "Allocation Bytes: {}, Public Bytes: {}: Rate: {}",
+                stats.allocation_bytes,
+                stats.public_bytes,
+                (stats.public_bytes as f64 / stats.allocation_bytes as f64) * 100 as f64
             );
         }
 

@@ -9,7 +9,6 @@ use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::copyspace::CopySpace;
 use crate::policy::space::Space;
-use crate::scheduler::single_thread_gc_work::SingleThreadSentinel;
 use crate::scheduler::*;
 use crate::util::alloc::allocators::AllocatorSelector;
 use crate::util::copy::*;
@@ -32,8 +31,6 @@ pub struct SemiSpace<VM: VMBinding> {
     pub copyspace1: CopySpace<VM>,
     #[fallback_trace]
     pub common: CommonPlan<VM>,
-    #[cfg(feature = "public_object_analysis")]
-    pub public_object_analysis_active: AtomicBool,
 }
 
 pub const SS_CONSTRAINTS: PlanConstraints = PlanConstraints {
@@ -82,22 +79,6 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
         scheduler.schedule_common_work::<SSGCWorkContext<VM>>(self);
     }
 
-    fn schedule_single_thread_collection(&'static self, worker: &mut GCWorker<Self::VM>) {
-        self.base().set_collection_kind::<Self>(self);
-        self.base().set_gc_status(GcStatus::GcPrepare);
-
-        single_thread_gc_work::SingleThreadStopMutators::<
-            <SSGCWorkContext<VM> as GCWorkContext>::SingleThreadProcessEdgesWorkType,
-        >::new()
-        .do_work(worker, worker.mmtk);
-        single_thread_gc_work::SingleThreadPrepare::<SSGCWorkContext<VM>>::new(self)
-            .do_work(worker, worker.mmtk);
-
-        worker.scheduler().work_buckets[WorkBucketStage::Unconstrained].set_local_sentinel(
-            Box::new(SingleThreadSentinel::<SSGCWorkContext<VM>>::new(self)),
-        );
-    }
-
     fn get_allocator_mapping(&self) -> &'static EnumMap<AllocationSemantics, AllocatorSelector> {
         &ALLOCATOR_MAPPING
     }
@@ -114,10 +95,6 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
         self.fromspace_mut()
             .set_copy_for_sft_trace(Some(CopySemantics::DefaultCopy));
         self.tospace_mut().set_copy_for_sft_trace(None);
-        #[cfg(feature = "public_object_analysis")]
-        if self.is_public_object_analysis_active() {
-            self.fromspace().activate_public_object_analysis();
-        }
     }
 
     fn prepare_worker(&self, worker: &mut GCWorker<VM>) {
@@ -128,11 +105,6 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
         self.common.release(tls, true);
         // release the collected region
         self.fromspace().release();
-        #[cfg(feature = "public_object_analysis")]
-        {
-            self.public_object_analysis_active
-                .store(false, Ordering::Relaxed);
-        }
     }
 
     fn collection_required(&self, space_full: bool, _space: Option<&dyn Space<Self::VM>>) -> bool {
@@ -182,17 +154,6 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
             crate::util::public_bit::is_public::<VM>(object)
         }
     }
-
-    #[cfg(feature = "public_object_analysis")]
-    fn is_public_object_analysis_active(&self) -> bool {
-        self.public_object_analysis_active.load(Ordering::Relaxed)
-    }
-
-    #[cfg(feature = "public_object_analysis")]
-    fn activate_public_object_analysis(&self) {
-        self.public_object_analysis_active
-            .store(true, Ordering::Relaxed);
-    }
 }
 
 impl<VM: VMBinding> SemiSpace<VM> {
@@ -214,8 +175,6 @@ impl<VM: VMBinding> SemiSpace<VM> {
                 true,
             ),
             common: CommonPlan::new(plan_args),
-            #[cfg(feature = "public_object_analysis")]
-            public_object_analysis_active: AtomicBool::new(false),
         };
 
         // Use SideMetadataSanity to check if each spec is valid. This is also needed for check

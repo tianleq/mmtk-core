@@ -232,30 +232,27 @@ impl Stats {
         for value in scheduler_stat.values() {
             print!("{}\t", value);
         }
-        println!();
-        print!("Total time: ");
-        self.total_time.lock().unwrap().print_total(None);
-        println!(" ms");
-
         #[cfg(feature = "public_object_analysis")]
         {
             let stats = crate::util::ALL_SCOPE_OBJECTS_STATS.lock().unwrap();
-            println!("All Scope: ");
-            println!(
-                "Allocation Bytes: {}, Public Bytes: {}, Rate: {}",
+            print!(
+                "{}\t{}\t{}\t",
                 stats.allocation_bytes,
                 stats.public_bytes,
                 (stats.public_bytes as f64 / stats.allocation_bytes as f64) * 100 as f64
             );
             let stats = crate::util::HARNESS_SCOPE_OBJECTS_STATS.lock().unwrap();
-            println!("Harness Scope: ");
-            println!(
-                "Allocation Bytes: {}, Public Bytes: {}: Rate: {}",
+            print!(
+                "{}\t{}\t{}\t",
                 stats.allocation_bytes,
                 stats.public_bytes,
                 (stats.public_bytes as f64 / stats.allocation_bytes as f64) * 100 as f64
             );
         }
+        println!();
+        print!("Total time: ");
+        self.total_time.lock().unwrap().print_total(None);
+        println!(" ms");
 
         println!("------------------------------ End MMTk Statistics -----------------------------")
     }
@@ -274,6 +271,11 @@ impl Stats {
         }
         for name in scheduler_stat.keys() {
             print!("{}\t", name);
+        }
+        #[cfg(feature = "public_object_analysis")]
+        {
+            print!("all.all.bytes\tall.public.bytes\tall.publish.rate\t");
+            print!("harness.all.bytes\tharness.public.bytes\tharness.publish.rate\t");
         }
         println!();
     }

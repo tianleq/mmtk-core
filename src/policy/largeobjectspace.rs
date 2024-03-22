@@ -337,7 +337,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
 
             #[cfg(feature = "thread_local_gc")]
             {
-                // The following assertion only makes sense
                 debug_assert!(
                     crate::util::public_bit::is_public::<VM>(object),
                     "local los object exists in global los treadmill"

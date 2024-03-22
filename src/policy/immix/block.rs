@@ -390,7 +390,7 @@ impl Block {
                     }
                     #[cfg(debug_assertions)]
                     {
-                        crate::util::memory::set(line.start(), 0xAB, Line::BYTES);
+                        crate::util::memory::set(line.start(), 0xCA, Line::BYTES);
                     }
 
                     #[cfg(feature = "immix_zero_on_release")]
@@ -581,7 +581,7 @@ impl Block {
 
                     #[cfg(not(feature = "thread_local_gc"))]
                     space.reusable_blocks.push(*self);
-                    // If thread local gc is enabled, only public blocks
+                    // If copying thread local gc is enabled, only public blocks
                     // can be reused
                     #[cfg(feature = "thread_local_gc_copying")]
                     {

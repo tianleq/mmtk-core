@@ -144,13 +144,16 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     if block.get_state() == BlockState::Unmarked
                         && !crate::policy::immix::BLOCK_ONLY
                     {
-                        #[cfg(feature = "thread_local_gc_copying")]
-                        // live public objects have been evacuated to anonymous blocks
-                        // only private objects left
-                        debug_assert!(
-                            block.is_block_full(self.local_line_mark_state),
-                            "block state and line state are inconsistent"
-                        );
+                        // the following does not look correc. After a global gc, private
+                        // objects are not moved, so there can be unmarked lines
+
+                        // #[cfg(feature = "thread_local_gc_copying")]
+                        // // live public objects have been evacuated to anonymous blocks
+                        // // only private objects left
+                        // debug_assert!(
+                        //     block.is_block_full(self.local_line_mark_state),
+                        //     "block state and line state are inconsistent"
+                        // );
                     }
                 }
                 #[cfg(feature = "thread_local_gc_copying")]
@@ -162,6 +165,11 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         blocks.push(block);
                     }
                 }
+                // In a non-moving setting, there is no public reusable blocks
+                // because public objects and private objects resides in the same
+                // block
+                #[cfg(not(feature = "thread_local_gc_copying"))]
+                blocks.push(block);
             }
         }
         // keep local blocks list accurate
@@ -288,11 +296,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     pub fn thread_local_release(&mut self) {
         // Update local line_unavail_state for hole searching after this GC.
         self.local_unavailable_line_mark_state = self.local_line_mark_state;
-        self.thread_local_sweep_impl();
-    }
 
-    #[cfg(feature = "thread_local_gc")]
-    fn thread_local_sweep_impl(&mut self) {
         // TODO defrag in local gc is different, needs to be revisited
         let mut histogram = self.space.defrag.new_histogram();
         let line_mark_state = if crate::policy::immix::BLOCK_ONLY {
@@ -303,6 +307,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         debug_assert!(self.local_reusable_blocks.is_empty());
         let mark_hisogram = &mut histogram;
         let mut blocks = vec![];
+        #[cfg(feature = "thread_local_gc_copying")]
         let mut global_reusable_blocks = vec![];
         for block in self.local_blocks.drain(..) {
             debug_assert!(self.mutator_id == block.owner());
@@ -313,22 +318,33 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 block.deinit();
                 self.local_free_blocks.push(block);
             } else {
-                // public blocks will be removed from the local block list
-                let published = block.is_block_published();
-                if block.get_state().is_reusable() {
-                    if published {
-                        // public reusable block
-                        block.set_owner(u32::MAX);
-                        global_reusable_blocks.push(block);
-                    } else {
-                        debug_assert!(block.owner() == self.mutator_id);
-                        // private reusable block
+                #[cfg(not(feature = "thread_local_gc_copying"))]
+                {
+                    if block.get_state().is_reusable() {
                         self.local_reusable_blocks.push(block);
-                    }
-                } else {
-                    // block is not reusable, add to local block list
-                    if !published {
+                    } else {
                         blocks.push(block);
+                    }
+                }
+                #[cfg(feature = "thread_local_gc_copying")]
+                {
+                    // public blocks will be removed from the local block list
+                    let published = block.is_block_published();
+                    if block.get_state().is_reusable() {
+                        if published {
+                            // public reusable block
+                            block.set_owner(u32::MAX);
+                            global_reusable_blocks.push(block);
+                        } else {
+                            debug_assert!(block.owner() == self.mutator_id);
+                            // private reusable block
+                            self.local_reusable_blocks.push(block);
+                        }
+                    } else {
+                        // block is not reusable, add to local block list
+                        if !published {
+                            blocks.push(block);
+                        }
                     }
                 }
             }
@@ -338,6 +354,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         // Give back free blocks
         self.space
             .thread_local_release_blocks(self.local_free_blocks.drain(..));
+        #[cfg(feature = "thread_local_gc_copying")]
         // Give back public reusable blocks
         self.space
             .reusable_blocks
@@ -732,9 +749,26 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         false
     }
 
+    #[cfg(not(feature = "thread_local_gc"))]
+    fn acquire_recyclable_block(&mut self) -> bool {
+        match self.immix_space().get_reusable_block(self.copy) {
+            Some(block) => {
+                trace!("{:?}: acquire_recyclable_block -> {:?}", self.tls, block);
+
+                // Set the hole-searching cursor to the start of this block.
+                self.line = Some(block.start_line());
+                true
+            }
+            _ => false,
+        }
+    }
+
+    #[cfg(feature = "thread_local_gc")]
     /// Get a recyclable block from ImmixSpace.
     fn acquire_recyclable_block(&mut self) -> bool {
-        #[cfg(feature = "thread_local_gc")]
+        // In a non-moving setting, there is no concept of global public reusable blocks
+        // (live public objects and live private objects always share the same block)
+        // Therefore, only local/private reusable block can be used
         if let Some(block) = self.local_reusable_blocks.pop() {
             trace!(
                 "{:?}: Acquired a reusable block {:?} -> {:?} from thread local buffer",
@@ -755,6 +789,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             self.local_blocks.push(block);
             return true;
         }
+        #[cfg(not(feature = "thread_local_gc_copying"))]
+        return false;
+
+        #[cfg(feature = "thread_local_gc_copying")]
         match self.immix_space().get_reusable_block(self.copy) {
             Some(block) => {
                 trace!("{:?}: acquire_recyclable_block -> {:?}", self.tls, block);

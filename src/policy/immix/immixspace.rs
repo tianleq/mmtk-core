@@ -828,14 +828,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             } else {
                 // We are forwarding objects. When the copy allocator allocates the block, it should
                 // mark the block. So we do not need to explicitly mark it here.
-                #[cfg(not(feature = "thread_local_gc"))]
+                #[cfg(not(feature = "thread_local_gc_copying"))]
                 // Clippy complains if the "vo_bit" feature is not enabled.
                 #[allow(clippy::let_and_return)]
                 let new_object =
                     ForwardingWord::forward_object::<VM>(object, semantics, copy_context);
 
                 // When local gc is enabled, global gc only evacuates public object
-                #[cfg(feature = "thread_local_gc")]
+                #[cfg(feature = "thread_local_gc_copying")]
                 let new_object =
                     ForwardingWord::forward_public_object::<VM>(object, semantics, copy_context);
 
@@ -1527,6 +1527,9 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
             debug_assert!(false, "local gc always do defrag");
             self.thread_local_trace_object_without_moving(mutator, _source, _slot, object)
         } else if KIND == TRACE_THREAD_LOCAL_DEFRAG {
+            #[cfg(not(feature = "thread_local_gc_copying"))]
+            unreachable!();
+            #[cfg(feature = "thread_local_gc_copying")]
             // local gc always evacuate private objects
             // Now private objects may live in public blocks (due to public reusable blocks)
             // However, those public blocks will not be visited during sweeping phase

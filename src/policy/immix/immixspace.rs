@@ -1330,8 +1330,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         // a public block may still have private objects living in it
         // lines occupied by those private objects are marked using global
         // line mark state during a global gc
-        #[cfg(feature = "thread_local_gc")]
+        #[cfg(feature = "thread_local_gc_copying")]
         let global_line_state = self.line_mark_state.load(Ordering::Acquire);
+        #[cfg(feature = "thread_local_gc_ibm_style")]
+        let global_line_state = u8::MAX;
         let block = search_start.block();
         let mark_data = block.line_mark_table();
         let start_cursor = search_start.get_index_within_block();

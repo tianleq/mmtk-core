@@ -139,7 +139,6 @@ impl Block {
     #[cfg(feature = "thread_local_gc")]
     pub fn publish(&self, publish_lines: bool) {
         Self::BLOCK_PUBLICATION_TABLE.store_atomic::<u8>(self.start(), 1, Ordering::SeqCst);
-        #[cfg(debug_assertions)]
         // Also publish all lines within the block
         if publish_lines {
             Line::LINE_PUBLICATION_TABLE.bset_metadata(self.start(), Self::BYTES);
@@ -149,7 +148,6 @@ impl Block {
     #[cfg(feature = "thread_local_gc")]
     pub fn reset_publication(&self) {
         Self::BLOCK_PUBLICATION_TABLE.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
-        #[cfg(debug_assertions)]
         // Also rest all lines within the block
         Line::LINE_PUBLICATION_TABLE.bzero_metadata(self.start(), Self::BYTES);
     }
@@ -391,6 +389,7 @@ impl Block {
                     #[cfg(debug_assertions)]
                     {
                         crate::util::memory::set(line.start(), 0xCA, Line::BYTES);
+                        line.clear_line_mark_state();
                     }
 
                     #[cfg(feature = "immix_zero_on_release")]
@@ -489,6 +488,8 @@ impl Block {
             let line_mark_state = line_mark_state.unwrap();
             #[cfg(feature = "thread_local_gc")]
             let publish_state = Line::public_line_mark_state(line_mark_state);
+            #[cfg(feature = "thread_local_gc_copying")]
+            let mut is_block_pubic = false;
 
             for line in self.lines() {
                 #[cfg(all(feature = "thread_local_gc", debug_assertions))]
@@ -544,6 +545,11 @@ impl Block {
                 #[cfg(not(feature = "thread_local_gc"))]
                 let is_line_published = false;
 
+                #[cfg(feature = "thread_local_gc_copying")]
+                if is_line_published {
+                    is_block_pubic = true;
+                }
+
                 if line.is_marked(line_mark_state) || is_line_published {
                     marked_lines += 1;
                     prev_line_is_marked = true;
@@ -586,7 +592,15 @@ impl Block {
                     #[cfg(feature = "thread_local_gc_copying")]
                     {
                         if self.is_block_published() {
-                            space.reusable_blocks.push(*self);
+                            if is_block_pubic {
+                                debug_assert!(!self.is_defrag_source());
+                                self.set_owner(u32::MAX);
+                                space.reusable_blocks.push(*self);
+                            } else {
+                                debug_assert!(self.is_defrag_source());
+                                // This block is now private again(all private objects have been evacuated)
+                                self.reset_publication();
+                            }
                         }
                     }
                 } else {

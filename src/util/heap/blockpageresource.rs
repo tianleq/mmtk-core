@@ -411,14 +411,14 @@ impl<B: Region> BlockPool<B> {
         let mut queue = BlockQueue::new();
         for block in blocks {
             if let Err(block) = unsafe { queue.push_relaxed(block) } {
-                self.global_freed_blocks.write().push(queue);
+                self.add_global_array(queue);
                 queue = BlockQueue::new();
                 let result = unsafe { queue.push_relaxed(block) };
                 debug_assert!(result.is_ok());
             }
         }
         if !queue.is_empty() {
-            self.global_freed_blocks.write().push(queue);
+            self.add_global_array(queue);
         }
     }
 }

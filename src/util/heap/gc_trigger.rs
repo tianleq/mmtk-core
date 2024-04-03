@@ -63,19 +63,7 @@ impl<VM: VMBinding> GCTrigger<VM> {
         _tls: VMMutatorThread,
     ) -> Option<GCKind> {
         let plan = unsafe { self.plan.assume_init() };
-        #[cfg(feature = "thread_local_gc")]
-        if self
-            .policy
-            .is_thread_local_gc_required(space_full, space, plan, _tls)
-        {
-            // TODO need a way to tell whether this is a global gc or local gc
-            let result = plan.base().gc_requester.request_thread_local_gc(_tls);
-            if result {
-                return Some(GCKind::LOCAL);
-            } else {
-                return Some(GCKind::GLOBAL);
-            }
-        }
+
         if self.policy.is_gc_required(space_full, space, plan) {
             info!(
                 "[POLL] {}{} ({}/{} pages)",
@@ -92,6 +80,19 @@ impl<VM: VMBinding> GCTrigger<VM> {
             plan.base().gc_requester.request();
             return Some(GCKind::GLOBAL);
         }
+        // #[cfg(feature = "thread_local_gc")]
+        // if self
+        //     .policy
+        //     .is_thread_local_gc_required(space_full, space, plan, _tls)
+        // {
+        //     // TODO need a way to tell whether this is a global gc or local gc
+        //     let result = plan.base().gc_requester.request_thread_local_gc(_tls);
+        //     if result {
+        //         return Some(GCKind::LOCAL);
+        //     } else {
+        //         return Some(GCKind::GLOBAL);
+        //     }
+        // }
         None
     }
 

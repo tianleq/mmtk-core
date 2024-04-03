@@ -248,6 +248,13 @@ impl Stats {
                 stats.public_bytes,
                 (stats.public_bytes as f64 / stats.allocation_bytes as f64) * 100 as f64
             );
+            let stats = crate::util::REQUEST_SCOPE_OBJECTS_STATS.lock().unwrap();
+            print!(
+                "{}\t{}\t{}\t",
+                stats.allocation_bytes,
+                stats.public_bytes,
+                (stats.public_bytes as f64 / stats.allocation_bytes as f64) * 100 as f64
+            );
         }
         println!();
         print!("Total time: ");
@@ -276,6 +283,7 @@ impl Stats {
         {
             print!("all.all.bytes\tall.public.bytes\tall.publish.rate\t");
             print!("harness.all.bytes\tharness.public.bytes\tharness.publish.rate\t");
+            print!("request.all.bytes\request.public.bytes\request.publish.rate\t");
         }
         println!();
     }

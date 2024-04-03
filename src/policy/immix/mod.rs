@@ -36,7 +36,7 @@ pub const STRESS_DEFRAG: bool = DEFRAG;
 /// Mark every allocated block as defragmentation source before GC.
 /// This and `STRESS_DEFRAG` are used to ensure public objects are
 /// always strictly evacuated in global gc
-pub const DEFRAG_EVERY_BLOCK: bool = DEFRAG;
+pub const DEFRAG_EVERY_BLOCK: bool = false;
 
 /// If Immix is used as a nursery space, do we prefer copy?
 pub const PREFER_COPY_ON_NURSERY_GC: bool = !cfg!(feature = "immix_non_moving"); // copy nursery objects if we are allowed to move.
@@ -62,3 +62,7 @@ fn validate_features() {
     // Number of lines in a block should not exceed BlockState::MARK_MARKED
     assert!(Block::LINES / 2 <= u8::MAX as usize - 2);
 }
+
+#[cfg(feature = "thread_local_gc_copying")]
+pub(crate) static LOCAL_GC_COPY_RESERVE_PAGES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);

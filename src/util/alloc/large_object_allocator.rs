@@ -142,11 +142,6 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    pub fn thread_local_prepare(&mut self) {
-        self.prepare();
-    }
-
-    #[cfg(feature = "thread_local_gc")]
     pub fn release(&mut self) {
         // This is a global gc, needs to remove dead objects from local los objects set
         use crate::policy::sft::SFT;
@@ -165,6 +160,11 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
             }
         }
         self.local_los_objects.extend(live_objects);
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn thread_local_prepare(&mut self) {
+        self.prepare();
     }
 
     #[cfg(feature = "thread_local_gc")]

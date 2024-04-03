@@ -51,7 +51,7 @@ impl Line {
     pub const MARK_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_LINE_MARK;
 
-    #[cfg(all(feature = "thread_local_gc", debug_assertions))]
+    #[cfg(feature = "thread_local_gc")]
     /// Block level public table (side)
     pub const LINE_PUBLICATION_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_LINE_PUBLICATION;
@@ -89,9 +89,13 @@ impl Line {
     }
 
     #[cfg(debug_assertions)]
-    /// Test line publication state.
     pub fn get_line_mark_state(&self) -> u8 {
         unsafe { Self::MARK_TABLE.load::<u8>(self.start()) }
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn clear_line_mark_state(&self) {
+        unsafe { Self::MARK_TABLE.store::<u8>(self.start(), 0) }
     }
 
     #[cfg(feature = "thread_local_gc")]
@@ -180,19 +184,19 @@ impl Line {
                 object,
                 state
             );
-            #[cfg(debug_assertions)]
+
             unsafe {
                 Line::LINE_PUBLICATION_TABLE.store::<u8>(line.start(), 1);
             }
         }
     }
 
-    #[cfg(all(feature = "thread_local_gc", debug_assertions))]
+    #[cfg(feature = "thread_local_gc")]
     pub fn is_public_line(&self) -> bool {
         unsafe { Line::LINE_PUBLICATION_TABLE.load::<u8>(self.start()) != 0 }
     }
 
-    #[cfg(all(feature = "thread_local_gc", debug_assertions))]
+    #[cfg(feature = "thread_local_gc")]
     pub fn reset_public_line(&self) {
         unsafe {
             Line::LINE_PUBLICATION_TABLE.store::<u8>(self.start(), 0);

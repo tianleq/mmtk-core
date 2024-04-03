@@ -985,6 +985,31 @@ pub fn mmtk_is_object_published<VM: VMBinding>(object: ObjectReference) -> bool 
 }
 
 #[cfg(feature = "thread_local_gc")]
+pub fn mmtk_request_thread_local_gc<VM: VMBinding>(
+    mmtk: &'static MMTK<VM>,
+    tls: VMMutatorThread,
+) -> bool {
+    use crate::scheduler::thread_local_gc_work::{ACTIVE_LOCAL_GC_COUNTER, LOCAL_GC_SYNC};
+
+    // let mut active_local_gc_counter = ACTIVE_LOCAL_GC_COUNTER.lock().unwrap();
+    // while *active_local_gc_counter > 0 {
+    //     active_local_gc_counter = LOCAL_GC_SYNC.wait(active_local_gc_counter).unwrap();
+    // }
+
+    let required = mmtk.plan.thread_local_collection_required(false, None, tls);
+    if required {
+        let mut active_local_gc_counter = ACTIVE_LOCAL_GC_COUNTER.lock().unwrap();
+        while *active_local_gc_counter > 0 {
+            active_local_gc_counter = LOCAL_GC_SYNC.wait(active_local_gc_counter).unwrap();
+        }
+        *active_local_gc_counter += 1;
+        debug_assert_eq!(*active_local_gc_counter, 1);
+    }
+
+    required
+}
+
+#[cfg(feature = "thread_local_gc")]
 pub fn mmtk_handle_user_triggered_local_gc<VM: VMBinding>(
     mmtk: &'static MMTK<VM>,
     tls: VMMutatorThread,
@@ -994,8 +1019,6 @@ pub fn mmtk_handle_user_triggered_local_gc<VM: VMBinding>(
 
 pub fn mmtk_handle_user_triggered_global_gc<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
     mmtk.plan.handle_user_collection_request(tls, true, false);
-    #[cfg(feature = "public_object_analysis")]
-    mmtk.plan.activate_public_object_analysis();
 }
 
 pub fn compute_allocator_mem_layout_checksum<VM: VMBinding>() -> usize {

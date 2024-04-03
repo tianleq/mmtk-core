@@ -7,6 +7,8 @@ use crate::vm::*;
 use crate::*;
 use std::collections::VecDeque;
 use std::marker::PhantomData;
+use std::sync::Condvar;
+use std::sync::Mutex;
 
 pub const THREAD_LOCAL_GC_ACTIVE: u32 = 1;
 pub const THREAD_LOCAL_GC_INACTIVE: u32 = 0;
@@ -45,6 +47,11 @@ impl<VM: VMBinding> ExecuteThreadlocalCollection<VM> {
             self.mmtk.plan.get_total_pages(),
             elapsed.as_millis()
         );
+        // local gc has finished, notify any mutator that has local gc pending
+        let mut active_local_gc_counter = ACTIVE_LOCAL_GC_COUNTER.lock().unwrap();
+        *active_local_gc_counter -= 1;
+        debug_assert_eq!(*active_local_gc_counter, 0);
+        LOCAL_GC_SYNC.notify_one();
     }
 }
 
@@ -320,12 +327,14 @@ where
                         crate::util::object_extra_header_metadata::get_extra_header_metadata::<
                             VM,
                             usize,
-                        >(_source),
+                        >(_source)
+                            & object_extra_header_metadata::BOTTOM_HALF_MASK,
                         new_object,
                         crate::util::object_extra_header_metadata::get_extra_header_metadata::<
                             VM,
                             usize,
                         >(new_object)
+                            & object_extra_header_metadata::BOTTOM_HALF_MASK,
                     );
                 }
             }
@@ -526,3 +535,6 @@ where
         // VM::VMCollection::schedule_finalization(VMWorkerThread(VMThread::UNINITIALIZED));
     }
 }
+
+pub(crate) static ACTIVE_LOCAL_GC_COUNTER: Mutex<u32> = Mutex::new(0);
+pub(crate) static LOCAL_GC_SYNC: Condvar = Condvar::new();

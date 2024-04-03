@@ -92,7 +92,17 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
                     // Current thread is in VM (not safe so no global gc can happen), it can safely do a
                     // local gc
                     #[cfg(feature = "thread_local_gc")]
-                    VM::VMActivePlan::request_thread_local_gc(VMMutatorThread(tls));
+                    {
+                        use crate::scheduler::thread_local_gc_work::{
+                            ACTIVE_LOCAL_GC_COUNTER, LOCAL_GC_SYNC,
+                        };
+                        let mut active_local_gc_counter = ACTIVE_LOCAL_GC_COUNTER.lock().unwrap();
+                        while *active_local_gc_counter > 0 {
+                            active_local_gc_counter =
+                                LOCAL_GC_SYNC.wait(active_local_gc_counter).unwrap();
+                        }
+                        VM::VMActivePlan::execute_thread_local_gc(VMMutatorThread(tls));
+                    }
 
                     #[cfg(not(feature = "thread_local_gc"))]
                     panic!("thread local gc feature is not enabled");

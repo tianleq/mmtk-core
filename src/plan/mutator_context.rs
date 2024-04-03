@@ -91,14 +91,14 @@ pub struct Mutator<VM: VMBinding> {
     #[cfg(feature = "thread_local_gc")]
     pub finalizable_candidates:
         Box<Vec<<VM::VMReferenceGlue as crate::vm::ReferenceGlue<VM>>::FinalizableType>>,
+    #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
+    pub request_id: usize,
     #[cfg(feature = "public_object_analysis")]
     pub allocation_count: usize,
     #[cfg(feature = "public_object_analysis")]
     pub bytes_allocated: usize,
-    #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
-    pub request_id: usize,
     #[cfg(feature = "public_object_analysis")]
-    pub global_request_id: u32,
+    pub copy_bytes: u32,
 }
 
 impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {

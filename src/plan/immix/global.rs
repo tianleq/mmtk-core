@@ -76,7 +76,12 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         _space: Option<&dyn Space<Self::VM>>,
         _tls: VMMutatorThread,
     ) -> bool {
-        false
+        // let total_pages = self.base().gc_trigger.policy.get_heap_size_in_pages();
+        // // Simply use the defrag headhoom as the red zone size
+        // let red_zone_pages = self.get_collection_reserved_pages();
+        // let thread_local_copy_reserve_pages = self.get_thread_local_collection_reserved_pages();
+        // self.get_used_pages() + thread_local_copy_reserve_pages + red_zone_pages >= total_pages
+        true
     }
 
     fn last_collection_was_exhaustive(&self) -> bool {
@@ -361,6 +366,14 @@ impl<VM: VMBinding> Immix<VM> {
 
             end_of_thread_local_gc.execute(mmtk);
         }
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn get_thread_local_collection_reserved_pages(&self) -> usize {
+        #[cfg(feature = "thread_local_gc_copying")]
+        return self.immix_space.thread_local_gc_copy_reserve_pages();
+        #[cfg(not(feature = "thread_local_gc_copying"))]
+        return 0;
     }
 }
 

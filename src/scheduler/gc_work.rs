@@ -234,7 +234,7 @@ pub struct EndOfGC {
 
 impl<VM: VMBinding> GCWork<VM> for EndOfGC {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        info!(
+        println!(
             "End of GC ({}/{} pages, took {} ms)",
             mmtk.plan.get_reserved_pages(),
             mmtk.plan.get_total_pages(),

@@ -54,7 +54,7 @@ pub fn immix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMW
     #[cfg(feature = "thread_local_gc")]
     {
         // For a thread local gc, it needs to sweep blocks from its local block list
-        // so no need to do it here
+        // so need to do it here
         immix_allocator.release();
         let los_allocator: &mut LargeObjectAllocator<VM> = unsafe {
             allocators.get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Los])
@@ -200,6 +200,6 @@ pub fn create_immix_mutator<VM: VMBinding>(
         #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
         request_id: 0,
         #[cfg(feature = "public_object_analysis")]
-        global_request_id: 0,
+        copy_bytes: 0,
     }
 }

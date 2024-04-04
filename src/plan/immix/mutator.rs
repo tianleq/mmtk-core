@@ -14,10 +14,6 @@ use crate::util::alloc::ImmixAllocator;
 use crate::util::opaque_pointer::{VMMutatorThread, VMWorkerThread};
 use crate::vm::VMBinding;
 use crate::MMTK;
-use crate::{
-    plan::barriers::NoBarrier,
-    util::opaque_pointer::{VMMutatorThread, VMWorkerThread},
-};
 use enum_map::EnumMap;
 
 pub fn immix_mutator_prepare<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {

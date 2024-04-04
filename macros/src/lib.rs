@@ -4,7 +4,6 @@ extern crate quote;
 extern crate syn;
 
 use proc_macro::TokenStream;
-use proc_macro_error::abort_call_site;
 use proc_macro_error::proc_macro_error;
 use syn::parse_macro_input;
 use syn::DeriveInput;

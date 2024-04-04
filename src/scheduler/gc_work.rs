@@ -355,7 +355,7 @@ impl<E: ProcessEdgesWork> ObjectTracerContext<E::VM> for ProcessEdgesWorkTracerC
 
         // Prepare the underlying ProcessEdgesWork
         #[cfg(not(feature = "debug_publish_object"))]
-        let mut process_edges_work = E::new(vec![], false, mmtk, self.stage, Option::None);
+        let mut process_edges_work = E::new(vec![], false, mmtk, self.stage);
         #[cfg(feature = "debug_publish_object")]
         let mut process_edges_work = E::new(vec![], vec![], false, 0, mmtk, self.stage, None);
         // FIXME: This line allows us to omit the borrowing lifetime of worker.
@@ -590,7 +590,7 @@ impl<VM: VMBinding> ProcessEdgesBase<VM> {
             roots,
             sources,
             vm_roots_type,
-            bucket
+            bucket,
         }
     }
     #[cfg(feature = "debug_publish_object")]
@@ -618,7 +618,7 @@ impl<VM: VMBinding> ProcessEdgesBase<VM> {
             roots,
             sources,
             vm_roots_type,
-            bucket
+            bucket,
         }
     }
     pub fn set_worker(&mut self, worker: &mut GCWorker<VM>) {
@@ -691,6 +691,16 @@ pub trait ProcessEdgesWork:
     fn new(
         edges: Vec<EdgeOf<Self>>,
         roots: bool,
+        mmtk: &'static MMTK<Self::VM>,
+        bucket: WorkBucketStage,
+    ) -> Self;
+
+    #[cfg(feature = "debug_publish_object")]
+    fn new(
+        _sources: Vec<ObjectReference>,
+        edges: Vec<EdgeOf<Self>>,
+        roots: bool,
+        vm_roots: u8,
         mmtk: &'static MMTK<Self::VM>,
         bucket: WorkBucketStage,
     ) -> Self;
@@ -854,7 +864,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for E {
         self.process_edges();
         debug!(
             "ProcessEdgesWork executed by GC Thread {}",
-            crate::scheduler::worker::current_worker_ordinal().unwrap()
+            crate::scheduler::worker::current_worker_ordinal()
         );
         if !self.nodes.is_empty() {
             self.flush();
@@ -884,14 +894,10 @@ impl<VM: VMBinding> ProcessEdgesWork for SFTProcessEdges<VM> {
 
     #[cfg(not(feature = "debug_publish_object"))]
     fn new(
-        
         edges: Vec<EdgeOf<Self>>,
-       
         roots: bool,
-       
         mmtk: &'static MMTK<VM>,
         bucket: WorkBucketStage,
-        _mutator_id: Option<VMMutatorThread>,
     ) -> Self {
         let base = ProcessEdgesBase::new(edges, roots, mmtk, bucket);
         Self { base }
@@ -923,7 +929,6 @@ impl<VM: VMBinding> ProcessEdgesWork for SFTProcessEdges<VM> {
         sft.sft_trace_object(&mut self.base.nodes, object, worker)
     }
 
-    
     fn create_scan_work(&self, nodes: Vec<ObjectReference>) -> ScanObjects<Self> {
         ScanObjects::<Self>::new(nodes, false, self.bucket)
     }
@@ -967,7 +972,7 @@ impl<VM: VMBinding, E: ProcessEdgesWork<VM = VM>, I: ProcessEdgesWork<VM = VM>>
         crate::memory_manager::add_work_packet(
             self.mmtk,
             WorkBucketStage::Closure,
-            E::new(edges, true, self.mmtk, WorkBucketStage::Closure, Option::None),
+            E::new(edges, true, self.mmtk, WorkBucketStage::Closure),
         );
         #[cfg(feature = "debug_publish_object")]
         crate::memory_manager::add_work_packet(
@@ -1001,7 +1006,6 @@ impl<VM: VMBinding, E: ProcessEdgesWork<VM = VM>, I: ProcessEdgesWork<VM = VM>>
                 true,
                 vm_roots,
                 self.mmtk,
-                None,
             ),
         );
     }
@@ -1080,7 +1084,8 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
         // Then scan those objects for edges.
         let mut scan_later = vec![];
         {
-            let mut closure = ObjectsClosure::<Self::E>::new(worker, self.get_bucket(), single_thread, mutator_tls);
+            let mut closure =
+                ObjectsClosure::<Self::E>::new(worker, self.get_bucket(), mutator_tls);
             for object in objects_to_scan.iter().copied() {
                 // For any object we need to scan, we count its liv bytes
                 #[cfg(feature = "count_live_bytes_in_gc")]
@@ -1203,15 +1208,10 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
 
     #[cfg(not(feature = "debug_publish_object"))]
     fn new(
-        
         edges: Vec<EdgeOf<Self>>,
-       
         roots: bool,
-       
         mmtk: &'static MMTK<VM>,
         bucket: WorkBucketStage,
-    ,
-        _tls: Option<VMMutatorThread>,
     ) -> Self {
         let base = ProcessEdgesBase::new(edges, roots, mmtk, bucket);
         let plan = base.plan().downcast_ref::<P>().unwrap();
@@ -1225,27 +1225,12 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
         roots: bool,
         vm_roots: u8,
         mmtk: &'static MMTK<VM>,
-        _tls: Option<VMMutatorThread>,
+        bucket: WorkBucketStage,
     ) -> Self {
         let base = ProcessEdgesBase::new(sources, edges, roots, vm_roots, mmtk);
         let plan = base.plan().downcast_ref::<P>().unwrap();
         Self { plan, base }
     }
-
-    #[cfg(feature = "debug_publish_object")]
-    fn new(
-        sources: Vec<ObjectReference>,
-        edges: Vec<EdgeOf<Self>>,
-        roots: bool,
-        vm_roots: u8,
-        mmtk: &'static MMTK<VM>,
-        _tls: Option<VMMutatorThread>,
-    ) -> Self {
-        let base = ProcessEdgesBase::new(sources, edges, roots, vm_roots, mmtk);
-        let plan = base.plan().downcast_ref::<P>().unwrap();
-        Self { plan, base }
-    }
-
 
     fn create_scan_work(&self, nodes: Vec<ObjectReference>) -> Self::ScanObjectsWorkType {
         PlanScanObjects::<Self, P>::new(self.plan, nodes, false, self.bucket)

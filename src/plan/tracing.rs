@@ -89,7 +89,6 @@ pub struct ObjectsClosure<'a, E: ProcessEdgesWork> {
     sources: VectorQueue<ObjectReference>,
     pub(crate) worker: &'a mut GCWorker<E::VM>,
     bucket: WorkBucketStage,
-    single_thread: bool,
     _mutator_tls: Option<VMMutatorThread>,
 }
 
@@ -100,8 +99,9 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
     /// * `worker`: the current worker. The objects closure should not leave the context of this worker.
     /// * `bucket`: new work generated will be push ed to the bucket.
     pub fn new(
-        worker: &'a mut GCWorker<E::VM>, bucket: WorkBucketStage,
-        single_thread: bool,
+        worker: &'a mut GCWorker<E::VM>,
+        bucket: WorkBucketStage,
+
         mutator_tls: Option<VMMutatorThread>,
     ) -> Self {
         Self {
@@ -110,7 +110,6 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
             sources: VectorQueue::new(),
             worker,
             bucket,
-            single_thread,
             _mutator_tls: mutator_tls,
         }
     }
@@ -121,40 +120,21 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
         let sources = self.sources.take();
 
         if !buf.is_empty() {
-            if self.single_thread {
-                #[cfg(not(feature = "debug_publish_object"))]
-                self.worker.add_local_work(
-                    WorkBucketStage::Unconstrained,
-                    E::new(buf, false, self.worker.mmtk, None),
+            #[cfg(not(feature = "debug_publish_object"))]
+            self.worker.add_work(
+                self.bucket,
+                E::new(buf, false, self.worker.mmtk, self.bucket),
+            );
+            #[cfg(feature = "debug_publish_object")]
+            {
+                debug_assert!(
+                    sources.len() == buf.len(),
+                    "The number of objects and slots do not equal"
                 );
-                #[cfg(feature = "debug_publish_object")]
-                {
-                    debug_assert!(
-                        sources.len() == buf.len(),
-                        "The number of objects and slots do not equal"
-                    );
-                    self.worker.add_local_work(
-                        WorkBucketStage::Unconstrained,
-                        E::new(sources, buf, false, 0, self.worker.mmtk, self._mutator_tls),
-                    );
-                }
-            } else {
-                #[cfg(not(feature = "debug_publish_object"))]
                 self.worker.add_work(
-                    WorkBucketStage::Closure,
-                    E::new(buf, false, self.worker.mmtk, Option::None),
+                    self.bucket,
+                    E::new(sources, buf, false, 0, self.worker.mmtk, self.bucket),
                 );
-                #[cfg(feature = "debug_publish_object")]
-                {
-                    debug_assert!(
-                        sources.len() == buf.len(),
-                        "The number of objects and slots do not equal"
-                    );
-                    self.worker.add_work(
-                        self.bucket,
-                        E::new(sources, buf, false, 0, self.worker.mmtk, self.bucket, None),
-                    );
-                }
             }
         }
     }

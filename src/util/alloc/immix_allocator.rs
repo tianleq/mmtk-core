@@ -509,10 +509,6 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
         &self.context
     }
 
-    fn get_plan(&self) -> &'static dyn Plan<VM = VM> {
-        self.plan
-    }
-
     fn does_thread_local_allocation(&self) -> bool {
         true
     }
@@ -622,19 +618,20 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     pub(crate) fn new(
         tls: VMThread,
         _mutator_id: u32,
-        space: &'static ImmixSpace<VM>,
+        space: Option<&'static dyn Space<VM>>,
         context: Arc<AllocatorContext<VM>>,
         copy: bool,
         _semantic: Option<ImmixAllocSemantics>,
     ) -> Self {
+        let _space = space.unwrap().downcast_ref::<ImmixSpace<VM>>().unwrap();
         // Local line mark state has to be in line with global line mark state, cannot use the default
         // value GLOBAL_RESET_MARK_STATE as mutator threads can be spawned at any time
-        let _global_line_mark_state = space.line_mark_state.load(atomic::Ordering::Acquire);
+        let _global_line_mark_state = _space.line_mark_state.load(atomic::Ordering::Acquire);
         return ImmixAllocator {
             tls,
             #[cfg(feature = "thread_local_gc")]
             mutator_id: _mutator_id,
-            space,
+            space: _space,
             context,
             bump_pointer: BumpPointer::default(),
             hot: false,
@@ -741,7 +738,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     end_line,
                     self.tls
                 );
-                crate::util::public_bit::bzero_public_bit(self.cursor, self.limit - self.cursor);
+                crate::util::public_bit::bzero_public_bit(
+                    self.bump_pointer.cursor,
+                    self.bump_pointer.limit - self.bump_pointer.cursor,
+                );
                 // stale public line bit needs to be cleared,
                 #[cfg(all(feature = "thread_local_gc", debug_assertions))]
                 {

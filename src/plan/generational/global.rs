@@ -50,7 +50,7 @@ impl<VM: VMBinding> CommonGenPlan<VM> {
         let full_heap_gc_count = args
             .global_args
             .stats
-            .new_event_counter("majorGC", true, true);
+            .new_event_counter("majorGC", true, true, true);
         let common = CommonPlan::new(args);
 
         CommonGenPlan {

@@ -42,8 +42,8 @@ impl<VM: VMBinding> Allocator<VM> for FreeListAllocator<VM> {
         self.space
     }
 
-    fn get_plan(&self) -> &'static dyn Plan<VM = VM> {
-        self.plan
+    fn get_context(&self) -> &AllocatorContext<VM> {
+        &self.context
     }
 
     #[cfg(feature = "extra_header")]
@@ -171,8 +171,8 @@ impl<VM: VMBinding> FreeListAllocator<VM> {
             if !cell.is_zero() {
                 // We succeeded in fastpath alloc, this cannot be precise stress test
                 debug_assert!(
-                    !(*self.plan.options().precise_stress
-                        && self.plan.base().is_stress_test_gc_enabled())
+                    !(*self.context.options.precise_stress
+                        && self.context.options.is_stress_test_gc_enabled())
                 );
 
                 let res = allocator::align_allocation::<VM>(cell, align, offset);

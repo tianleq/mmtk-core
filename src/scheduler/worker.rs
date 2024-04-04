@@ -412,10 +412,7 @@ impl<VM: VMBinding> GCWorker<VM> {
 
             probe!(mmtk, work, typename.as_ptr(), typename.len());
             work.do_work_with_stat(self, mmtk);
-            debug!(
-                "GC Thread {} executes the packet",
-                current_worker_ordinal().unwrap()
-            );
+            debug!("GC Thread {} executes the packet", current_worker_ordinal());
         }
     }
 }

@@ -381,10 +381,10 @@ impl<VM: VMBinding> MMTK<VM> {
     }
 
     pub fn request_starting(&self) {
-        self.plan.base().stats.request_starting();
+        self.stats.request_starting();
     }
 
     pub fn request_finished(&self) {
-        self.plan.base().stats.request_finished();
+        self.stats.request_finished();
     }
 }

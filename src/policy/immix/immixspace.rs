@@ -705,7 +705,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         #[cfg(feature = "vo_bit")]
         vo_bit::helper::on_trace_object::<VM>(object);
 
-        
         #[cfg(feature = "thread_local_gc")]
         let is_private_object = !crate::util::public_bit::is_public::<VM>(object);
         #[cfg(not(feature = "thread_local_gc"))]
@@ -837,7 +836,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     );
                 }
             }
-            ForwardingWord::clear_forwarding_bits::<VM>(object);
+            object_forwarding::clear_forwarding_bits::<VM>(object);
             object
         } else {
             // We won the forwarding race; actually forward and copy the object if it is not pinned
@@ -886,7 +885,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 #[cfg(not(feature = "thread_local_gc_copying"))]
                 // Clippy complains if the "vo_bit" feature is not enabled.
                 #[allow(clippy::let_and_return)]
-                let new_object = object_forwarding::forward_object::<VM>(object, semantics, copy_context);
+                let new_object =
+                    object_forwarding::forward_object::<VM>(object, semantics, copy_context);
 
                 // When local gc is enabled, global gc only evacuates public object
                 #[cfg(feature = "thread_local_gc_copying")]
@@ -1799,23 +1799,13 @@ impl<VM: VMBinding> FlushPageResource<VM> {
             // We've finished releasing all the dead blocks to the BlockPageResource's thread-local queues.
             // Now flush the BlockPageResource.
             self.space.flush_page_resource();
-            impl<VM: VMBinding> FlushPageResource<VM> {
-                /// Called after a related work packet is finished.
-                fn finish_one_work_packet(&self) {
-                    if 1 == self.counter.fetch_sub(1, Ordering::SeqCst) {
-                        // We've finished releasing all the dead blocks to the BlockPageResource's thread-local queues.
-                        // Now flush the BlockPageResource.
-                        self.space.flush_page_resource();
-                        // When local gc is enabled, it keeps track of a local block list
-                        // That list needs to be updated after blocks get flushed
-                        #[cfg(feature = "thread_local_gc")]
-                        for mutator in VM::VMActivePlan::mutators() {
-                            self.scheduler.work_buckets[WorkBucketStage::Release].add(
-                                crate::scheduler::gc_work::ReleaseMutator::<VM>::new(mutator),
-                            );
-                        }
-                    }
-                }
+            // When local gc is enabled, it keeps track of a local block list
+            // That list needs to be updated after blocks get flushed
+            #[cfg(feature = "thread_local_gc")]
+            for mutator in VM::VMActivePlan::mutators() {
+                self.scheduler.work_buckets[WorkBucketStage::Release].add(
+                    crate::scheduler::gc_work::ReleaseMutator::<VM>::new(mutator),
+                );
             }
         }
     }
@@ -1878,7 +1868,7 @@ impl<VM: VMBinding> ImmixCopyContext<VM> {
             allocator: ImmixAllocator::new(
                 tls.0,
                 u32::MAX,
-                space,
+                Some(space),
                 context,
                 true,
                 Some(ImmixAllocSemantics::Public), // only used in global gc to evacuate public objects
@@ -1935,8 +1925,22 @@ impl<VM: VMBinding> ImmixHybridCopyContext<VM> {
         space: &'static ImmixSpace<VM>,
     ) -> Self {
         ImmixHybridCopyContext {
-            copy_allocator: ImmixAllocator::new(tls.0, Some(space), context.clone(), false),
-            defrag_allocator: ImmixAllocator::new(tls.0, Some(space), context, true),
+            copy_allocator: ImmixAllocator::new(
+                tls.0,
+                u32::MAX,
+                Some(space),
+                context.clone(),
+                false,
+                None,
+            ),
+            defrag_allocator: ImmixAllocator::new(
+                tls.0,
+                u32::MAX,
+                Some(space),
+                context,
+                true,
+                None,
+            ),
         }
     }
 

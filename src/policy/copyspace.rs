@@ -196,15 +196,20 @@ impl<VM: VMBinding> CopySpace<VM> {
 
     #[cfg(feature = "public_bit")]
     fn reset_public_bit(&self) {
-        let current_chunk = unsafe { self.pr.get_current_chunk() };
-        if self.common.contiguous {
-            crate::util::public_bit::bzero_public_bit(
-                self.common.start,
-                current_chunk + crate::util::heap::layout::vm_layout_constants::BYTES_IN_CHUNK
-                    - self.common.start,
-            );
-        } else {
-            panic!("bulk clearing public bit is not supported in discontiguous setting");
+        // let current_chunk = unsafe { self.pr.get_current_chunk() };
+        // if self.common.contiguous {
+        //     crate::util::public_bit::bzero_public_bit(
+        //         self.common.start,
+        //         current_chunk + crate::util::heap::layout::vm_layout_constants::BYTES_IN_CHUNK
+        //             - self.common.start,
+        //     );
+        // } else {
+        //     panic!("bulk clearing public bit is not supported in discontiguous setting");
+        // }
+        unsafe {
+            for (start, size) in self.pr.iterate_allocated_regions() {
+                crate::util::public_bit::bzero_public_bit(start, size);
+            }
         }
     }
 
@@ -318,7 +323,7 @@ impl<VM: VMBinding> CopySpace<VM> {
         }
         trace!("Unprotect {:x} {:x}", start, start + extent);
     }
-    
+
     #[cfg(all(feature = "debug_publish_object"))]
     pub fn is_object_published(&self, object: ObjectReference) -> bool {
         debug_assert!(!object.is_null());

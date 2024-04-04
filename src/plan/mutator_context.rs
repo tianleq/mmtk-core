@@ -162,20 +162,6 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         .alloc_slow(size, align, offset)
     }
 
-    fn alloc_slow(
-        &mut self,
-        size: usize,
-        align: usize,
-        offset: usize,
-        allocator: AllocationSemantics,
-    ) -> Address {
-        unsafe {
-            self.allocators
-                .get_allocator_mut(self.config.allocator_mapping[allocator])
-        }
-        .alloc_slow(size, align, offset)
-    }
-
     // Note that this method is slow, and we expect VM bindings that care about performance to implement allocation fastpath sequence in their bindings.
     fn post_alloc(
         &mut self,

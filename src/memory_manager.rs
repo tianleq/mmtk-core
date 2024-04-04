@@ -460,7 +460,8 @@ pub fn gc_poll<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
         "gc_poll() can only be called by a mutator thread."
     );
 
-    if VM::VMCollection::is_collection_enabled() && mmtk.gc_trigger.poll(false, None) {
+    if VM::VMCollection::is_collection_enabled() && mmtk.gc_trigger.poll(false, None, tls).is_some()
+    {
         debug!("Collection required");
         assert!(mmtk.state.is_initialized(), "GC is not allowed here: collection is not initialized (did you call initialize_collection()?).");
         VM::VMCollection::block_for_gc(tls);
@@ -913,36 +914,6 @@ pub fn add_work_packets<VM: VMBinding>(
     mmtk.scheduler.work_buckets[bucket].bulk_add(packets)
 }
 
-/// Add a work packet to the given work bucket's thread local queue. Note that this simply adds the work packet to the given
-/// work bucket, and the scheduler will decide when to execute the work packet.
-///
-/// Arguments:
-/// * `mmtk`: A reference to an MMTk instance.
-/// * `bucket`: Which work bucket to add this packet to.
-/// * `packet`: The work packet to be added.
-pub fn add_local_work_packet<VM: VMBinding, W: GCWork<VM>>(
-    mmtk: &'static MMTK<VM>,
-    bucket: WorkBucketStage,
-    packet: W,
-) {
-    mmtk.scheduler.work_buckets[bucket].add_local(packet)
-}
-
-/// Bulk add a number of work packets to the given work bucket. Note that this simply adds the work packets
-/// to the given work bucket, and the scheduler will decide when to execute the work packets.
-///
-/// Arguments:
-/// * `mmtk`: A reference to an MMTk instance.
-/// * `bucket`: Which work bucket to add these packets to.
-/// * `packet`: The work packets to be added.
-pub fn add_local_work_packets<VM: VMBinding>(
-    mmtk: &'static MMTK<VM>,
-    bucket: WorkBucketStage,
-    packets: Vec<Box<dyn GCWork<VM>>>,
-) {
-    mmtk.scheduler.work_buckets[bucket].bulk_add_local(packets)
-}
-
 #[cfg(feature = "public_bit")]
 pub fn mmtk_set_public_bit<VM: VMBinding>(_mmtk: &'static MMTK<VM>, object: ObjectReference) {
     debug_assert!(!object.is_null(), "object is null!");
@@ -1009,11 +980,11 @@ pub fn mmtk_handle_user_triggered_local_gc<VM: VMBinding>(
     mmtk: &'static MMTK<VM>,
     tls: VMMutatorThread,
 ) {
-    mmtk.plan.handle_thread_local_collection(tls, mmtk);
+    mmtk.get_plan().handle_thread_local_collection(tls, mmtk);
 }
 
 pub fn mmtk_handle_user_triggered_global_gc<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
-    mmtk.plan.handle_user_collection_request(tls, true, false);
+    mmtk.handle_user_collection_request(tls, true, false);
 }
 
 pub fn compute_allocator_mem_layout_checksum<VM: VMBinding>() -> usize {

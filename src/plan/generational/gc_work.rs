@@ -30,7 +30,6 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>> ProcessEdg
         roots: bool,
         mmtk: &'static MMTK<VM>,
         bucket: WorkBucketStage,
-        _tls: Option<VMMutatorThread>,
     ) -> Self {
         let base = ProcessEdgesBase::new(edges, roots, mmtk, bucket);
         let plan = base.plan().downcast_ref().unwrap();
@@ -72,14 +71,8 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>> ProcessEdg
         }
     }
 
-    
     fn create_scan_work(&self, nodes: Vec<ObjectReference>) -> Self::ScanObjectsWorkType {
         PlanScanObjects::new(self.plan, nodes, false, self.bucket)
-    }
-
-    #[cfg(feature = "debug_publish_object")]
-    fn is_object_published(&self, _object: ObjectReference) -> bool {
-        unimplemented!()
     }
 
     #[cfg(feature = "debug_publish_object")]
@@ -188,11 +181,22 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessRegionModBuf<E> {
             }
             #[cfg(not(feature = "debug_publish_object"))]
             // Forward entries
-            GCWork::do_work(&mut E::new(edges, false, mmtk, Option::None), worker, mmtk);
+            GCWork::do_work(
+                &mut E::new(edges, false, mmtk, WorkBucketStage::Closure),
+                worker,
+                mmtk,
+            );
             #[cfg(feature = "debug_publish_object")]
             // Forward entries
             GCWork::do_work(
-                &mut E::new(edges.iter().map(|&edge| edge.load()).collect(), edges, false, 0, mmtk, WorkBucketStage::Closure),
+                &mut E::new(
+                    edges.iter().map(|&edge| edge.load()).collect(),
+                    edges,
+                    false,
+                    0,
+                    mmtk,
+                    WorkBucketStage::Closure,
+                ),
                 worker,
                 mmtk,
             )

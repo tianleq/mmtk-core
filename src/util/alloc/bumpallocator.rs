@@ -193,50 +193,49 @@ impl<VM: VMBinding> BumpAllocator<VM> {
         }
     }
 
-    
     fn alloc_impl(&mut self, size: usize, align: usize, offset: usize) -> Address {
         trace!("alloc");
-        let result = align_allocation_no_fill::<VM>(self.cursor, align, offset);
+        let result = align_allocation_no_fill::<VM>(self.bump_pointer.cursor, align, offset);
         let new_cursor = result + size;
 
-        if new_cursor > self.limit {
+        if new_cursor > self.bump_pointer.limit {
             trace!("Thread local buffer used up, go to alloc slow path");
             self.alloc_slow(size, align, offset)
         } else {
-            fill_alignment_gap::<VM>(self.cursor, result);
-            self.cursor = new_cursor;
+            fill_alignment_gap::<VM>(self.bump_pointer.cursor, result);
+            self.bump_pointer.cursor = new_cursor;
             trace!(
                 "Bump allocation size: {}, result: {}, new_cursor: {}, limit: {}",
                 size,
                 result,
-                self.cursor,
-                self.limit
+                self.bump_pointer.cursor,
+                self.bump_pointer.limit
             );
             result
         }
     }
 
-    fn alloc_impl(&mut self, size: usize, align: usize, offset: usize) -> Address {
-        trace!("alloc");
-        let result = align_allocation_no_fill::<VM>(self.cursor, align, offset);
-        let new_cursor = result + size;
+    // fn alloc_impl(&mut self, size: usize, align: usize, offset: usize) -> Address {
+    //     trace!("alloc");
+    //     let result = align_allocation_no_fill::<VM>(self.cursor, align, offset);
+    //     let new_cursor = result + size;
 
-        if new_cursor > self.limit {
-            trace!("Thread local buffer used up, go to alloc slow path");
-            self.alloc_slow(size, align, offset)
-        } else {
-            fill_alignment_gap::<VM>(self.cursor, result);
-            self.cursor = new_cursor;
-            trace!(
-                "Bump allocation size: {}, result: {}, new_cursor: {}, limit: {}",
-                size,
-                result,
-                self.cursor,
-                self.limit
-            );
-            result
-        }
-    }
+    //     if new_cursor > self.limit {
+    //         trace!("Thread local buffer used up, go to alloc slow path");
+    //         self.alloc_slow(size, align, offset)
+    //     } else {
+    //         fill_alignment_gap::<VM>(self.cursor, result);
+    //         self.cursor = new_cursor;
+    //         trace!(
+    //             "Bump allocation size: {}, result: {}, new_cursor: {}, limit: {}",
+    //             size,
+    //             result,
+    //             self.cursor,
+    //             self.limit
+    //         );
+    //         result
+    //     }
+    // }
 
     fn acquire_block(
         &mut self,

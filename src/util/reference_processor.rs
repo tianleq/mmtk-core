@@ -493,9 +493,16 @@ pub(crate) struct SoftRefProcessing<E: ProcessEdgesWork>(PhantomData<E>);
 impl<E: ProcessEdgesWork> GCWork<E::VM> for SoftRefProcessing<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         #[cfg(not(feature = "debug_publish_object"))]
-        let mut w = E::new(vec![], false, mmtk, WorkBucketStage::SoftRefClosure, Option::None);
+        let mut w = E::new(vec![], false, mmtk, WorkBucketStage::SoftRefClosure);
         #[cfg(feature = "debug_publish_object")]
-        let mut w = E::new(vec![], vec![], false, 0, mmtk, WorkBucketStage::SoftRefClosure, None);
+        let mut w = E::new(
+            vec![],
+            vec![],
+            false,
+            0,
+            mmtk,
+            WorkBucketStage::SoftRefClosure,
+        );
         w.set_worker(worker);
         mmtk.reference_processors.scan_soft_refs(&mut w, mmtk);
         w.flush();
@@ -512,9 +519,16 @@ pub(crate) struct WeakRefProcessing<E: ProcessEdgesWork>(PhantomData<E>);
 impl<E: ProcessEdgesWork> GCWork<E::VM> for WeakRefProcessing<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         #[cfg(not(feature = "debug_publish_object"))]
-        let mut w = E::new(vec![], false, mmtk, WorkBucketStage::WeakRefClosure, Option::None);
+        let mut w = E::new(vec![], false, mmtk, WorkBucketStage::WeakRefClosure);
         #[cfg(feature = "debug_publish_object")]
-        let mut w = E::new(vec![], vec![], false, 0, mmtk, WorkBucketStage::WeakRefClosure, None);
+        let mut w = E::new(
+            vec![],
+            vec![],
+            false,
+            0,
+            mmtk,
+            WorkBucketStage::WeakRefClosure,
+        );
         w.set_worker(worker);
         mmtk.reference_processors.scan_weak_refs(&mut w, mmtk);
         w.flush();
@@ -531,9 +545,16 @@ pub(crate) struct PhantomRefProcessing<E: ProcessEdgesWork>(PhantomData<E>);
 impl<E: ProcessEdgesWork> GCWork<E::VM> for PhantomRefProcessing<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         #[cfg(not(feature = "debug_publish_object"))]
-        let mut w = E::new(vec![], false, mmtk, WorkBucketStage::PhantomRefClosure, Option::None);
+        let mut w = E::new(vec![], false, mmtk, WorkBucketStage::PhantomRefClosure);
         #[cfg(feature = "debug_publish_object")]
-        let mut w = E::new(vec![], vec![], false, 0, mmtk, WorkBucketStage::PhantomRefClosure, None);
+        let mut w = E::new(
+            vec![],
+            vec![],
+            false,
+            0,
+            mmtk,
+            WorkBucketStage::PhantomRefClosure,
+        );
         w.set_worker(worker);
         mmtk.reference_processors.scan_phantom_refs(&mut w, mmtk);
         w.flush();
@@ -550,9 +571,16 @@ pub(crate) struct RefForwarding<E: ProcessEdgesWork>(PhantomData<E>);
 impl<E: ProcessEdgesWork> GCWork<E::VM> for RefForwarding<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         #[cfg(not(feature = "debug_publish_object"))]
-        let mut w = E::new(vec![], false, mmtk, WorkBucketStage::RefForwarding, Option::None);
+        let mut w = E::new(vec![], false, mmtk, WorkBucketStage::RefForwarding);
         #[cfg(feature = "debug_publish_object")]
-        let mut w = E::new(vec![], vec![], false, 0, mmtk, WorkBucketStage::RefForwarding, None);
+        let mut w = E::new(
+            vec![],
+            vec![],
+            false,
+            0,
+            mmtk,
+            WorkBucketStage::RefForwarding,
+        );
         w.set_worker(worker);
         mmtk.reference_processors.forward_refs(&mut w, mmtk);
         w.flush();

@@ -86,8 +86,7 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         // Should we poll to attempt to GC?
         // - If tls is collector, we cannot attempt a GC.
         // - If gc is disabled, we cannot attempt a GC.
-        let is_mutator =
-            VM::VMActivePlan::is_mutator(tls);
+        let is_mutator = VM::VMActivePlan::is_mutator(tls);
         let should_poll = is_mutator && VM::VMCollection::is_collection_enabled();
         // Is a GC allowed here? If we should poll but are not allowed to poll, we will panic.
         // initialize_collection() has to be called so we know GC is initialized.
@@ -127,17 +126,7 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
                     // Current thread is in VM (not safe so no global gc can happen), it can safely do a
                     // local gc
                     #[cfg(feature = "thread_local_gc")]
-                    {
-                        use crate::scheduler::thread_local_gc_work::{
-                            ACTIVE_LOCAL_GC_COUNTER, LOCAL_GC_SYNC,
-                        };
-                        let mut active_local_gc_counter = ACTIVE_LOCAL_GC_COUNTER.lock().unwrap();
-                        while *active_local_gc_counter > 0 {
-                            active_local_gc_counter =
-                                LOCAL_GC_SYNC.wait(active_local_gc_counter).unwrap();
-                        }
-                        VM::VMActivePlan::execute_thread_local_gc(VMMutatorThread(tls));
-                    }
+                    VM::VMActivePlan::execute_thread_local_gc(VMMutatorThread(tls));
 
                     #[cfg(not(feature = "thread_local_gc"))]
                     panic!("thread local gc feature is not enabled");

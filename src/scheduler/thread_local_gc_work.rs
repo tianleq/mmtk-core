@@ -7,8 +7,7 @@ use crate::vm::*;
 use crate::*;
 use std::collections::VecDeque;
 use std::marker::PhantomData;
-use std::sync::Condvar;
-use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
 
 pub const THREAD_LOCAL_GC_ACTIVE: u32 = 1;
 pub const THREAD_LOCAL_GC_INACTIVE: u32 = 0;
@@ -45,11 +44,16 @@ impl<VM: VMBinding> ExecuteThreadlocalCollection<VM> {
             self.mmtk.get_plan().get_total_pages(),
             elapsed.as_millis()
         );
-        // local gc has finished, notify any mutator that has local gc pending
-        let mut active_local_gc_counter = ACTIVE_LOCAL_GC_COUNTER.lock().unwrap();
-        *active_local_gc_counter -= 1;
-        debug_assert_eq!(*active_local_gc_counter, 0);
-        LOCAL_GC_SYNC.notify_one();
+        // local gc has finished,
+        match LOCAL_GC_ACTIVE.compare_exchange(
+            true,
+            false,
+            atomic::Ordering::SeqCst,
+            atomic::Ordering::SeqCst,
+        ) {
+            Err(_) => panic!("LOCAL_GC_ACTIVE is broken"),
+            _ => (),
+        };
     }
 }
 
@@ -530,5 +534,4 @@ where
     }
 }
 
-pub(crate) static ACTIVE_LOCAL_GC_COUNTER: Mutex<u32> = Mutex::new(0);
-pub(crate) static LOCAL_GC_SYNC: Condvar = Condvar::new();
+pub(crate) static LOCAL_GC_ACTIVE: AtomicBool = AtomicBool::new(false);

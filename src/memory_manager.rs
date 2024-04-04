@@ -955,21 +955,20 @@ pub fn mmtk_request_thread_local_gc<VM: VMBinding>(
     mmtk: &'static MMTK<VM>,
     tls: VMMutatorThread,
 ) -> bool {
-    use crate::scheduler::thread_local_gc_work::{ACTIVE_LOCAL_GC_COUNTER, LOCAL_GC_SYNC};
+    use crate::scheduler::thread_local_gc_work::LOCAL_GC_ACTIVE;
 
     let required = mmtk
         .get_plan()
         .thread_local_collection_required(false, None, tls);
     if required {
-        let mut active_local_gc_counter = ACTIVE_LOCAL_GC_COUNTER.lock().unwrap();
-        while *active_local_gc_counter > 0 {
-            active_local_gc_counter = LOCAL_GC_SYNC.wait(active_local_gc_counter).unwrap();
+        // Local gc is required, continue if there is ongoing local gc
+        match LOCAL_GC_ACTIVE.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => true,
+            Err(_) => false,
         }
-        *active_local_gc_counter += 1;
-        debug_assert_eq!(*active_local_gc_counter, 1);
+    } else {
+        required
     }
-
-    required
 }
 
 #[cfg(feature = "thread_local_gc")]

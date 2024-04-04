@@ -269,6 +269,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     const UNMARKED_STATE: u8 = 0;
     const MARKED_STATE: u8 = 1;
 
+    #[cfg(feature = "thread_local_gc_copying")]
+    const LOCAL_GC_COPY_RESERVE_MULTIPLIER: usize = 2;
+
     /// Get side metadata specs
     fn side_metadata_specs() -> Vec<SideMetadataSpec> {
         metadata::extract_side_metadata(&if super::BLOCK_ONLY {
@@ -450,7 +453,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         // self.get_page_resource().reserved_pages() * Self::COPY_RESERVE_PERCENT / 100
 
         use super::LOCAL_GC_COPY_RESERVE_PAGES;
-        LOCAL_GC_COPY_RESERVE_PAGES.load(Ordering::SeqCst)
+        Self::LOCAL_GC_COPY_RESERVE_MULTIPLIER * LOCAL_GC_COPY_RESERVE_PAGES.load(Ordering::SeqCst)
     }
 
     /// Get work packet scheduler

@@ -290,6 +290,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 }
             }
         }
+        // pre-allocate copy reserve pages
+        #[cfg(feature = "thread_local_gc_copying")]
+        self.thread_local_gc_reserve_pages();
     }
 
     #[cfg(feature = "thread_local_gc")]
@@ -495,6 +498,29 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             } else {
                 rtn
             }
+        }
+    }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub fn thread_local_gc_reserve_pages(&mut self) {
+        use crate::policy::immix::LOCAL_GC_COPY_RESERVE_PAGES;
+        use atomic::Ordering;
+
+        let number_of_clean_blocks =
+            LOCAL_GC_COPY_RESERVE_PAGES.load(Ordering::SeqCst) / Block::PAGES;
+        debug_assert!(
+            VM::VMActivePlan::is_mutator(self.tls),
+            "only mutator doing local gc should call thread_local_gc_reserve_pages"
+        );
+        debug_assert!(
+            LOCAL_GC_COPY_RESERVE_PAGES.load(Ordering::SeqCst) % Block::PAGES == 0,
+            "number of copy reserve pages is not a multiply of blocks"
+        );
+        // pre-allocate copy reserve pages into local cache to make sure
+        // local gc can always evacuate
+        for _ in 0..number_of_clean_blocks {
+            let block = self.immix_space().get_clean_block(self.tls, false).unwrap();
+            self.local_free_blocks.push(block);
         }
     }
 }

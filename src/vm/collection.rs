@@ -4,6 +4,9 @@ use crate::util::opaque_pointer::*;
 use crate::vm::VMBinding;
 use crate::{scheduler::*, Mutator};
 
+#[cfg(feature = "thread_local_gc")]
+use super::ObjectGraphTraversal;
+
 /// Thread context for the spawned GC thread.  It is used by spawn_gc_thread.
 pub enum GCThreadContext<VM: VMBinding> {
     /// The GC thread to spawn is a controller thread. There is only one controller thread.
@@ -44,6 +47,42 @@ pub trait Collection<VM: VMBinding> {
     /// Arguments:
     /// * `tls`: The current thread pointer that should be blocked. The VM can optionally check if the current thread matches `tls`.
     fn block_for_gc(tls: VMMutatorThread);
+
+    // #[cfg(feature = "thread_local_gc")]
+    // /// Stop all the mutator threads. MMTk calls this method when it requires all the mutator to yield for a GC.
+    // /// This method is called by a single thread in MMTk (the GC controller).
+    // /// This method should not return until all the threads are yielded.
+    // /// The actual thread synchronization mechanism is up to the VM, and MMTk does not make assumptions on that.
+    // ///
+    // /// Arguments:
+    // /// * `tls`: The thread pointer of the mutator.
+    // fn scan_mutator<F>(tls: VMMutatorThread, mutator_visitor: F)
+    // where
+    //     F: FnMut(&'static mut Mutator<VM>);
+
+    #[cfg(feature = "thread_local_gc")]
+    /// Stop all the mutator threads. MMTk calls this method when it requires all the mutator to yield for a GC.
+    /// This method is called by a single thread in MMTk (the GC controller).
+    /// This method should not return until all the threads are yielded.
+    /// The actual thread synchronization mechanism is up to the VM, and MMTk does not make assumptions on that.
+    ///
+    /// Arguments:
+    /// * `tls`: The thread pointer of the mutator.
+    fn scan_mutator(
+        tls: VMMutatorThread,
+        object_graph_traversal_func: impl ObjectGraphTraversal<VM::VMEdge>,
+    );
+
+    // #[cfg(feature = "thread_local_gc")]
+    // /// Resume the mutator triggering the local gc. When a local GC is finished, MMTk calls this method.
+    // ///
+    // /// Arguments:
+    // /// * `tls`: The thread pointer of the mutator.
+    // fn resume_from_thread_local_gc(tls: VMMutatorThread);
+
+    // #[cfg(feature = "thread_local_gc")]
+    // /// Block the current thread, waiting for all on-the-fly thread local gc to finish
+    // fn wait_for_thread_local_gc_to_finish();
 
     /// Ask the VM to spawn a GC thread for MMTk. A GC thread may later call into the VM through these VM traits. Some VMs
     /// have assumptions that those calls needs to be within VM internal threads.

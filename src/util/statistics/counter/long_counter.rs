@@ -6,6 +6,7 @@ use std::sync::Arc;
 pub struct LongCounter<T: Diffable> {
     name: String,
     pub implicitly_start: bool,
+    pub implicitly_stop: bool,
     merge_phases: bool,
     count: Box<[u64; MAX_PHASES]>, // FIXME make this resizable
     diffable: T,
@@ -125,6 +126,10 @@ impl<T: Diffable> Counter for LongCounter<T> {
     fn name(&self) -> &String {
         &self.name
     }
+
+    fn implicit_stop(&self) -> bool {
+        self.implicitly_stop
+    }
 }
 
 impl<T: Diffable> LongCounter<T> {
@@ -132,12 +137,14 @@ impl<T: Diffable> LongCounter<T> {
         name: String,
         stats: Arc<SharedStats>,
         implicitly_start: bool,
+        implicitly_stop: bool,
         merge_phases: bool,
         diffable: T,
     ) -> Self {
         LongCounter {
             name,
             implicitly_start,
+            implicitly_stop,
             merge_phases,
             count: Box::new([0; MAX_PHASES]),
             diffable,

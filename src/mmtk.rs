@@ -229,6 +229,14 @@ impl<VM: VMBinding> MMTK<VM> {
         self.inside_harness.store(true, Ordering::SeqCst);
         self.stats.start_all();
         self.scheduler.enable_stat();
+        #[cfg(feature = "public_object_analysis")]
+        {
+            let mut stats = crate::util::HARNESS_SCOPE_OBJECTS_STATS.lock().unwrap();
+            stats.allocation_count = 0;
+            stats.allocation_bytes = 0;
+            stats.public_bytes = 0;
+            stats.public_count = 0;
+        }
     }
 
     /// Generic hook to allow benchmarks to be harnessed. MMTk will stop collecting
@@ -370,5 +378,13 @@ impl<VM: VMBinding> MMTK<VM> {
     /// Get the run time options.
     pub fn get_options(&self) -> &Options {
         &self.options
+    }
+
+    pub fn request_starting(&self) {
+        self.plan.base().stats.request_starting();
+    }
+
+    pub fn request_finished(&self) {
+        self.plan.base().stats.request_finished();
     }
 }

@@ -36,6 +36,22 @@ impl<F: Finalizable> FinalizableProcessor<F> {
         self.candidates.push(object);
     }
 
+    #[cfg(feature = "thread_local_gc")]
+    pub fn add_candidates<T>(&mut self, candidates: T)
+    where
+        T: IntoIterator<Item = F>,
+    {
+        self.candidates.extend(candidates);
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn add_ready_for_finalize_objects<T>(&mut self, ready_for_finalize_objects: T)
+    where
+        T: IntoIterator<Item = F>,
+    {
+        self.ready_for_finalize.extend(ready_for_finalize_objects);
+    }
+
     fn forward_finalizable_reference<E: ProcessEdgesWork>(e: &mut E, finalizable: &mut F) {
         finalizable.keep_alive::<E>(e);
     }
@@ -49,9 +65,9 @@ impl<F: Finalizable> FinalizableProcessor<F> {
         // But we have to iterate through candidates after closure.
         self.candidates.append(&mut self.ready_for_finalize);
         debug_assert!(self.ready_for_finalize.is_empty());
-
         for mut f in self.candidates.drain(start..).collect::<Vec<F>>() {
-            let reff = f.get_reference();
+            let reff: ObjectReference = f.get_reference();
+
             trace!("Pop {:?} for finalization", reff);
             if reff.is_live() {
                 FinalizableProcessor::<F>::forward_finalizable_reference(e, &mut f);
@@ -81,19 +97,23 @@ impl<F: Finalizable> FinalizableProcessor<F> {
     pub fn forward_candidate<E: ProcessEdgesWork>(&mut self, e: &mut E, _nursery: bool) {
         self.candidates
             .iter_mut()
-            .for_each(|f| FinalizableProcessor::<F>::forward_finalizable_reference(e, f));
+            .for_each(|f| FinalizableProcessor::<F>::forward_finalizable_reference(e, &mut (*f)));
         e.flush();
     }
 
     pub fn forward_finalizable<E: ProcessEdgesWork>(&mut self, e: &mut E, _nursery: bool) {
         self.ready_for_finalize
             .iter_mut()
-            .for_each(|f| FinalizableProcessor::<F>::forward_finalizable_reference(e, f));
+            .for_each(|f| FinalizableProcessor::<F>::forward_finalizable_reference(e, &mut (*f)));
         e.flush();
     }
 
     pub fn get_ready_object(&mut self) -> Option<F> {
-        self.ready_for_finalize.pop()
+        if let Some(f) = self.ready_for_finalize.pop() {
+            Some(f)
+        } else {
+            Option::None
+        }
     }
 
     pub fn get_all_finalizers(&mut self) -> Vec<F> {
@@ -104,7 +124,11 @@ impl<F: Finalizable> FinalizableProcessor<F> {
         // We removed objects from candidates. Reset nursery_index
         self.nursery_index = 0;
 
-        ret
+        let mut result = vec![];
+        for f in ret {
+            result.push(f);
+        }
+        result
     }
 
     pub fn get_finalizers_for(&mut self, object: ObjectReference) -> Vec<F> {
@@ -146,8 +170,10 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for Finalization<E> {
             finalizable_processor.candidates.len(),
             finalizable_processor.ready_for_finalize.len()
         );
-
-        let mut w = E::new(vec![], false, mmtk, WorkBucketStage::FinalRefClosure);
+        #[cfg(not(feature = "debug_publish_object"))]
+        let mut w = E::new(vec![], false, mmtk, WorkBucketStage::FinalRefClosure, None);
+        #[cfg(feature = "debug_publish_object")]
+        let mut w = E::new(vec![], vec![], false, 0, mmtk, WorkBucketStage::FinalRefClosure, None);
         w.set_worker(worker);
         finalizable_processor.scan(worker.tls, &mut w, is_nursery_gc(mmtk.get_plan()));
         debug!(
@@ -170,7 +196,10 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ForwardFinalization<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         trace!("Forward finalization");
         let mut finalizable_processor = mmtk.finalizable_processor.lock().unwrap();
-        let mut w = E::new(vec![], false, mmtk, WorkBucketStage::FinalizableForwarding);
+        #[cfg(not(feature = "debug_publish_object"))]
+        let mut w = E::new(vec![], false, mmtk, WorkBucketStage::FinalizableForwarding, Option::None);
+        #[cfg(feature = "debug_publish_object")]
+        let mut w = E::new(vec![], vec![], false, 0, mmtk, WorkBucketStage::FinalizableForwarding, None);
         w.set_worker(worker);
         finalizable_processor.forward_candidate(&mut w, is_nursery_gc(mmtk.get_plan()));
 

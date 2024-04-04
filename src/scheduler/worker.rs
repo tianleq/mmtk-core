@@ -154,6 +154,20 @@ impl WorkerMonitor {
         }
     }
 
+    // #[cfg(feature = "thread_local_gc")]
+    // /// Wake up workers without waiting
+    // /// This is called by the coordinator.
+    // /// If `all` is true, notify all workers; otherwise only notify one worker.
+    // pub fn resume(&self, all: bool) {
+    //     let mut sync = self.sync.lock().unwrap();
+    //     sync.worker_group_state = WorkerGroupState::Working;
+    //     if all {
+    //         self.work_available.notify_all();
+    //     } else {
+    //         self.work_available.notify_one();
+    //     }
+    // }
+
     /// Wake up workers and wait until they transition to `Sleeping` state again.
     /// This is called by the coordinator.
     /// If `all` is true, notify all workers; otherwise only notify one worker.
@@ -264,6 +278,8 @@ pub struct GCWorker<VM: VMBinding> {
     pub shared: Arc<GCWorkerShared<VM>>,
     /// Local work packet queue.
     pub local_work_buffer: deque::Worker<Box<dyn GCWork<VM>>>,
+    pub private_local_work_buffer: Vec<Box<dyn GCWork<VM>>>,
+    pub gc_start: std::time::Instant,
 }
 
 unsafe impl<VM: VMBinding> Sync for GCWorkerShared<VM> {}
@@ -302,6 +318,8 @@ impl<VM: VMBinding> GCWorker<VM> {
             is_coordinator,
             shared,
             local_work_buffer,
+            private_local_work_buffer: Vec::new(),
+            gc_start: std::time::Instant::now(),
         }
     }
 
@@ -354,10 +372,11 @@ impl<VM: VMBinding> GCWorker<VM> {
     /// 2. Poll from the local work queue.
     /// 3. Poll from activated global work-buckets
     /// 4. Steal from other workers
-    fn poll(&self) -> Box<dyn GCWork<VM>> {
+    fn poll(&mut self) -> Box<dyn GCWork<VM>> {
         self.shared
             .designated_work
             .pop()
+            .or_else(|| self.private_local_work_buffer.pop())
             .or_else(|| self.local_work_buffer.pop())
             .unwrap_or_else(|| self.scheduler().poll(self))
     }
@@ -393,6 +412,10 @@ impl<VM: VMBinding> GCWorker<VM> {
 
             probe!(mmtk, work, typename.as_ptr(), typename.len());
             work.do_work_with_stat(self, mmtk);
+            debug!(
+                "GC Thread {} executes the packet",
+                current_worker_ordinal().unwrap()
+            );
         }
     }
 }

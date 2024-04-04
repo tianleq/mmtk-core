@@ -2,6 +2,8 @@ use super::global::Immix;
 use crate::policy::gc_work::TraceKind;
 use crate::policy::gc_work::TRACE_KIND_TRANSITIVE_PIN;
 use crate::scheduler::gc_work::PlanProcessEdges;
+// #[cfg(feature = "thread_local_gc")]
+// use crate::scheduler::thread_local_gc_work::PlanThreadlocalProcessEdges;
 use crate::vm::VMBinding;
 
 pub(super) struct ImmixGCWorkContext<VM: VMBinding, const KIND: TraceKind>(

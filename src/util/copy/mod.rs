@@ -14,12 +14,11 @@ use crate::util::{Address, ObjectReference};
 use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
 use crate::MMTK;
-use std::sync::atomic::Ordering;
-
 use enum_map::Enum;
 use enum_map::EnumMap;
 
 use super::alloc::allocator::AllocatorContext;
+use std::sync::atomic::Ordering;
 
 const MAX_COPYSPACE_COPY_ALLOCATORS: usize = 1;
 const MAX_IMMIX_COPY_ALLOCATORS: usize = 1;

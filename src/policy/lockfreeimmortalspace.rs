@@ -235,4 +235,6 @@ impl<VM: VMBinding> LockFreeImmortalSpace<VM> {
 
         space
     }
+
+    // fn publish_object(&self, _object: ObjectReference) {}
 }

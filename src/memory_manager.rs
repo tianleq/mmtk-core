@@ -18,14 +18,20 @@ use crate::plan::{Mutator, MutatorContext};
 use crate::scheduler::WorkBucketStage;
 use crate::scheduler::{GCController, GCWork, GCWorker};
 use crate::util::alloc::allocators::AllocatorSelector;
+use crate::util::alloc::BumpAllocator;
+use crate::util::alloc::ImmixAllocator;
+use crate::util::alloc::LargeObjectAllocator;
 use crate::util::constants::{LOG_BYTES_IN_PAGE, MIN_OBJECT_SIZE};
 use crate::util::heap::layout::vm_layout::vm_layout;
 use crate::util::opaque_pointer::*;
 use crate::util::{Address, ObjectReference};
 use crate::vm::edge_shape::MemorySlice;
+use crate::vm::ActivePlan;
 use crate::vm::ReferenceGlue;
+use crate::vm::Scanning;
 use crate::vm::VMBinding;
 use std::sync::atomic::Ordering;
+
 /// Initialize an MMTk instance. A VM should call this method after creating an [`crate::MMTK`]
 /// instance but before using any of the methods provided in MMTk (except `process()` and `process_bulk()`).
 ///
@@ -117,6 +123,7 @@ pub fn bind_mutator<VM: VMBinding>(
     if LOG_ALLOCATOR_MAPPING {
         info!("{:?}", mutator.config);
     }
+
     mutator
 }
 
@@ -447,7 +454,7 @@ pub fn get_malloc_bytes<VM: VMBinding>(mmtk: &MMTK<VM>) -> usize {
 /// However, if a binding uses counted malloc (which won't poll for GC), they may want to poll for GC manually.
 /// This function should only be used by mutator threads.
 pub fn gc_poll<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
-    use crate::vm::{ActivePlan, Collection};
+    use crate::vm::Collection;
     debug_assert!(
         VM::VMActivePlan::is_mutator(tls.0),
         "gc_poll() can only be called by a mutator thread."
@@ -752,12 +759,15 @@ pub fn harness_end<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
 /// * `object`: The object that has a finalizer
 pub fn add_finalizer<VM: VMBinding>(
     mmtk: &'static MMTK<VM>,
+    _mutator: &'static mut Mutator<VM>,
     object: <VM::VMReferenceGlue as ReferenceGlue<VM>>::FinalizableType,
 ) {
     if *mmtk.options.no_finalizer {
         warn!("add_finalizer() is called when no_finalizer = true");
     }
-
+    #[cfg(feature = "thread_local_gc")]
+    _mutator.finalizable_candidates.push(object);
+    #[cfg(not(feature = "thread_local_gc"))]
     mmtk.finalizable_processor.lock().unwrap().add(object);
 }
 
@@ -901,4 +911,146 @@ pub fn add_work_packets<VM: VMBinding>(
     packets: Vec<Box<dyn GCWork<VM>>>,
 ) {
     mmtk.scheduler.work_buckets[bucket].bulk_add(packets)
+}
+
+/// Add a work packet to the given work bucket's thread local queue. Note that this simply adds the work packet to the given
+/// work bucket, and the scheduler will decide when to execute the work packet.
+///
+/// Arguments:
+/// * `mmtk`: A reference to an MMTk instance.
+/// * `bucket`: Which work bucket to add this packet to.
+/// * `packet`: The work packet to be added.
+pub fn add_local_work_packet<VM: VMBinding, W: GCWork<VM>>(
+    mmtk: &'static MMTK<VM>,
+    bucket: WorkBucketStage,
+    packet: W,
+) {
+    mmtk.scheduler.work_buckets[bucket].add_local(packet)
+}
+
+/// Bulk add a number of work packets to the given work bucket. Note that this simply adds the work packets
+/// to the given work bucket, and the scheduler will decide when to execute the work packets.
+///
+/// Arguments:
+/// * `mmtk`: A reference to an MMTk instance.
+/// * `bucket`: Which work bucket to add these packets to.
+/// * `packet`: The work packets to be added.
+pub fn add_local_work_packets<VM: VMBinding>(
+    mmtk: &'static MMTK<VM>,
+    bucket: WorkBucketStage,
+    packets: Vec<Box<dyn GCWork<VM>>>,
+) {
+    mmtk.scheduler.work_buckets[bucket].bulk_add_local(packets)
+}
+
+#[cfg(feature = "public_bit")]
+pub fn mmtk_set_public_bit<VM: VMBinding>(_mmtk: &'static MMTK<VM>, object: ObjectReference) {
+    debug_assert!(!object.is_null(), "object is null!");
+    crate::util::public_bit::set_public_bit::<VM>(object);
+    #[cfg(feature = "thread_local_gc")]
+    _mmtk.plan.publish_object(object);
+}
+
+#[cfg(feature = "public_bit")]
+pub fn mmtk_publish_object<VM: VMBinding>(_mmtk: &'static MMTK<VM>, _object: ObjectReference) {
+    if _object.is_null() || crate::util::public_bit::is_public::<VM>(_object) {
+        return;
+    }
+
+    let mut closure: crate::plan::PublishObjectClosure<VM> =
+        crate::plan::PublishObjectClosure::<VM>::new(_mmtk);
+
+    mmtk_set_public_bit(_mmtk, _object);
+    // Publish all the descendants
+    VM::VMScanning::scan_object(
+        VMWorkerThread(VMThread::UNINITIALIZED),
+        _object,
+        &mut closure,
+    );
+    closure.do_closure();
+}
+
+#[cfg(feature = "public_bit")]
+pub fn mmtk_is_object_published<VM: VMBinding>(object: ObjectReference) -> bool {
+    if object.is_null() {
+        false
+    } else {
+        crate::util::public_bit::is_public::<VM>(object)
+    }
+}
+
+#[cfg(feature = "thread_local_gc")]
+pub fn mmtk_request_thread_local_gc<VM: VMBinding>(
+    mmtk: &'static MMTK<VM>,
+    tls: VMMutatorThread,
+) -> bool {
+    use crate::scheduler::thread_local_gc_work::{ACTIVE_LOCAL_GC_COUNTER, LOCAL_GC_SYNC};
+
+    // let mut active_local_gc_counter = ACTIVE_LOCAL_GC_COUNTER.lock().unwrap();
+    // while *active_local_gc_counter > 0 {
+    //     active_local_gc_counter = LOCAL_GC_SYNC.wait(active_local_gc_counter).unwrap();
+    // }
+
+    let required = mmtk.plan.thread_local_collection_required(false, None, tls);
+    if required {
+        let mut active_local_gc_counter = ACTIVE_LOCAL_GC_COUNTER.lock().unwrap();
+        while *active_local_gc_counter > 0 {
+            active_local_gc_counter = LOCAL_GC_SYNC.wait(active_local_gc_counter).unwrap();
+        }
+        *active_local_gc_counter += 1;
+        debug_assert_eq!(*active_local_gc_counter, 1);
+    }
+
+    required
+}
+
+#[cfg(feature = "thread_local_gc")]
+pub fn mmtk_handle_user_triggered_local_gc<VM: VMBinding>(
+    mmtk: &'static MMTK<VM>,
+    tls: VMMutatorThread,
+) {
+    mmtk.plan.handle_thread_local_collection(tls, mmtk);
+}
+
+pub fn mmtk_handle_user_triggered_global_gc<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
+    mmtk.plan.handle_user_collection_request(tls, true, false);
+}
+
+pub fn compute_allocator_mem_layout_checksum<VM: VMBinding>() -> usize {
+    return {
+        std::mem::size_of::<ImmixAllocator<VM>>()
+            ^ std::mem::size_of::<BumpAllocator<VM>>()
+            ^ std::mem::size_of::<LargeObjectAllocator<VM>>()
+    };
+}
+
+pub fn compute_mutator_mem_layout_checksum<VM: VMBinding>() -> usize {
+    std::mem::size_of::<Mutator<VM>>()
+}
+
+/// Generic hook to allow benchmarks to be harnessed. We do a full heap
+/// GC, and then start recording statistics for MMTk.
+///
+/// Arguments:
+/// * `mmtk`: A reference to an MMTk instance.
+/// * `tls`: The thread that calls the function (and triggers a collection).
+pub fn request_starting<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
+    mmtk.request_starting();
+    #[cfg(feature = "public_object_analysis")]
+    {
+        let mut stats = crate::util::REQUEST_SCOPE_OBJECTS_STATS.lock().unwrap();
+        stats.allocation_count = 0;
+        stats.allocation_bytes = 0;
+        stats.public_bytes = 0;
+        stats.public_count = 0;
+    }
+}
+
+/// Generic hook to allow benchmarks to be harnessed. We stop collecting
+/// statistics, and print stats values.
+///
+/// Arguments:
+/// * `mmtk`: A reference to an MMTk instance.
+pub fn request_finished<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
+    mmtk.request_finished();
 }

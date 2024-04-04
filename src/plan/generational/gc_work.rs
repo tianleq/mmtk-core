@@ -2,7 +2,7 @@ use atomic::Ordering;
 
 use crate::plan::PlanTraceObject;
 use crate::scheduler::{gc_work::*, GCWork, GCWorker, WorkBucketStage};
-use crate::util::ObjectReference;
+use crate::util::{ObjectReference, VMMutatorThread};
 use crate::vm::edge_shape::{Edge, MemorySlice};
 use crate::vm::*;
 use crate::MMTK;
@@ -24,14 +24,29 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>> ProcessEdg
 {
     type VM = VM;
     type ScanObjectsWorkType = PlanScanObjects<Self, P>;
-
+    #[cfg(not(feature = "debug_publish_object"))]
     fn new(
         edges: Vec<EdgeOf<Self>>,
         roots: bool,
         mmtk: &'static MMTK<VM>,
         bucket: WorkBucketStage,
+        _tls: Option<VMMutatorThread>,
     ) -> Self {
         let base = ProcessEdgesBase::new(edges, roots, mmtk, bucket);
+        let plan = base.plan().downcast_ref().unwrap();
+        Self { plan, base }
+    }
+
+    #[cfg(feature = "debug_publish_object")]
+    fn new(
+        sources: Vec<ObjectReference>,
+        edges: Vec<EdgeOf<Self>>,
+        roots: bool,
+        vm_roots: u8,
+        mmtk: &'static MMTK<VM>,
+        _mutator_id: Option<VMMutatorThread>,
+    ) -> Self {
+        let base = ProcessEdgesBase::new(sources, edges, roots, vm_roots, mmtk);
         let plan = base.plan().downcast_ref().unwrap();
         Self { plan, base }
     }
@@ -57,8 +72,19 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>> ProcessEdg
         }
     }
 
+    
     fn create_scan_work(&self, nodes: Vec<ObjectReference>) -> Self::ScanObjectsWorkType {
         PlanScanObjects::new(self.plan, nodes, false, self.bucket)
+    }
+
+    #[cfg(feature = "debug_publish_object")]
+    fn is_object_published(&self, _object: ObjectReference) -> bool {
+        unimplemented!()
+    }
+
+    #[cfg(feature = "debug_publish_object")]
+    fn is_object_published(&self, _object: ObjectReference) -> bool {
+        unimplemented!()
     }
 }
 
@@ -160,9 +186,13 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessRegionModBuf<E> {
                     edges.push(edge);
                 }
             }
+            #[cfg(not(feature = "debug_publish_object"))]
+            // Forward entries
+            GCWork::do_work(&mut E::new(edges, false, mmtk, Option::None), worker, mmtk);
+            #[cfg(feature = "debug_publish_object")]
             // Forward entries
             GCWork::do_work(
-                &mut E::new(edges, false, mmtk, WorkBucketStage::Closure),
+                &mut E::new(edges.iter().map(|&edge| edge.load()).collect(), edges, false, 0, mmtk, WorkBucketStage::Closure),
                 worker,
                 mmtk,
             )

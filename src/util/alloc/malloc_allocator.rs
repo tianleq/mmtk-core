@@ -29,8 +29,14 @@ impl<VM: VMBinding> Allocator<VM> for MallocAllocator<VM> {
         &self.context
     }
 
+    #[cfg(not(feature = "extra_header"))]
     fn alloc(&mut self, size: usize, align: usize, offset: usize) -> Address {
-        self.alloc_slow(size, align, offset)
+        self.alloc_impl(size, align, offset)
+    }
+
+    #[cfg(feature = "extra_header")]
+    fn alloc(&mut self, _size: usize, _align: usize, _offset: usize) -> Address {
+        unimplemented!()
     }
 
     fn get_tls(&self) -> VMThread {
@@ -57,5 +63,9 @@ impl<VM: VMBinding> MallocAllocator<VM> {
             space,
             context,
         }
+    }
+
+    fn alloc_impl(&mut self, size: usize, align: usize, offset: usize) -> Address {
+        self.alloc_slow(size, align, offset)
     }
 }

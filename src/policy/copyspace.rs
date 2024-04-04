@@ -179,6 +179,8 @@ impl<VM: VMBinding> CopySpace<VM> {
         unsafe {
             #[cfg(feature = "vo_bit")]
             self.reset_vo_bit();
+            #[cfg(feature = "public_bit")]
+            self.reset_public_bit();
             self.pr.reset();
         }
         self.common.metadata.reset();
@@ -189,6 +191,20 @@ impl<VM: VMBinding> CopySpace<VM> {
     unsafe fn reset_vo_bit(&self) {
         for (start, size) in self.pr.iterate_allocated_regions() {
             crate::util::metadata::vo_bit::bzero_vo_bit(start, size);
+        }
+    }
+
+    #[cfg(feature = "public_bit")]
+    fn reset_public_bit(&self) {
+        let current_chunk = unsafe { self.pr.get_current_chunk() };
+        if self.common.contiguous {
+            crate::util::public_bit::bzero_public_bit(
+                self.common.start,
+                current_chunk + crate::util::heap::layout::vm_layout_constants::BYTES_IN_CHUNK
+                    - self.common.start,
+            );
+        } else {
+            panic!("bulk clearing public bit is not supported in discontiguous setting");
         }
     }
 
@@ -243,6 +259,25 @@ impl<VM: VMBinding> CopySpace<VM> {
             #[cfg(feature = "vo_bit")]
             crate::util::metadata::vo_bit::set_vo_bit::<VM>(new_object);
 
+            #[cfg(feature = "extra_header")]
+            {
+                let metadata = crate::util::object_extra_header_metadata::get_extra_header_metadata::<
+                    VM,
+                    usize,
+                >(object);
+                crate::util::object_extra_header_metadata::store_extra_header_metadata::<VM, usize>(
+                    new_object, metadata,
+                );
+            }
+
+            #[cfg(feature = "public_bit")]
+            {
+                let is_pubic = crate::util::public_bit::is_public::<VM>(object);
+                if is_pubic {
+                    crate::util::public_bit::set_public_bit::<VM>(new_object);
+                }
+            }
+
             trace!("Forwarding pointer");
             queue.enqueue(new_object);
             trace!("Copied [{:?} -> {:?}]", object, new_object);
@@ -282,6 +317,24 @@ impl<VM: VMBinding> CopySpace<VM> {
             );
         }
         trace!("Unprotect {:x} {:x}", start, start + extent);
+    }
+    
+    #[cfg(all(feature = "debug_publish_object"))]
+    pub fn is_object_published(&self, object: ObjectReference) -> bool {
+        debug_assert!(!object.is_null());
+        // read the public bit of the old object first
+        let is_published = crate::util::public_bit::is_public::<VM>(object);
+        if object_forwarding::is_forwarded_or_being_forwarded::<VM>(object) {
+            // object's public bit may have been cleared, so need to read the public bit on the forwarded object
+            let new_object = object_forwarding::spin_and_get_forwarded_object::<VM>(
+                object,
+                object_forwarding::get_forwarding_status::<VM>(object),
+            );
+            crate::util::public_bit::is_public::<VM>(new_object)
+        } else {
+            // object has not been forwarded yet, the public bit read before is still valid
+            is_published
+        }
     }
 }
 

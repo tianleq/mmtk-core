@@ -171,6 +171,17 @@ impl<VM: VMBinding, B: Region> BlockPageResource<VM, B> {
         self.block_queue.flush_all()
         // TODO: For 32-bit space, we may want to free some contiguous chunks.
     }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn thread_local_flush(&self, blocks: impl IntoIterator<Item = B>) {
+        use itertools::Itertools;
+
+        let pages = 1 << Self::LOG_PAGES;
+        let blocks = blocks.into_iter().collect_vec();
+        self.common().accounting.release(pages * blocks.len());
+
+        self.block_queue.flush_blocks(blocks);
+    }
 }
 
 /// A block list that supports fast lock-free push/pop operations
@@ -358,7 +369,7 @@ impl<B: Region> BlockPool<B> {
     }
 
     /// Flush a given thread-local queue to the global pool
-    fn flush(&self, id: usize) {
+    pub fn flush(&self, id: usize) {
         if !self.worker_local_freed_blocks[id].is_empty() {
             let queue = self.worker_local_freed_blocks[id].replace(BlockQueue::new());
             if !queue.is_empty() {
@@ -392,6 +403,21 @@ impl<B: Region> BlockPool<B> {
         }
         for array in &self.worker_local_freed_blocks {
             array.iterate_blocks(f);
+        }
+    }
+    #[cfg(feature = "thread_local_gc")]
+    pub fn flush_blocks(&self, blocks: impl IntoIterator<Item = B>) {
+        let mut queue = BlockQueue::new();
+        for block in blocks {
+            if let Err(block) = unsafe { queue.push_relaxed(block) } {
+                self.add_global_array(queue);
+                queue = BlockQueue::new();
+                let result = unsafe { queue.push_relaxed(block) };
+                debug_assert!(result.is_ok());
+            }
+        }
+        if !queue.is_empty() {
+            self.add_global_array(queue);
         }
     }
 }

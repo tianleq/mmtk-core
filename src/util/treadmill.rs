@@ -1,17 +1,20 @@
 use std::collections::HashSet;
+use std::marker::PhantomData;
 use std::mem::swap;
 use std::sync::Mutex;
 
 use crate::util::ObjectReference;
+use crate::vm::VMBinding;
 
-pub struct TreadMill {
+pub struct TreadMill<VM: VMBinding> {
     from_space: Mutex<HashSet<ObjectReference>>,
     to_space: Mutex<HashSet<ObjectReference>>,
     collect_nursery: Mutex<HashSet<ObjectReference>>,
     alloc_nursery: Mutex<HashSet<ObjectReference>>,
+    phantom: PhantomData<VM>,
 }
 
-impl std::fmt::Debug for TreadMill {
+impl<VM: VMBinding> std::fmt::Debug for TreadMill<VM> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TreadMill")
             .field("from", &self.from_space.lock().unwrap())
@@ -22,22 +25,21 @@ impl std::fmt::Debug for TreadMill {
     }
 }
 
-impl TreadMill {
+impl<VM: VMBinding> TreadMill<VM> {
     pub fn new() -> Self {
         TreadMill {
             from_space: Mutex::new(HashSet::new()),
             to_space: Mutex::new(HashSet::new()),
             collect_nursery: Mutex::new(HashSet::new()),
             alloc_nursery: Mutex::new(HashSet::new()),
+            phantom: PhantomData,
         }
     }
 
     pub fn add_to_treadmill(&self, object: ObjectReference, nursery: bool) {
         if nursery {
-            // println!("+ an {}", cell);
             self.alloc_nursery.lock().unwrap().insert(object);
         } else {
-            // println!("+ ts {}", cell);
             self.to_space.lock().unwrap().insert(object);
         }
     }
@@ -61,6 +63,10 @@ impl TreadMill {
     pub fn copy(&self, object: ObjectReference, is_in_nursery: bool) {
         if is_in_nursery {
             let mut guard = self.collect_nursery.lock().unwrap();
+            #[cfg(feature = "thread_local_gc")]
+            {
+                if !crate::util::public_bit::is_public::<VM>(object) {}
+            }
             debug_assert!(
                 guard.contains(&object),
                 "copy source object ({}) must be in collect_nursery",
@@ -101,7 +107,7 @@ impl TreadMill {
     }
 }
 
-impl Default for TreadMill {
+impl<VM: VMBinding> Default for TreadMill<VM> {
     fn default() -> Self {
         Self::new()
     }

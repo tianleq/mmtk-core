@@ -1,6 +1,17 @@
 use super::SemiSpace;
+#[cfg(not(feature = "public_bit"))]
 use crate::plan::barriers::NoBarrier;
 use crate::plan::mutator_context::unreachable_prepare_func;
+use crate::plan::barriers::PublicObjectMarkingBarrier;
+use crate::plan::barriers::PublicObjectMarkingBarrierSemantics;
+#[cfg(feature = "thread_local_gc_copying")]
+use crate::plan::mutator_context::generic_thread_local_alloc_copy;
+#[cfg(feature = "thread_local_gc_copying")]
+use crate::plan::mutator_context::generic_thread_local_post_copy;
+#[cfg(feature = "thread_local_gc")]
+use crate::plan::mutator_context::generic_thread_local_prepare;
+#[cfg(feature = "thread_local_gc")]
+use crate::plan::mutator_context::generic_thread_local_release;
 use crate::plan::mutator_context::Mutator;
 use crate::plan::mutator_context::MutatorConfig;
 use crate::plan::mutator_context::{
@@ -21,6 +32,7 @@ pub fn ss_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMWork
             .allocators
             .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
     }
+    // .downcast_mut::<BumpAllocator<VM>>()
     .downcast_mut::<BumpAllocator<VM>>()
     .unwrap();
     bump_allocator.rebind(
@@ -59,13 +71,42 @@ pub fn create_ss_mutator<VM: VMBinding>(
         }),
         prepare_func: &unreachable_prepare_func,
         release_func: &ss_mutator_release,
+        #[cfg(feature = "thread_local_gc")]
+        thread_local_prepare_func: &generic_thread_local_prepare,
+        #[cfg(feature = "thread_local_gc")]
+        thread_local_release_func: &generic_thread_local_release,
+        #[cfg(feature = "thread_local_gc_copying")]
+        thread_local_alloc_copy_func: &generic_thread_local_alloc_copy,
+        #[cfg(feature = "thread_local_gc_copying")]
+        thread_local_post_copy_func: &generic_thread_local_post_copy,
     };
 
+    let mutator_id = crate::util::MUTATOR_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);
+    #[cfg(feature = "public_bit")]
+    let barrier = Box::new(PublicObjectMarkingBarrier::new(
+        PublicObjectMarkingBarrierSemantics::new(mmtk),
+    ));
+    #[cfg(not(feature = "public_bit"))]
+    let barrier = Box::new(NoBarrier);
+
     Mutator {
-        allocators: Allocators::<VM>::new(mutator_tls, mmtk, &config.space_mapping),
-        barrier: Box::new(NoBarrier),
+        allocators: Allocators::<VM>::new(mutator_tls, 0, mmtk, &config.space_mapping),
+        barrier,
         mutator_tls,
         config,
         plan: ss,
+        mutator_id,
+        #[cfg(feature = "thread_local_gc")]
+        thread_local_gc_status: 0,
+        #[cfg(feature = "thread_local_gc")]
+        finalizable_candidates: Box::new(Vec::new()),
+        #[cfg(feature = "public_object_analysis")]
+        allocation_count: 0,
+        #[cfg(feature = "public_object_analysis")]
+        bytes_allocated: 0,
+        #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
+        request_id: 0,
+        #[cfg(feature = "public_object_analysis")]
+        copy_bytes: 0,
     }
 }

@@ -22,7 +22,7 @@ use crate::mmtk::SFT_MAP;
 use crate::policy::sft::EMPTY_SFT_NAME;
 use crate::policy::sft::SFT;
 use crate::util::copy::*;
-use crate::util::heap::gc_trigger::GCTrigger;
+use crate::util::heap::gc_trigger::{GCKind, GCTrigger};
 use crate::util::heap::layout::vm_layout::BYTES_IN_CHUNK;
 use crate::util::heap::layout::Mmapper;
 use crate::util::heap::layout::VMMap;
@@ -86,8 +86,9 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         // Should we poll to attempt to GC?
         // - If tls is collector, we cannot attempt a GC.
         // - If gc is disabled, we cannot attempt a GC.
-        let should_poll =
-            VM::VMActivePlan::is_mutator(tls) && VM::VMCollection::is_collection_enabled();
+        let is_mutator =
+            VM::VMActivePlan::is_mutator(tls);
+        let should_poll = is_mutator && VM::VMCollection::is_collection_enabled();
         // Is a GC allowed here? If we should poll but are not allowed to poll, we will panic.
         // initialize_collection() has to be called so we know GC is initialized.
         let allow_gc = should_poll && self.common().global_state.is_initialized();
@@ -98,132 +99,168 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         trace!("Pages reserved");
         trace!("Polling ..");
 
-        if should_poll && self.get_gc_trigger().poll(false, Some(self.as_space())) {
-            debug!("Collection required");
-            assert!(allow_gc, "GC is not allowed here: collection is not initialized (did you call initialize_collection()?).");
-
-            // Clear the request, and inform GC trigger about the pending allocation.
-            pr.clear_request(pages_reserved);
-            self.get_gc_trigger()
-                .policy
-                .on_pending_allocation(pages_reserved);
-
-            VM::VMCollection::block_for_gc(VMMutatorThread(tls)); // We have checked that this is mutator
-            unsafe { Address::zero() }
+        #[cfg(feature = "thread_local_gc_copying")]
+        let should_poll = if should_poll {
+            // tls is s mutator, if local gc is active, we cannot trigger a global gc
+            VM::VMActivePlan::mutator(VMMutatorThread(tls)).thread_local_gc_status
+                == crate::scheduler::thread_local_gc_work::THREAD_LOCAL_GC_INACTIVE
         } else {
-            debug!("Collection not required");
+            false
+        };
 
-            // We need this lock: Othrewise, it is possible that one thread acquires pages in a new chunk, but not yet
-            // set SFT for it (in grow_space()), and another thread acquires pages in the same chunk, which is not
-            // a new chunk so grow_space() won't be called on it. The second thread could return a result in the chunk before
-            // its SFT is properly set.
-            // We need to minimize the scope of this lock for performance when we have many threads (mutator threads, or GC threads with copying allocators).
-            // See: https://github.com/mmtk/mmtk-core/issues/610
-            let lock = self.common().acquire_lock.lock().unwrap();
+        if should_poll {
+            if let Some(kind) =
+                self.get_gc_trigger()
+                    .poll(false, Some(self.as_space()), VMMutatorThread(tls))
+            {
+                debug!("Collection required");
+                assert!(allow_gc, "GC is not allowed here: collection is not initialized (did you call initialize_collection()?).");
 
-            match pr.get_new_pages(self.common().descriptor, pages_reserved, pages, tls) {
-                Ok(res) => {
-                    debug!(
-                        "Got new pages {} ({} pages) for {} in chunk {}, new_chunk? {}",
-                        res.start,
-                        res.pages,
-                        self.get_name(),
-                        conversions::chunk_align_down(res.start),
-                        res.new_chunk
-                    );
-                    let bytes = conversions::pages_to_bytes(res.pages);
-
-                    let map_sidemetadata = || {
-                        // Mmap the pages and the side metadata, and handle error. In case of any error,
-                        // we will either call back to the VM for OOM, or simply panic.
-                        if let Err(mmap_error) = self
-                            .common()
-                            .mmapper
-                            .ensure_mapped(res.start, res.pages)
-                            .and(
-                                self.common()
-                                    .metadata
-                                    .try_map_metadata_space(res.start, bytes),
-                            )
-                        {
-                            memory::handle_mmap_error::<VM>(mmap_error, tls);
-                        }
-                    };
-                    let grow_space = || {
-                        self.grow_space(res.start, bytes, res.new_chunk);
-                    };
-
-                    // The scope of the lock is important in terms of performance when we have many allocator threads.
-                    if SFT_MAP.get_side_metadata().is_some() {
-                        // If the SFT map uses side metadata, so we have to initialize side metadata first.
-                        map_sidemetadata();
-                        // then grow space, which will use the side metadata we mapped above
-                        grow_space();
-                        // then we can drop the lock after grow_space()
-                        drop(lock);
-                    } else {
-                        // In normal cases, we can drop lock immediately after grow_space()
-                        grow_space();
-                        drop(lock);
-                        // and map side metadata without holding the lock
-                        map_sidemetadata();
-                    }
-
-                    // TODO: Concurrent zeroing
-                    if self.common().zeroed {
-                        memory::zero(res.start, bytes);
-                    }
-
-                    // Some assertions
+                // Clear the request, and inform GC trigger about the pending allocation.
+                pr.clear_request(pages_reserved);
+                self.get_gc_trigger()
+                    .policy
+                    .on_pending_allocation(pages_reserved);
+                if kind == GCKind::GLOBAL {
+                    VM::VMCollection::block_for_gc(VMMutatorThread(tls)); // We have checked that this is mutator
+                } else {
+                    // Current thread is in VM (not safe so no global gc can happen), it can safely do a
+                    // local gc
+                    #[cfg(feature = "thread_local_gc")]
                     {
-                        // --- Assert the start of the allocated region ---
-                        // The start address SFT should be correct.
-                        debug_assert_eq!(SFT_MAP.get_checked(res.start).name(), self.get_name());
-                        // The start address is in our space.
-                        debug_assert!(self.address_in_space(res.start));
-                        // The descriptor should be correct.
-                        debug_assert_eq!(
-                            self.common().vm_map().get_descriptor_for_address(res.start),
-                            self.common().descriptor
-                        );
-
-                        // --- Assert the last byte in the allocated region ---
-                        let last_byte = res.start + bytes - 1;
-                        // The SFT for the last byte in the allocated memory should be correct.
-                        debug_assert_eq!(SFT_MAP.get_checked(last_byte).name(), self.get_name());
-                        // The last byte in the allocated memory should be in this space.
-                        debug_assert!(self.address_in_space(last_byte));
-                        // The descriptor for the last byte should be correct.
-                        debug_assert_eq!(
-                            self.common().vm_map().get_descriptor_for_address(last_byte),
-                            self.common().descriptor
-                        );
+                        use crate::scheduler::thread_local_gc_work::{
+                            ACTIVE_LOCAL_GC_COUNTER, LOCAL_GC_SYNC,
+                        };
+                        let mut active_local_gc_counter = ACTIVE_LOCAL_GC_COUNTER.lock().unwrap();
+                        while *active_local_gc_counter > 0 {
+                            active_local_gc_counter =
+                                LOCAL_GC_SYNC.wait(active_local_gc_counter).unwrap();
+                        }
+                        VM::VMActivePlan::execute_thread_local_gc(VMMutatorThread(tls));
                     }
 
-                    debug!("Space.acquire(), returned = {}", res.start);
-                    res.start
+                    #[cfg(not(feature = "thread_local_gc"))]
+                    panic!("thread local gc feature is not enabled");
                 }
-                Err(_) => {
-                    drop(lock); // drop the lock immediately
 
-                    // We thought we had memory to allocate, but somehow failed the allocation. Will force a GC.
-                    assert!(
-                        allow_gc,
-                        "Physical allocation failed when GC is not allowed!"
+                return unsafe { Address::zero() };
+            }
+        }
+        debug!("Collection not required");
+
+        // We need this lock: Othrewise, it is possible that one thread acquires pages in a new chunk, but not yet
+        // set SFT for it (in grow_space()), and another thread acquires pages in the same chunk, which is not
+        // a new chunk so grow_space() won't be called on it. The second thread could return a result in the chunk before
+        // its SFT is properly set.
+        // We need to minimize the scope of this lock for performance when we have many threads (mutator threads, or GC threads with copying allocators).
+        // See: https://github.com/mmtk/mmtk-core/issues/610
+        let lock = self.common().acquire_lock.lock().unwrap();
+
+        match pr.get_new_pages(self.common().descriptor, pages_reserved, pages, tls) {
+            Ok(res) => {
+                debug!(
+                    "Got new pages {} ({} pages) for {} in chunk {}, new_chunk? {}",
+                    res.start,
+                    res.pages,
+                    self.get_name(),
+                    conversions::chunk_align_down(res.start),
+                    res.new_chunk
+                );
+                let bytes = conversions::pages_to_bytes(res.pages);
+
+                let map_sidemetadata = || {
+                    // Mmap the pages and the side metadata, and handle error. In case of any error,
+                    // we will either call back to the VM for OOM, or simply panic.
+                    if let Err(mmap_error) = self
+                        .common()
+                        .mmapper
+                        .ensure_mapped(res.start, res.pages)
+                        .and(
+                            self.common()
+                                .metadata
+                                .try_map_metadata_space(res.start, bytes),
+                        )
+                    {
+                        memory::handle_mmap_error::<VM>(mmap_error, tls);
+                    }
+                };
+                let grow_space = || {
+                    self.grow_space(res.start, bytes, res.new_chunk);
+                };
+
+                // The scope of the lock is important in terms of performance when we have many allocator threads.
+                if SFT_MAP.get_side_metadata().is_some() {
+                    // If the SFT map uses side metadata, so we have to initialize side metadata first.
+                    map_sidemetadata();
+                    // then grow space, which will use the side metadata we mapped above
+                    grow_space();
+                    // then we can drop the lock after grow_space()
+                    drop(lock);
+                } else {
+                    // In normal cases, we can drop lock immediately after grow_space()
+                    grow_space();
+                    drop(lock);
+                    // and map side metadata without holding the lock
+                    map_sidemetadata();
+                }
+
+                // TODO: Concurrent zeroing
+                if self.common().zeroed {
+                    memory::zero(res.start, bytes);
+                }
+
+                // Some assertions
+                {
+                    // --- Assert the start of the allocated region ---
+                    // The start address SFT should be correct.
+                    debug_assert_eq!(SFT_MAP.get_checked(res.start).name(), self.get_name());
+                    // The start address is in our space.
+                    debug_assert!(self.address_in_space(res.start));
+                    // The descriptor should be correct.
+                    debug_assert_eq!(
+                        self.common().vm_map().get_descriptor_for_address(res.start),
+                        self.common().descriptor
                     );
 
-                    let gc_performed = self.get_gc_trigger().poll(true, Some(self.as_space()));
-                    debug_assert!(gc_performed, "GC not performed when forced.");
-
-                    // Clear the request, and inform GC trigger about the pending allocation.
-                    pr.clear_request(pages_reserved);
-                    self.get_gc_trigger()
-                        .policy
-                        .on_pending_allocation(pages_reserved);
-
-                    VM::VMCollection::block_for_gc(VMMutatorThread(tls)); // We asserted that this is mutator.
-                    unsafe { Address::zero() }
+                    // --- Assert the last byte in the allocated region ---
+                    let last_byte = res.start + bytes - 1;
+                    // The SFT for the last byte in the allocated memory should be correct.
+                    debug_assert_eq!(SFT_MAP.get_checked(last_byte).name(), self.get_name());
+                    // The last byte in the allocated memory should be in this space.
+                    debug_assert!(self.address_in_space(last_byte));
+                    // The descriptor for the last byte should be correct.
+                    debug_assert_eq!(
+                        self.common().vm_map().get_descriptor_for_address(last_byte),
+                        self.common().descriptor
+                    );
                 }
+
+                debug!("Space.acquire(), returned = {}", res.start);
+                res.start
+            }
+            Err(_) => {
+                drop(lock); // drop the lock immediately
+
+                // We thought we had memory to allocate, but somehow failed the allocation. Will force a GC.
+                assert!(
+                    allow_gc,
+                    "Physical allocation failed when GC is not allowed!"
+                );
+
+                let gc_performed = self
+                    .get_gc_trigger()
+                    .poll(true, Some(self.as_space()), VMMutatorThread(tls))
+                    .is_some();
+                debug_assert!(gc_performed, "GC not performed when forced.");
+
+                // Clear the request, and inform GC trigger about the pending allocation.
+                pr.clear_request(pages_reserved);
+                self.get_gc_trigger()
+                    .policy
+                    .on_pending_allocation(pages_reserved);
+
+                VM::VMCollection::block_for_gc(VMMutatorThread(tls)); // We asserted that this is mutator.
+                unsafe { Address::zero() }
             }
         }
     }

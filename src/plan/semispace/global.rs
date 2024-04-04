@@ -126,6 +126,23 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
     fn common(&self) -> &CommonPlan<VM> {
         &self.common
     }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn publish_object(&self, _object: crate::util::ObjectReference) {}
+
+    #[cfg(feature = "debug_publish_object")]
+    fn is_object_published(&self, object: crate::util::ObjectReference) -> bool {
+        debug_assert!(object.is_null() == false, "object is null");
+        if self.tospace().in_space(object) {
+            // object has already been forwarded, simply check the public bit
+            crate::util::public_bit::is_public::<VM>(object)
+        } else if self.fromspace().in_space(object) {
+            self.fromspace().is_object_published(object)
+        } else {
+            // object is not in copyspace, so it is not moved
+            crate::util::public_bit::is_public::<VM>(object)
+        }
+    }
 }
 
 impl<VM: VMBinding> SemiSpace<VM> {

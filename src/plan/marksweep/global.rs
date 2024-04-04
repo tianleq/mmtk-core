@@ -88,6 +88,9 @@ impl<VM: VMBinding> Plan for MarkSweep<VM> {
     fn constraints(&self) -> &'static PlanConstraints {
         &MS_CONSTRAINTS
     }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn publish_object(&self, _object: crate::util::ObjectReference) {}
 }
 
 impl<VM: VMBinding> MarkSweep<VM> {

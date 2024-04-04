@@ -26,7 +26,7 @@ use crate::util::options::PlanSelector;
 use crate::util::statistics::stats::Stats;
 use crate::util::{conversions, ObjectReference};
 use crate::util::{VMMutatorThread, VMWorkerThread};
-use crate::vm::*;
+use crate::vm::{ActivePlan, Collection, VMBinding};
 use downcast_rs::Downcast;
 use enum_map::EnumMap;
 use std::sync::atomic::Ordering;
@@ -216,6 +216,36 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
     /// * `space`: an option to indicate if there is a space that has failed in an allocation.
     fn collection_required(&self, space_full: bool, space: Option<SpaceStats<Self::VM>>) -> bool;
 
+    #[cfg(feature = "thread_local_gc")]
+    /// Ask the plan if they would trigger a GC. If MMTk is in charge of triggering GCs, this method is called
+    /// periodically during allocation. However, MMTk may delegate the GC triggering decision to the runtime,
+    /// in which case, this method may not be called. This method returns true to trigger a collection.
+    ///
+    /// # Arguments
+    /// * `space_full`: the allocation to a specific space failed, must recover pages within 'space'.
+    /// * `space`: an option to indicate if there is a space that has failed in an allocation.
+    fn thread_local_collection_required(
+        &self,
+        _space_full: bool,
+        _space: Option<&dyn Space<Self::VM>>,
+        _tls: VMMutatorThread,
+    ) -> bool {
+        false
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn handle_thread_local_collection(&self, tls: VMMutatorThread, mmtk: &'static MMTK<Self::VM>) {
+        self.base().handle_thread_local_collection(tls, mmtk);
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn do_thread_local_collection(
+        &'static self,
+        _tls: VMMutatorThread,
+        _mmtk: &'static MMTK<Self::VM>,
+    ) {
+    }
+
     // Note: The following methods are about page accounting. The default implementation should
     // work fine for non-copying plans. For copying plans, the plan should override any of these methods
     // if necessary.
@@ -314,6 +344,19 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
         self.for_each_space(&mut |space| {
             space.verify_side_metadata_sanity(&mut side_metadata_sanity_checker);
         })
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn publish_object(&self, _object: ObjectReference);
+
+    #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
+    fn get_object_owner(&self, _object: ObjectReference) -> Option<u32> {
+        Option::None
+    }
+
+    #[cfg(feature = "debug_publish_object")]
+    fn is_object_published(&self, _object: ObjectReference) -> bool {
+        false
     }
 }
 
@@ -642,10 +685,133 @@ impl<VM: VMBinding> CommonPlan<VM> {
     pub fn get_nonmoving(&self) -> &ImmortalSpace<VM> {
         &self.nonmoving
     }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn publish_object(&self, object: ObjectReference) {
+        if self.immortal.in_space(object) {
+            trace!("publish_object: object in immortal space");
+            self.immortal.publish_object(object);
+            return;
+        }
+        if self.los.in_space(object) {
+            trace!("publish_object: object in los");
+            self.los.publish_object(object);
+            return;
+        }
+        if self.nonmoving.in_space(object) {
+            trace!("publish_object: object in nonmoving space");
+            self.nonmoving.publish_object(object);
+            return;
+        }
+        self.base.publish_object(object);
+    }
 }
 
+#[cfg(feature = "thread_local_gc")]
+impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
+    #[cfg(not(feature = "debug_publish_object"))]
+    fn thread_local_trace_object<const KIND: TraceKind>(
+        &self,
+        mutator: &mut Mutator<VM>,
+        object: ObjectReference,
+    ) -> ThreadlocalTracedObjectType {
+        if self.immortal.in_space(object) {
+            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<
+                KIND,
+            >(
+                &self.immortal,
+                mutator,
+                object,
+                None,
+            );
+        }
+        if self.los.in_space(object) {
+            return <LargeObjectSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+                &self.los,
+                mutator,
+                object,
+                None,
+            );
+        }
+        if self.nonmoving.in_space(object) {
+            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+                &self.nonmoving,
+                mutator,
+                object,
+                None,
+            );
+        }
+        <BasePlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+            &self.base, mutator, object,
+        )
+    }
+
+    #[cfg(feature = "debug_publish_object")]
+    fn thread_local_trace_object<const KIND: TraceKind>(
+        &self,
+        mutator: &mut Mutator<VM>,
+        source: ObjectReference,
+        slot: VM::VMEdge,
+        object: ObjectReference,
+    ) -> ThreadlocalTracedObjectType {
+        if self.immortal.in_space(object) {
+            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<
+                KIND,
+            >(
+                &self.immortal,
+                mutator,
+                source,
+                slot,
+                object,
+                None,
+
+            );
+        }
+        if self.los.in_space(object) {
+            return <LargeObjectSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+                &self.los,
+                mutator,
+                source,
+                slot,
+                object,
+                None,
+            );
+        }
+        if self.nonmoving.in_space(object) {
+            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+                &self.nonmoving,
+                mutator,
+                source,
+                slot,
+                object,
+                None,
+
+            );
+        }
+        <BasePlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+            &self.base, mutator, source, slot, object,
+        )
+    }
+
+    fn thread_local_post_scan_object(&self, mutator: &Mutator<VM>, object: ObjectReference) {
+        <BasePlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_post_scan_object(
+            &self.base, mutator, object,
+        )
+    }
+
+    fn thread_local_may_move_objects<const KIND: TraceKind>() -> bool {
+        false
+            || <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_may_move_objects::<
+                KIND,
+            >()
+            || <LargeObjectSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_may_move_objects::<KIND>()
+            || <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_may_move_objects::<KIND>()
+            || <BasePlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_may_move_objects::<KIND>()
+    }
+}
+#[cfg(feature = "thread_local_gc")]
+use crate::policy::gc_work::PolicyThreadlocalTraceObject;
 use crate::policy::gc_work::TraceKind;
-use crate::vm::VMBinding;
 
 /// A trait for anything that contains spaces.
 /// Examples include concrete plans as well as `Gen`, `CommonPlan` and `BasePlan`.
@@ -712,6 +878,52 @@ pub trait PlanTraceObject<VM: VMBinding> {
     fn may_move_objects<const KIND: TraceKind>() -> bool;
 }
 
+#[cfg(feature = "thread_local_gc")]
+pub trait PlanThreadlocalTraceObject<VM: VMBinding> {
+    #[cfg(not(feature = "debug_publish_object"))]
+    /// Trace objects in the plan. Generally one needs to figure out
+    /// which space an object resides in, and invokes the corresponding policy
+    /// trace object method.
+    ///
+    /// Arguments:
+    /// * `mutator`: the current thread's context
+    /// * `object`: the object to trace. This is a non-nullable object reference.
+    /// * `worker`: the GC worker that is tracing this object.
+    fn thread_local_trace_object<const KIND: TraceKind>(
+        &self,
+        mutator: &mut Mutator<VM>,
+        object: ObjectReference,
+    ) -> ThreadlocalTracedObjectType;
+
+    #[cfg(feature = "debug_publish_object")]
+    /// Trace objects in the plan. Generally one needs to figure out
+    /// which space an object resides in, and invokes the corresponding policy
+    /// trace object method.
+    ///
+    /// Arguments:
+    /// * `mutator`: the current thread's context
+    /// * `object`: the object to trace. This is a non-nullable object reference.
+    /// * `worker`: the GC worker that is tracing this object.
+    fn thread_local_trace_object<const KIND: TraceKind>(
+        &self,
+        mutator: &mut Mutator<VM>,
+        source: ObjectReference,
+        slot: VM::VMEdge,
+        object: ObjectReference,
+    ) -> ThreadlocalTracedObjectType;
+
+    /// Post-scan objects in the plan. Each object is scanned by `VM::VMScanning::scan_object()`, and this function
+    /// will be called after the `VM::VMScanning::scan_object()` as a hook to invoke possible policy post scan method.
+    /// If a plan does not have any policy that needs post scan, this method can be implemented as empty.
+    /// If a plan has a policy that has some policy specific behaviors for scanning (e.g. mark lines in Immix),
+    /// this method should also invoke those policy specific methods for objects in that space.
+    fn thread_local_post_scan_object(&self, mutator: &Mutator<VM>, object: ObjectReference);
+
+    /// Whether objects in this plan may move. If any of the spaces used by the plan may move objects, this should
+    /// return true.
+    fn thread_local_may_move_objects<const KIND: TraceKind>() -> bool;
+}
+
 use enum_map::Enum;
 /// Allocation semantics that MMTk provides.
 /// Each allocation request requires a desired semantic for the object to allocate.
@@ -741,4 +953,10 @@ pub enum AllocationSemantics {
     LargeCode = 5,
     /// Non moving objects will not be moved by GC.
     NonMoving = 6,
+}
+
+#[cfg(feature = "thread_local_gc")]
+pub enum ThreadlocalTracedObjectType {
+    Scanned(ObjectReference),
+    ToBeScanned(ObjectReference),
 }

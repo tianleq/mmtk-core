@@ -99,6 +99,110 @@ pub fn forward_object<VM: VMBinding>(
     new_object
 }
 
+#[cfg(feature = "thread_local_gc_copying")]
+pub fn forward_public_object<VM: VMBinding>(
+    object: ObjectReference,
+    semantics: CopySemantics,
+    copy_context: &mut GCWorkerCopyContext<VM>,
+) -> ObjectReference {
+    debug_assert!(crate::util::public_bit::is_public::<VM>(object));
+    let new_object = VM::VMObjectModel::copy(object, semantics, copy_context);
+    // make sure the public bit is set before forwarding bit gets updated
+    // otherwise, there will be a race in assertion (a gc thread may see forwarded object without public bit being set)
+    crate::util::public_bit::set_public_bit::<VM>(new_object);
+    if let Some(shift) = forwarding_bits_offset_in_forwarding_pointer::<VM>() {
+        VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC.store_atomic::<VM, usize>(
+            object,
+            new_object.to_raw_address().as_usize() | ((FORWARDED as usize) << shift),
+            None,
+            Ordering::SeqCst,
+        )
+    } else {
+        write_forwarding_pointer::<VM>(object, new_object);
+        VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC.store_atomic::<VM, u8>(
+            object,
+            FORWARDED,
+            None,
+            Ordering::SeqCst,
+        );
+    }
+    new_object
+}
+
+#[cfg(feature = "thread_local_gc_copying")]
+pub fn thread_local_forward_object<VM: VMBinding>(
+    object: ObjectReference,
+    semantics: CopySemantics,
+    mutator: &mut crate::Mutator<VM>,
+) -> ObjectReference {
+    let new_object = VM::VMObjectModel::thread_local_copy(object, semantics, mutator);
+    #[cfg(feature = "vo_bit")]
+    crate::util::metadata::vo_bit::set_vo_bit::<VM>(new_object);
+    debug_assert!(
+        !crate::util::public_bit::is_public::<VM>(object),
+        "thread local gc move public object"
+    );
+    if let Some(shift) = forwarding_bits_offset_in_forwarding_pointer::<VM>() {
+        // no race since mutator doing the work itself
+        // and those metadata are in header
+        unsafe {
+            VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC.store::<VM, usize>(
+                object,
+                new_object.to_raw_address().as_usize() | ((FORWARDED as usize) << shift),
+                None,
+            )
+        }
+    } else {
+        unsafe {
+            VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC.store::<VM, usize>(
+                object,
+                new_object.to_raw_address().as_usize(),
+                Some(FORWARDING_POINTER_MASK),
+            );
+            VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC.store::<VM, u8>(object, FORWARDED, None)
+        };
+    }
+    new_object
+}
+
+#[cfg(feature = "thread_local_gc")]
+pub fn thread_local_is_forwarded<VM: VMBinding>(object: ObjectReference) -> bool {
+    debug_assert!(
+        !crate::util::public_bit::is_public::<VM>(object),
+        "thread local gc touch public object"
+    );
+    unsafe {
+        VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC.load::<VM, u8>(object, None) == FORWARDED
+    }
+}
+
+#[cfg(feature = "thread_local_gc")]
+/// read the forwarding pointer to the new object.
+///
+/// # Arguments:
+///
+/// * `object`: the forwarded/being_forwarded object.
+/// * `forwarding_bits`: the last state of the forwarding bits before calling this function.
+///
+/// Returns a reference to the new object.
+///
+pub fn thread_local_get_forwarded_object<VM: VMBinding>(
+    object: ObjectReference,
+) -> ObjectReference {
+    #[cfg(debug_assertions)]
+    {
+        let forwarding_bits = get_forwarding_status::<VM>(object);
+        assert!(
+            FORWARDED == forwarding_bits,
+            "Invalid/Corrupted forwarding word {:x} for object {}",
+            forwarding_bits,
+            object,
+        );
+    }
+
+    read_forwarding_pointer::<VM>(object)
+}
+
 /// Return the forwarding bits for a given `ObjectReference`.
 pub fn get_forwarding_status<VM: VMBinding>(object: ObjectReference) -> u8 {
     VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC.load_atomic::<VM, u8>(

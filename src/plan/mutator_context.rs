@@ -50,6 +50,20 @@ pub struct MutatorConfig<VM: VMBinding> {
     pub prepare_func: &'static (dyn Fn(&mut Mutator<VM>, VMWorkerThread) + Send + Sync),
     /// Plan-specific code for mutator release. The VMWorkerThread is the worker thread that executes this release function.
     pub release_func: &'static (dyn Fn(&mut Mutator<VM>, VMWorkerThread) + Send + Sync),
+    #[cfg(feature = "thread_local_gc")]
+    /// Plan-specific code for mutator prepare. The VMWorkerThread is the worker thread that executes this prepare function.
+    pub thread_local_prepare_func: &'static (dyn Fn(&mut Mutator<VM>) + Send + Sync),
+    #[cfg(feature = "thread_local_gc")]
+    /// Plan-specific code for mutator release. The VMWorkerThread is the worker thread that executes this release function.
+    pub thread_local_release_func: &'static (dyn Fn(&mut Mutator<VM>) + Send + Sync),
+    #[cfg(feature = "thread_local_gc_copying")]
+    /// Plan-specific code for mutator prepare. The VMWorkerThread is the worker thread that executes this prepare function.
+    pub thread_local_alloc_copy_func:
+        &'static (dyn Fn(&mut Mutator<VM>, usize, usize, usize) -> Address + Send + Sync),
+    #[cfg(feature = "thread_local_gc_copying")]
+    /// Plan-specific code for mutator release. The VMWorkerThread is the worker thread that executes this release function.
+    pub thread_local_post_copy_func:
+        &'static (dyn Fn(&mut Mutator<VM>, ObjectReference, usize) + Send + Sync),
 }
 
 impl<VM: VMBinding> std::fmt::Debug for MutatorConfig<VM> {
@@ -95,6 +109,20 @@ pub struct Mutator<VM: VMBinding> {
     pub mutator_tls: VMMutatorThread,
     pub(crate) plan: &'static dyn Plan<VM = VM>,
     pub(crate) config: MutatorConfig<VM>,
+    pub mutator_id: u32,
+    #[cfg(feature = "thread_local_gc")]
+    pub thread_local_gc_status: u32,
+    #[cfg(feature = "thread_local_gc")]
+    pub finalizable_candidates:
+        Box<Vec<<VM::VMReferenceGlue as crate::vm::ReferenceGlue<VM>>::FinalizableType>>,
+    #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
+    pub request_id: usize,
+    #[cfg(feature = "public_object_analysis")]
+    pub allocation_count: usize,
+    #[cfg(feature = "public_object_analysis")]
+    pub bytes_allocated: usize,
+    #[cfg(feature = "public_object_analysis")]
+    pub copy_bytes: u32,
 }
 
 impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
@@ -111,13 +139,27 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         size: usize,
         align: usize,
         offset: usize,
+        semantics: AllocationSemantics,
+    ) -> Address {
+        unsafe {
+            self.allocators
+                .get_allocator_mut(self.config.allocator_mapping[semantics])
+        }
+        .alloc(size, align, offset)
+    }
+
+    fn alloc_slow(
+        &mut self,
+        size: usize,
+        align: usize,
+        offset: usize,
         allocator: AllocationSemantics,
     ) -> Address {
         unsafe {
             self.allocators
                 .get_allocator_mut(self.config.allocator_mapping[allocator])
         }
-        .alloc(size, align, offset)
+        .alloc_slow(size, align, offset)
     }
 
     fn alloc_slow(
@@ -139,14 +181,102 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         &mut self,
         refer: ObjectReference,
         _bytes: usize,
-        allocator: AllocationSemantics,
+        semantics: AllocationSemantics,
     ) {
-        unsafe {
+        #[cfg(feature = "thread_local_gc")]
+        use crate::util::alloc::LargeObjectAllocator;
+        #[cfg(feature = "debug_publish_object")]
+        use crate::util::object_extra_header_metadata;
+        let space = unsafe {
             self.allocators
-                .get_allocator_mut(self.config.allocator_mapping[allocator])
+                .get_allocator_mut(self.config.allocator_mapping[semantics])
         }
-        .get_space()
-        .initialize_object_metadata(refer, true)
+        .get_space();
+        space.initialize_object_metadata(refer, true);
+
+        #[cfg(not(feature = "thread_local_gc"))]
+        {
+            #[cfg(feature = "debug_publish_object")]
+            {
+                #[cfg(not(feature = "public_object_analysis"))]
+                let metadata: usize = usize::try_from(self.mutator_id).unwrap();
+                #[cfg(feature = "public_object_analysis")]
+                let metadata: usize = usize::try_from(self.mutator_id).unwrap()
+                    | usize::try_from(self.request_id).unwrap()
+                        << object_extra_header_metadata::SHIFT;
+                object_extra_header_metadata::store_extra_header_metadata::<VM, usize>(
+                    refer, metadata,
+                );
+            }
+        }
+
+        // Large object allocation always go through the slow-path, so it is fine to
+        // do the following book-keeping in post_alloc(only executed in slow-path)
+        #[cfg(feature = "thread_local_gc")]
+        if semantics == AllocationSemantics::Los {
+            // store los objects into a local set
+            let allocator = unsafe {
+                self.allocators
+                    .get_allocator_mut(self.config.allocator_mapping[semantics])
+                    .downcast_mut::<LargeObjectAllocator<VM>>()
+                    .unwrap()
+            };
+            allocator.add_los_objects(refer);
+            // large object need to record its owner
+            let metadata = usize::try_from(self.mutator_id).unwrap();
+            unsafe {
+                #[cfg(feature = "extra_header")]
+                let offset = 8;
+                #[cfg(not(feature = "extra_header"))]
+                let offset = 0;
+                let metadata_address =
+                    crate::util::conversions::page_align_down(refer.to_object_start::<VM>());
+                metadata_address.store(metadata);
+                // Store request_id|mutator_id into the extra header
+                #[cfg(all(feature = "public_object_analysis", feature = "debug_publish_object"))]
+                ((metadata_address + offset) as Address)
+                    .store(metadata | self.request_id << object_extra_header_metadata::SHIFT);
+                debug_assert!(
+                    crate::util::conversions::is_page_aligned(Address::from_usize(
+                        refer.to_object_start::<VM>().as_usize() - offset - 8
+                    )),
+                    "los object is not aligned"
+                );
+            }
+        } else {
+            #[cfg(feature = "debug_publish_object")]
+            {
+                #[cfg(not(feature = "public_object_analysis"))]
+                let metadata: usize = usize::try_from(self.mutator_id).unwrap();
+                #[cfg(feature = "public_object_analysis")]
+                let metadata: usize = usize::try_from(self.mutator_id).unwrap()
+                    | self.request_id << object_extra_header_metadata::SHIFT;
+                object_extra_header_metadata::store_extra_header_metadata::<VM, usize>(
+                    refer, metadata,
+                );
+            }
+        }
+
+        #[cfg(feature = "public_object_analysis")]
+        {
+            self.allocation_count += 1;
+            self.bytes_allocated += _bytes;
+            {
+                let mut stats = crate::util::REQUEST_SCOPE_OBJECTS_STATS.lock().unwrap();
+                stats.allocation_count += 1;
+                stats.allocation_bytes += _bytes;
+            }
+            {
+                let mut stats = crate::util::HARNESS_SCOPE_OBJECTS_STATS.lock().unwrap();
+                stats.allocation_count += 1;
+                stats.allocation_bytes += _bytes;
+            }
+            {
+                let mut stats = crate::util::ALL_SCOPE_OBJECTS_STATS.lock().unwrap();
+                stats.allocation_count += 1;
+                stats.allocation_bytes += _bytes;
+            }
+        }
     }
 
     fn get_tls(&self) -> VMMutatorThread {
@@ -162,6 +292,26 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
 
     fn barrier(&mut self) -> &mut dyn Barrier<VM> {
         &mut *self.barrier
+    }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    fn alloc_copy(&mut self, size: usize, align: usize, offset: usize) -> Address {
+        (*self.config.thread_local_alloc_copy_func)(self, size, align, offset)
+    }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    fn post_copy(&mut self, obj: ObjectReference, bytes: usize) {
+        (*self.config.thread_local_post_copy_func)(self, obj, bytes)
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn thread_local_prepare(&mut self) {
+        (*self.config.thread_local_prepare_func)(self)
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn thread_local_release(&mut self) {
+        (*self.config.thread_local_release_func)(self)
     }
 }
 
@@ -321,6 +471,18 @@ pub trait MutatorContext<VM: VMBinding>: Send + 'static {
     /// # Safety
     /// The safety of this function is ensured by a down-cast check.
     unsafe fn barrier_impl<B: Barrier<VM>>(&mut self) -> &mut B;
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    fn alloc_copy(&mut self, size: usize, align: usize, offset: usize) -> Address;
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    fn post_copy(&mut self, obj: ObjectReference, bytes: usize);
+
+    #[cfg(feature = "thread_local_gc")]
+    fn thread_local_prepare(&mut self);
+
+    #[cfg(feature = "thread_local_gc")]
+    fn thread_local_release(&mut self);
 }
 
 /// This is used for plans to indicate the number of allocators reserved for the plan.
@@ -498,4 +660,28 @@ pub(crate) fn create_space_mapping<VM: VMBinding>(
 
     reserved.validate();
     vec
+}
+
+#[cfg(feature = "thread_local_gc")]
+pub fn generic_thread_local_prepare<VM: VMBinding>(_mutator: &mut Mutator<VM>) {}
+
+#[cfg(feature = "thread_local_gc")]
+pub fn generic_thread_local_release<VM: VMBinding>(_mutator: &mut Mutator<VM>) {}
+
+#[cfg(feature = "thread_local_gc_copying")]
+pub fn generic_thread_local_alloc_copy<VM: VMBinding>(
+    _mutator: &mut Mutator<VM>,
+    _size: usize,
+    _align: usize,
+    _offset: usize,
+) -> Address {
+    Address::ZERO
+}
+
+#[cfg(feature = "thread_local_gc_copying")]
+pub fn generic_thread_local_post_copy<VM: VMBinding>(
+    _mutator: &mut Mutator<VM>,
+    _obj: ObjectReference,
+    _bytes: usize,
+) {
 }

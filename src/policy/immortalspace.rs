@@ -8,6 +8,8 @@ use crate::util::metadata::mark_bit::MarkState;
 
 use crate::util::{metadata, ObjectReference};
 
+#[cfg(feature = "thread_local_gc")]
+use crate::plan::ThreadlocalTracedObjectType;
 use crate::plan::{ObjectQueue, VectorObjectQueue};
 
 use crate::policy::sft::GCWorkerMutRef;
@@ -118,6 +120,35 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmortalSp
     }
 }
 
+#[cfg(feature = "thread_local_gc")]
+impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for ImmortalSpace<VM> {
+    #[cfg(not(feature = "debug_publish_object"))]
+    fn thread_local_trace_object<const KIND: super::gc_work::TraceKind>(
+        &self,
+        _mutator: &mut crate::Mutator<VM>,
+        object: ObjectReference,
+        _copy: Option<CopySemantics>,
+    ) -> ThreadlocalTracedObjectType {
+        self.thread_local_trace_object(object)
+    }
+
+    #[cfg(feature = "debug_publish_object")]
+    fn thread_local_trace_object<const KIND: super::gc_work::TraceKind>(
+        &self,
+        _mutator: &mut crate::Mutator<VM>,
+        _source: ObjectReference,
+        _slot: VM::VMEdge,
+        object: ObjectReference,
+        _copy: Option<CopySemantics>,
+    ) -> ThreadlocalTracedObjectType {
+        self.thread_local_trace_object(object)
+    }
+
+    fn thread_local_may_move_objects<const KIND: super::gc_work::TraceKind>() -> bool {
+        false
+    }
+}
+
 impl<VM: VMBinding> ImmortalSpace<VM> {
     pub fn new(args: crate::policy::space::PlanCreateSpaceArgs<VM>) -> Self {
         let vm_map = args.vm_map;
@@ -199,4 +230,26 @@ impl<VM: VMBinding> ImmortalSpace<VM> {
         }
         object
     }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn thread_local_trace_object(
+        &self,
+        object: ObjectReference,
+    ) -> ThreadlocalTracedObjectType {
+        #[cfg(feature = "vo_bit")]
+        debug_assert!(
+            crate::util::metadata::vo_bit::is_vo_bit_set::<VM>(object),
+            "{:x}: VO bit not set",
+            object
+        );
+        if crate::util::public_bit::is_public::<VM>(object) {
+            return ThreadlocalTracedObjectType::Scanned(object);
+        }
+        if self.mark_state.test_and_mark::<VM>(object) {
+            return ThreadlocalTracedObjectType::ToBeScanned(object);
+        }
+        ThreadlocalTracedObjectType::Scanned(object)
+    }
+
+    pub fn publish_object(&self, _object: ObjectReference) {}
 }

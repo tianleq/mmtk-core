@@ -150,6 +150,9 @@ impl<VM: VMBinding> Plan for GenCopy<VM> {
     fn generational(&self) -> Option<&dyn GenerationalPlan<VM = Self::VM>> {
         Some(self)
     }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn publish_object(&self, _object: ObjectReference) {}
 }
 
 impl<VM: VMBinding> GenerationalPlan for GenCopy<VM> {

@@ -10,11 +10,13 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use crate::policy::space::Space;
+use crate::util::address::Address;
 use crate::util::constants::*;
 use crate::util::opaque_pointer::*;
 use crate::vm::VMBinding;
 use crate::vm::{ActivePlan, Collection};
 use downcast_rs::Downcast;
+use std::sync::atomic::Ordering;
 
 #[repr(C)]
 #[derive(Debug)]

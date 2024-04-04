@@ -98,6 +98,12 @@ impl<VM: VMBinding> Allocator<VM> for BumpAllocator<VM> {
         BLOCK_SIZE
     }
 
+    #[cfg(not(feature = "extra_header"))]
+    fn alloc(&mut self, size: usize, align: usize, offset: usize) -> Address {
+        self.alloc_impl(size, align, offset)
+    }
+
+    #[cfg(feature = "extra_header")]
     fn alloc(&mut self, size: usize, align: usize, offset: usize) -> Address {
         trace!("alloc");
         let result = align_allocation_no_fill::<VM>(self.bump_pointer.cursor, align, offset);
@@ -184,6 +190,51 @@ impl<VM: VMBinding> BumpAllocator<VM> {
             bump_pointer: BumpPointer::default(),
             space,
             context,
+        }
+    }
+
+    
+    fn alloc_impl(&mut self, size: usize, align: usize, offset: usize) -> Address {
+        trace!("alloc");
+        let result = align_allocation_no_fill::<VM>(self.cursor, align, offset);
+        let new_cursor = result + size;
+
+        if new_cursor > self.limit {
+            trace!("Thread local buffer used up, go to alloc slow path");
+            self.alloc_slow(size, align, offset)
+        } else {
+            fill_alignment_gap::<VM>(self.cursor, result);
+            self.cursor = new_cursor;
+            trace!(
+                "Bump allocation size: {}, result: {}, new_cursor: {}, limit: {}",
+                size,
+                result,
+                self.cursor,
+                self.limit
+            );
+            result
+        }
+    }
+
+    fn alloc_impl(&mut self, size: usize, align: usize, offset: usize) -> Address {
+        trace!("alloc");
+        let result = align_allocation_no_fill::<VM>(self.cursor, align, offset);
+        let new_cursor = result + size;
+
+        if new_cursor > self.limit {
+            trace!("Thread local buffer used up, go to alloc slow path");
+            self.alloc_slow(size, align, offset)
+        } else {
+            fill_alignment_gap::<VM>(self.cursor, result);
+            self.cursor = new_cursor;
+            trace!(
+                "Bump allocation size: {}, result: {}, new_cursor: {}, limit: {}",
+                size,
+                result,
+                self.cursor,
+                self.limit
+            );
+            result
         }
     }
 

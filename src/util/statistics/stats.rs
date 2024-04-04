@@ -55,6 +55,7 @@ pub struct Stats {
     pub shared: Arc<SharedStats>,
     counters: Mutex<Vec<Arc<Mutex<dyn Counter + Send>>>>,
     exceeded_phase_limit: AtomicBool,
+    requests_time: Arc<Mutex<Timer>>,
 }
 
 impl Stats {
@@ -78,10 +79,22 @@ impl Stats {
             "time".to_string(),
             shared.clone(),
             true,
+            true,
             false,
             MonotoneNanoTime {},
         )));
+        let requests_time = Arc::new(Mutex::new(LongCounter::new(
+            "time.requests".to_string(),
+            shared.clone(),
+            false,
+            false,
+            false,
+            MonotoneNanoTime {},
+        )));
+
         counters.push(t.clone());
+        counters.push(requests_time.clone());
+        // counters.push(requests_time.clone());
         // Read from the MMTK option for a list of perf events we want to
         // measure, and create corresponding counters
         #[cfg(feature = "perf_counter")]
@@ -103,6 +116,7 @@ impl Stats {
             shared,
             counters: Mutex::new(counters),
             exceeded_phase_limit: AtomicBool::new(false),
+            requests_time,
         }
     }
 
@@ -110,6 +124,7 @@ impl Stats {
         &self,
         name: &str,
         implicit_start: bool,
+        implicit_stop: bool,
         merge_phases: bool,
     ) -> Arc<Mutex<EventCounter>> {
         let mut guard = self.counters.lock().unwrap();
@@ -117,6 +132,7 @@ impl Stats {
             name.to_string(),
             self.shared.clone(),
             implicit_start,
+            implicit_stop,
             merge_phases,
         )));
         guard.push(counter.clone());
@@ -127,10 +143,16 @@ impl Stats {
         &self,
         name: &str,
         implicit_start: bool,
+        implicit_stop: bool,
         merge_phases: bool,
     ) -> Mutex<SizeCounter> {
-        let u = self.new_event_counter(name, implicit_start, merge_phases);
-        let v = self.new_event_counter(&format!("{}.volume", name), implicit_start, merge_phases);
+        let u = self.new_event_counter(name, implicit_start, implicit_stop, merge_phases);
+        let v = self.new_event_counter(
+            &format!("{}.volume", name),
+            implicit_start,
+            implicit_stop,
+            merge_phases,
+        );
         Mutex::new(SizeCounter::new(u, v))
     }
 
@@ -138,6 +160,7 @@ impl Stats {
         &self,
         name: &str,
         implicit_start: bool,
+        implicit_stop: bool,
         merge_phases: bool,
     ) -> Arc<Mutex<Timer>> {
         let mut guard = self.counters.lock().unwrap();
@@ -145,6 +168,7 @@ impl Stats {
             name.to_string(),
             self.shared.clone(),
             implicit_start,
+            implicit_stop,
             merge_phases,
             MonotoneNanoTime {},
         )));
@@ -192,6 +216,7 @@ impl Stats {
         let scheduler_stat = mmtk.scheduler.statistics();
         self.print_column_names(&scheduler_stat);
         print!("{}\t", self.get_phase() / 2);
+
         let counter = self.counters.lock().unwrap();
         for iter in &(*counter) {
             let c = iter.lock().unwrap();
@@ -207,15 +232,41 @@ impl Stats {
         for value in scheduler_stat.values() {
             print!("{}\t", value);
         }
+        #[cfg(feature = "public_object_analysis")]
+        {
+            let stats = crate::util::ALL_SCOPE_OBJECTS_STATS.lock().unwrap();
+            print!(
+                "{}\t{}\t{}\t",
+                stats.allocation_bytes,
+                stats.public_bytes,
+                (stats.public_bytes as f64 / stats.allocation_bytes as f64) * 100 as f64
+            );
+            let stats = crate::util::HARNESS_SCOPE_OBJECTS_STATS.lock().unwrap();
+            print!(
+                "{}\t{}\t{}\t",
+                stats.allocation_bytes,
+                stats.public_bytes,
+                (stats.public_bytes as f64 / stats.allocation_bytes as f64) * 100 as f64
+            );
+            let stats = crate::util::REQUEST_SCOPE_OBJECTS_STATS.lock().unwrap();
+            print!(
+                "{}\t{}\t{}\t",
+                stats.allocation_bytes,
+                stats.public_bytes,
+                (stats.public_bytes as f64 / stats.allocation_bytes as f64) * 100 as f64
+            );
+        }
         println!();
         print!("Total time: ");
         self.total_time.lock().unwrap().print_total(None);
         println!(" ms");
+
         println!("------------------------------ End MMTk Statistics -----------------------------")
     }
 
     pub fn print_column_names(&self, scheduler_stat: &HashMap<String, String>) {
         print!("GC\t");
+
         let counter = self.counters.lock().unwrap();
         for iter in &(*counter) {
             let c = iter.lock().unwrap();
@@ -227,6 +278,12 @@ impl Stats {
         }
         for name in scheduler_stat.keys() {
             print!("{}\t", name);
+        }
+        #[cfg(feature = "public_object_analysis")]
+        {
+            print!("all.all.bytes\tall.public.bytes\tall.publish.rate\t");
+            print!("harness.all.bytes\tharness.public.bytes\tharness.publish.rate\t");
+            print!("request.all.bytes\request.public.bytes\request.publish.rate\t");
         }
         println!();
     }
@@ -254,7 +311,10 @@ impl Stats {
     fn stop_all_counters(&self) {
         let counters = self.counters.lock().unwrap();
         for c in &(*counters) {
-            c.lock().unwrap().stop();
+            let mut ctr = c.lock().unwrap();
+            if ctr.implicit_stop() {
+                ctr.stop();
+            }
         }
         self.shared.set_gathering_stats(false);
     }
@@ -265,5 +325,13 @@ impl Stats {
 
     pub fn get_gathering_stats(&self) -> bool {
         self.shared.get_gathering_stats()
+    }
+
+    pub fn request_starting(&self) {
+        self.requests_time.lock().unwrap().start();
+    }
+
+    pub fn request_finished(&self) {
+        self.requests_time.lock().unwrap().stop();
     }
 }

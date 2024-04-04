@@ -44,7 +44,7 @@ impl OpaquePointer {
 /// so the VM knows the context.
 /// A VMThread may be a VMMutatorThread, a VMWorkerThread, or any VMThread.
 #[repr(transparent)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Default)]
 pub struct VMThread(pub OpaquePointer);
 
 impl VMThread {
@@ -56,7 +56,7 @@ impl VMThread {
 /// When a VMMutatorThread is used as an argument or a field of a type, it generally means
 /// the function or the functions for the type is executed in the context of the mutator thread.
 #[repr(transparent)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Default)]
 pub struct VMMutatorThread(pub VMThread);
 
 /// A VMWorkerThread is a VMThread that is associates with a [`crate::scheduler::GCWorker`].

@@ -3,8 +3,11 @@
 
 use crate::scheduler::gc_work::{EdgeOf, ProcessEdgesWork};
 use crate::scheduler::{GCWorker, WorkBucketStage};
-use crate::util::ObjectReference;
+use crate::util::{ObjectReference, VMMutatorThread};
+use crate::vm::edge_shape::Edge;
 use crate::vm::EdgeVisitor;
+use crate::vm::Scanning;
+use crate::MMTK;
 
 /// This trait represents an object queue to enqueue objects during tracing.
 pub trait ObjectQueue {
@@ -82,8 +85,12 @@ impl ObjectQueue for VectorQueue<ObjectReference> {
 /// if the buffer is full or if the type gets dropped.
 pub struct ObjectsClosure<'a, E: ProcessEdgesWork> {
     buffer: VectorQueue<EdgeOf<E>>,
+    #[cfg(feature = "debug_publish_object")]
+    sources: VectorQueue<ObjectReference>,
     pub(crate) worker: &'a mut GCWorker<E::VM>,
     bucket: WorkBucketStage,
+    single_thread: bool,
+    _mutator_tls: Option<VMMutatorThread>,
 }
 
 impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
@@ -92,30 +99,72 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
     /// Arguments:
     /// * `worker`: the current worker. The objects closure should not leave the context of this worker.
     /// * `bucket`: new work generated will be push ed to the bucket.
-    pub fn new(worker: &'a mut GCWorker<E::VM>, bucket: WorkBucketStage) -> Self {
+    pub fn new(
+        worker: &'a mut GCWorker<E::VM>, bucket: WorkBucketStage,
+        single_thread: bool,
+        mutator_tls: Option<VMMutatorThread>,
+    ) -> Self {
         Self {
             buffer: VectorQueue::new(),
+            #[cfg(feature = "debug_publish_object")]
+            sources: VectorQueue::new(),
             worker,
             bucket,
+            single_thread,
+            _mutator_tls: mutator_tls,
         }
     }
 
     fn flush(&mut self) {
         let buf = self.buffer.take();
+        #[cfg(feature = "debug_publish_object")]
+        let sources = self.sources.take();
+
         if !buf.is_empty() {
-            self.worker.add_work(
-                self.bucket,
-                E::new(buf, false, self.worker.mmtk, self.bucket),
-            );
+            if self.single_thread {
+                #[cfg(not(feature = "debug_publish_object"))]
+                self.worker.add_local_work(
+                    WorkBucketStage::Unconstrained,
+                    E::new(buf, false, self.worker.mmtk, None),
+                );
+                #[cfg(feature = "debug_publish_object")]
+                {
+                    debug_assert!(
+                        sources.len() == buf.len(),
+                        "The number of objects and slots do not equal"
+                    );
+                    self.worker.add_local_work(
+                        WorkBucketStage::Unconstrained,
+                        E::new(sources, buf, false, 0, self.worker.mmtk, self._mutator_tls),
+                    );
+                }
+            } else {
+                #[cfg(not(feature = "debug_publish_object"))]
+                self.worker.add_work(
+                    WorkBucketStage::Closure,
+                    E::new(buf, false, self.worker.mmtk, Option::None),
+                );
+                #[cfg(feature = "debug_publish_object")]
+                {
+                    debug_assert!(
+                        sources.len() == buf.len(),
+                        "The number of objects and slots do not equal"
+                    );
+                    self.worker.add_work(
+                        self.bucket,
+                        E::new(sources, buf, false, 0, self.worker.mmtk, self.bucket, None),
+                    );
+                }
+            }
         }
     }
 }
 
 impl<'a, E: ProcessEdgesWork> EdgeVisitor<EdgeOf<E>> for ObjectsClosure<'a, E> {
+    #[cfg(not(feature = "debug_publish_object"))]
     fn visit_edge(&mut self, slot: EdgeOf<E>) {
         #[cfg(debug_assertions)]
         {
-            use crate::vm::edge_shape::Edge;
             trace!(
                 "(ObjectsClosure) Visit edge {:?} (pointing to {})",
                 slot,
@@ -127,10 +176,125 @@ impl<'a, E: ProcessEdgesWork> EdgeVisitor<EdgeOf<E>> for ObjectsClosure<'a, E> {
             self.flush();
         }
     }
+
+    #[cfg(feature = "debug_publish_object")]
+    fn visit_edge(&mut self, object: ObjectReference, slot: EdgeOf<E>) {
+        #[cfg(debug_assertions)]
+        {
+            trace!(
+                "(ObjectsClosure) Visit edge {:?} of Object {:?} (pointing to {})",
+                slot,
+                object,
+                slot.load()
+            );
+        }
+        self.buffer.push(slot);
+        self.sources.push(object);
+        if self.buffer.is_full() {
+            self.flush();
+        }
+    }
 }
 
 impl<'a, E: ProcessEdgesWork> Drop for ObjectsClosure<'a, E> {
     fn drop(&mut self) {
         self.flush();
+    }
+}
+
+pub struct PublishObjectClosure<VM: crate::vm::VMBinding> {
+    _mmtk: &'static MMTK<VM>,
+    edge_buffer: std::collections::VecDeque<VM::VMEdge>,
+    #[cfg(any(
+        feature = "public_object_analysis",
+        feature = "debug_publish_object_overhead"
+    ))]
+    number_of_objects_published: usize,
+    #[cfg(feature = "public_object_analysis")]
+    number_of_bytes_published: usize,
+}
+
+impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
+    pub fn new(mmtk: &'static MMTK<VM>) -> Self {
+        PublishObjectClosure {
+            _mmtk: mmtk,
+            edge_buffer: std::collections::VecDeque::new(),
+            #[cfg(any(
+                feature = "public_object_analysis",
+                feature = "debug_publish_object_overhead"
+            ))]
+            number_of_objects_published: 0,
+            #[cfg(feature = "public_object_analysis")]
+            number_of_bytes_published: 0,
+        }
+    }
+
+    pub fn do_closure(&mut self) {
+        while !self.edge_buffer.is_empty() {
+            let slot = self.edge_buffer.pop_front().unwrap();
+            let object = slot.load();
+            if object.is_null() {
+                continue;
+            }
+            if !crate::util::public_bit::is_public::<VM>(object) {
+                // set public bit on the object
+                crate::util::public_bit::set_public_bit::<VM>(object);
+                #[cfg(feature = "thread_local_gc")]
+                self._mmtk.plan.publish_object(object);
+                VM::VMScanning::scan_object(
+                    crate::util::VMWorkerThread(crate::util::VMThread::UNINITIALIZED),
+                    object,
+                    self,
+                );
+                #[cfg(feature = "public_object_analysis")]
+                {
+                    use crate::vm::ObjectModel;
+                    self.number_of_objects_published += 1;
+                    self.number_of_bytes_published += VM::VMObjectModel::get_current_size(object);
+                }
+                #[cfg(feature = "debug_publish_object_overhead")]
+                {
+                    #[cfg(not(feature = "public_object_analysis"))]
+                    {
+                        self.number_of_objects_published += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(any(
+        feature = "public_object_analysis",
+        feature = "debug_publish_object_overhead"
+    ))]
+    pub fn get_number_of_objects_published(&self) -> usize {
+        self.number_of_objects_published
+    }
+
+    #[cfg(feature = "public_object_analysis")]
+    pub fn get_number_of_bytes_published(&self) -> usize {
+        self.number_of_bytes_published
+    }
+}
+
+impl<VM: crate::vm::VMBinding> EdgeVisitor<VM::VMEdge> for PublishObjectClosure<VM> {
+    #[cfg(not(feature = "debug_publish_object"))]
+    fn visit_edge(&mut self, edge: VM::VMEdge) {
+        self.edge_buffer.push_back(edge);
+    }
+
+    #[cfg(feature = "debug_publish_object")]
+    fn visit_edge(&mut self, _object: ObjectReference, edge: VM::VMEdge) {
+        self.edge_buffer.push_back(edge);
+    }
+}
+
+impl<VM: crate::vm::VMBinding> Drop for PublishObjectClosure<VM> {
+    #[inline(always)]
+    fn drop(&mut self) {
+        assert!(
+            self.edge_buffer.is_empty(),
+            "There are edges left over. Closure is not done correctly."
+        );
     }
 }

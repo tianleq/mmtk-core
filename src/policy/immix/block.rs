@@ -102,6 +102,16 @@ impl Block {
     pub const MARK_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_MARK;
 
+    /// Block owner table (side)
+    #[cfg(feature = "thread_local_gc")]
+    pub const OWNER_TABLE: SideMetadataSpec =
+        crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_OWNER;
+
+    /// Block level public table (side)
+    #[cfg(feature = "thread_local_gc")]
+    pub const BLOCK_PUBLICATION_TABLE: SideMetadataSpec =
+        crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_PUBLICATION;
+
     /// Get the chunk containing the block.
     pub fn chunk(&self) -> Chunk {
         Chunk::from_unaligned_address(self.0)
@@ -122,8 +132,55 @@ impl Block {
 
     /// Set block mark state.
     pub fn set_state(&self, state: BlockState) {
-        let state = u8::from(state);
+        let state: u8 = u8::from(state);
         Self::MARK_TABLE.store_atomic::<u8>(self.start(), state, Ordering::SeqCst);
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn publish(&self, publish_lines: bool) {
+        Self::BLOCK_PUBLICATION_TABLE.store_atomic::<u8>(self.start(), 1, Ordering::SeqCst);
+        // Also publish all lines within the block
+        if publish_lines {
+            Line::LINE_PUBLICATION_TABLE.bset_metadata(self.start(), Self::BYTES);
+        }
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn reset_publication(&self) {
+        Self::BLOCK_PUBLICATION_TABLE.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
+        // Also rest all lines within the block
+        Line::LINE_PUBLICATION_TABLE.bzero_metadata(self.start(), Self::BYTES);
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn reset_line_mark_state(&self) {
+        // rest all lines within the block
+        Line::MARK_TABLE.bzero_metadata(self.start(), Self::BYTES);
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn is_block_published(&self) -> bool {
+        Self::BLOCK_PUBLICATION_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst) == 1
+    }
+
+    #[cfg(all(feature = "thread_local_gc", debug_assertions))]
+    pub fn are_lines_valid(&self, forbidden_state: u8) -> bool {
+        for line in self.lines() {
+            if line.is_marked(forbidden_state) {
+                return false;
+            }
+        }
+        true
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn is_block_full(&self, state: u8) -> bool {
+        for line in self.lines() {
+            if !line.is_marked(state) {
+                return false;
+            }
+        }
+        true
     }
 
     // Defrag byte
@@ -168,7 +225,14 @@ impl Block {
 
     /// Deinitalize a block before releasing.
     pub fn deinit(&self) {
+        #[cfg(feature = "public_bit")]
+        crate::util::public_bit::bzero_public_bit(self.start(), Self::BYTES);
         self.set_state(BlockState::Unallocated);
+        #[cfg(feature = "thread_local_gc")]
+        {
+            // clear line state
+            self.reset_line_mark_state();
+        }
     }
 
     pub fn start_line(&self) -> Line {
@@ -184,89 +248,6 @@ impl Block {
     pub fn lines(&self) -> RegionIterator<Line> {
         debug_assert!(!super::BLOCK_ONLY);
         RegionIterator::<Line>::new(self.start_line(), self.end_line())
-    }
-
-    /// Sweep this block.
-    /// Return true if the block is swept.
-    pub fn sweep<VM: VMBinding>(
-        &self,
-        space: &ImmixSpace<VM>,
-        mark_histogram: &mut Histogram,
-        line_mark_state: Option<u8>,
-    ) -> bool {
-        if super::BLOCK_ONLY {
-            match self.get_state() {
-                BlockState::Unallocated => false,
-                BlockState::Unmarked => {
-                    #[cfg(feature = "vo_bit")]
-                    vo_bit::helper::on_region_swept::<VM, _>(self, false);
-
-                    // Release the block if it is allocated but not marked by the current GC.
-                    space.release_block(*self);
-                    true
-                }
-                BlockState::Marked => {
-                    #[cfg(feature = "vo_bit")]
-                    vo_bit::helper::on_region_swept::<VM, _>(self, true);
-
-                    // The block is live.
-                    false
-                }
-                _ => unreachable!(),
-            }
-        } else {
-            // Calculate number of marked lines and holes.
-            let mut marked_lines = 0;
-            let mut holes = 0;
-            let mut prev_line_is_marked = true;
-            let line_mark_state = line_mark_state.unwrap();
-
-            for line in self.lines() {
-                if line.is_marked(line_mark_state) {
-                    marked_lines += 1;
-                    prev_line_is_marked = true;
-                } else {
-                    if prev_line_is_marked {
-                        holes += 1;
-                    }
-
-                    #[cfg(feature = "immix_zero_on_release")]
-                    crate::util::memory::zero(line.start(), Line::BYTES);
-
-                    prev_line_is_marked = false;
-                }
-            }
-
-            if marked_lines == 0 {
-                #[cfg(feature = "vo_bit")]
-                vo_bit::helper::on_region_swept::<VM, _>(self, false);
-
-                // Release the block if non of its lines are marked.
-                space.release_block(*self);
-                true
-            } else {
-                // There are some marked lines. Keep the block live.
-                if marked_lines != Block::LINES {
-                    // There are holes. Mark the block as reusable.
-                    self.set_state(BlockState::Reusable {
-                        unavailable_lines: marked_lines as _,
-                    });
-                    space.reusable_blocks.push(*self)
-                } else {
-                    // Clear mark state.
-                    self.set_state(BlockState::Unmarked);
-                }
-                // Update mark_histogram
-                mark_histogram[holes] += marked_lines;
-                // Record number of holes in block side metadata.
-                self.set_holes(holes);
-
-                #[cfg(feature = "vo_bit")]
-                vo_bit::helper::on_region_swept::<VM, _>(self, true);
-
-                false
-            }
-        }
     }
 
     /// Clear VO bits metadata for unmarked regions.
@@ -299,9 +280,363 @@ impl Block {
             }
         }
     }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn thread_local_can_sweep<VM: VMBinding>(
+        &self,
+        _space: &ImmixSpace<VM>,
+        mark_histogram: &mut Histogram,
+        line_mark_state: Option<u8>,
+    ) -> bool {
+        if super::BLOCK_ONLY {
+            match self.get_state() {
+                BlockState::Unmarked => {
+                    #[cfg(feature = "vo_bit")]
+                    vo_bit::helper::on_region_swept::<VM, _>(self, false);
+
+                    if self.is_block_published() {
+                        // liveness of public block is unknown during thread-local gc
+                        // so conservatively treat it as live
+                        false
+                    } else {
+                        // true if it is private and not marked by the current GC
+                        // or if the current one is a global gc
+                        true
+                    }
+                }
+                BlockState::Marked => {
+                    #[cfg(feature = "vo_bit")]
+                    vo_bit::helper::on_region_swept::<VM, _>(self, true);
+
+                    // The block is live.
+                    false
+                }
+                _ => unreachable!(),
+            }
+        } else {
+            // Calculate number of marked lines and holes.
+            let mut marked_lines = 0;
+            let mut holes = 0;
+            let mut prev_line_is_marked = true;
+            let line_mark_state = line_mark_state.unwrap();
+            let publish_state = Line::public_line_mark_state(line_mark_state);
+
+            let is_published = self.is_block_published();
+
+            for line in self.lines() {
+                #[cfg(debug_assertions)]
+                {
+                    #[cfg(feature = "thread_local_gc_copying")]
+                    {
+                        if line.is_public_line() {
+                            assert!(
+                                line.is_published(publish_state),
+                                "public line: {:?} is not marked, owner: {:?}, line mark state: {}",
+                                line,
+                                self.owner(),
+                                line.get_line_mark_state()
+                            );
+                            assert!(
+                                is_published,
+                                "private block: {:?} contains public line: {:?} after a local gc",
+                                self, line
+                            );
+                        } else {
+                            assert!(
+                                !line.is_published(publish_state),
+                                "private line: {:?} is marked as public, block: {:?}, {:?}",
+                                line,
+                                self.owner(),
+                                is_published
+                            );
+                            assert!(
+                                !is_published || !line.is_marked(line_mark_state),
+                                "public block: {:?} contains private line: {:?} after a local gc",
+                                self,
+                                line
+                            );
+                        }
+                    }
+                    #[cfg(feature = "thread_local_gc_ibm_style")]
+                    {
+                        if !line.is_public_line() {
+                            assert!(
+                                !line.is_published(publish_state),
+                                "private line: {:?} is marked as public, block: {:?}, {:?}",
+                                line,
+                                self.owner(),
+                                self.is_block_published()
+                            );
+                        }
+                        if line.is_published(publish_state) {
+                            assert!(
+                                line.is_public_line(),
+                                "public line: {:?} is not marked, owner: {:?}, line mark state: {}",
+                                line,
+                                self.owner(),
+                                line.get_line_mark_state()
+                            );
+                        }
+                    }
+                }
+                if line.is_marked(line_mark_state) || line.is_published(publish_state) {
+                    marked_lines += 1;
+                    prev_line_is_marked = true;
+                } else {
+                    if prev_line_is_marked {
+                        holes += 1;
+                    }
+                    #[cfg(debug_assertions)]
+                    {
+                        crate::util::memory::set(line.start(), 0xCA, Line::BYTES);
+                        line.clear_line_mark_state();
+                    }
+
+                    #[cfg(feature = "immix_zero_on_release")]
+                    crate::util::memory::zero(line.start(), Line::BYTES);
+
+                    prev_line_is_marked = false;
+                }
+            }
+
+            if marked_lines == 0 {
+                #[cfg(feature = "vo_bit")]
+                vo_bit::helper::on_region_swept::<VM, _>(self, false);
+                // liveness of public block is unknown during thread-local gc
+                // so conservatively treat it as alive
+                if is_published {
+                    false
+                } else {
+                    #[cfg(all(feature = "debug_publish_object", debug_assertions))]
+                    {
+                        // check if locally freed blocks exist in global reusable pool
+                        _space.reusable_blocks.iterate_blocks(|block| {
+                            debug_assert!(
+                                self.0 != block.0,
+                                "Block: {:?} is now reclaimed and should not be in the reusable pool",
+                                self
+                            )
+                        });
+                    }
+
+                    true
+                }
+            } else {
+                // There are some marked lines. Keep the block live.
+                if marked_lines != Block::LINES {
+                    // There are holes. Mark the block as reusable.
+                    self.set_state(BlockState::Reusable {
+                        unavailable_lines: marked_lines as _,
+                    });
+                } else {
+                    // Clear mark state.
+                    self.set_state(BlockState::Unmarked);
+                }
+                // Update mark_histogram
+                mark_histogram[holes] += marked_lines;
+                // Record number of holes in block side metadata.
+                self.set_holes(holes);
+
+                #[cfg(feature = "vo_bit")]
+                vo_bit::helper::on_region_swept::<VM, _>(self, true);
+
+                false
+            }
+        }
+    }
+
+    /// Sweep this block.
+    /// Return true if the block is swept.
+    pub fn sweep<VM: VMBinding>(
+        &self,
+        space: &ImmixSpace<VM>,
+        mark_histogram: &mut Histogram,
+        line_mark_state: Option<u8>,
+    ) -> bool {
+        // This function is only called in a global gc
+        if super::BLOCK_ONLY {
+            match self.get_state() {
+                BlockState::Unallocated => false,
+                BlockState::Unmarked => {
+                    #[cfg(feature = "vo_bit")]
+                    vo_bit::helper::on_region_swept::<VM, _>(self, false);
+
+                    // Release the block if it is allocated but not marked by the current GC.
+                    #[cfg(feature = "thread_local_gc")]
+                    {
+                        self.clear_owner();
+                        self.reset_publication();
+                    }
+                    // release_block will set the block state to BlockState::Unallocated
+                    space.release_block(*self);
+                    true
+                }
+                BlockState::Marked => {
+                    #[cfg(feature = "vo_bit")]
+                    vo_bit::helper::on_region_swept::<VM, _>(self, true);
+
+                    // The block is live.
+                    false
+                }
+                _ => unreachable!(),
+            }
+        } else {
+            // Calculate number of marked lines and holes.
+            let mut marked_lines = 0;
+            let mut holes = 0;
+            let mut prev_line_is_marked = true;
+            let line_mark_state = line_mark_state.unwrap();
+            #[cfg(feature = "thread_local_gc")]
+            let publish_state = Line::public_line_mark_state(line_mark_state);
+            #[cfg(feature = "thread_local_gc_copying")]
+            let mut is_block_pubic = false;
+
+            for line in self.lines() {
+                #[cfg(all(feature = "thread_local_gc", debug_assertions))]
+                {
+                    #[cfg(feature = "thread_local_gc_copying")]
+                    {
+                        if line.is_public_line() {
+                            // public line bit is bulk set during page allocation, some lines may not have objects, so mark state can be 0
+                            assert!(
+                                line.is_published(publish_state) || line.is_marked(0),
+                                "public line: {:?} is not marked, owner: {:?}, line mark state: {}",
+                                line,
+                                self.owner(),
+                                line.get_line_mark_state()
+                            );
+                        } else {
+                            assert!(
+                                !line.is_published(publish_state),
+                                "private line: {:?} is marked as public, block: {:?}, {:?}",
+                                line,
+                                self.owner(),
+                                self.is_block_published()
+                            );
+                        }
+                    }
+                    #[cfg(feature = "thread_local_gc_ibm_style")]
+                    {
+                        if !line.is_public_line() {
+                            assert!(
+                                !line.is_published(publish_state),
+                                "private line: {:?} is marked as public, block: {:?}, {:?}",
+                                line,
+                                self.owner(),
+                                self.is_block_published()
+                            );
+                        }
+                        // In a non-moving setting, public line bit is not bulk reset during preparation
+                        // so it can be the case that a public line bit is set but the line in fact is reusable
+                        if line.is_published(publish_state) {
+                            assert!(
+                                line.is_public_line(),
+                                "public line: {:?} is not marked, owner: {:?}, line mark state: {}",
+                                line,
+                                self.owner(),
+                                line.get_line_mark_state()
+                            );
+                        }
+                    }
+                }
+
+                #[cfg(feature = "thread_local_gc")]
+                let is_line_published = line.is_published(publish_state);
+                #[cfg(not(feature = "thread_local_gc"))]
+                let is_line_published = false;
+
+                #[cfg(feature = "thread_local_gc_copying")]
+                if is_line_published {
+                    is_block_pubic = true;
+                }
+
+                if line.is_marked(line_mark_state) || is_line_published {
+                    marked_lines += 1;
+                    prev_line_is_marked = true;
+                } else {
+                    if prev_line_is_marked {
+                        holes += 1;
+                    }
+
+                    #[cfg(feature = "immix_zero_on_release")]
+                    crate::util::memory::zero(line.start(), Line::BYTES);
+
+                    prev_line_is_marked = false;
+                }
+            }
+
+            if marked_lines == 0 {
+                #[cfg(feature = "vo_bit")]
+                vo_bit::helper::on_region_swept::<VM, _>(self, false);
+                // Release the block if non of its lines are marked.
+                #[cfg(feature = "thread_local_gc")]
+                {
+                    self.clear_owner();
+                    self.reset_publication();
+                }
+                space.release_block(*self);
+
+                true
+            } else {
+                // There are some marked lines. Keep the block live.
+                if marked_lines != Block::LINES {
+                    // There are holes. Mark the block as reusable.
+                    self.set_state(BlockState::Reusable {
+                        unavailable_lines: marked_lines as _,
+                    });
+
+                    #[cfg(not(feature = "thread_local_gc"))]
+                    space.reusable_blocks.push(*self);
+                    // If copying thread local gc is enabled, only public blocks
+                    // can be reused
+                    #[cfg(feature = "thread_local_gc_copying")]
+                    {
+                        if self.is_block_published() {
+                            if is_block_pubic {
+                                debug_assert!(!self.is_defrag_source());
+                                self.set_owner(u32::MAX);
+                                space.reusable_blocks.push(*self);
+                            } else {
+                                debug_assert!(self.is_defrag_source());
+                                // This block is now private again(all private objects have been evacuated)
+                                self.reset_publication();
+                            }
+                        }
+                    }
+                } else {
+                    // Clear mark state.
+                    self.set_state(BlockState::Unmarked);
+                }
+                // Update mark_histogram
+                mark_histogram[holes] += marked_lines;
+                // Record number of holes in block side metadata.
+                self.set_holes(holes);
+
+                #[cfg(feature = "vo_bit")]
+                vo_bit::helper::on_region_swept::<VM, _>(self, true);
+
+                false
+            }
+        }
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn owner(&self) -> u32 {
+        Self::OWNER_TABLE.load_atomic::<u32>(self.start(), Ordering::SeqCst)
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn clear_owner(&self) {
+        self.set_owner(0);
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn set_owner(&self, owner: u32) {
+        Self::OWNER_TABLE.store_atomic::<u32>(self.start(), owner, Ordering::SeqCst)
+    }
 }
 
-/// A non-block single-linked list to store blocks.
+/// A non-blocking single-linked list to store blocks.
 pub struct ReusableBlockPool {
     queue: BlockPool<Block>,
     num_workers: usize,
@@ -339,6 +674,11 @@ impl ReusableBlockPool {
     /// Iterate all the blocks in the queue. Call the visitor for each reported block.
     pub fn iterate_blocks(&self, mut f: impl FnMut(Block)) {
         self.queue.iterate_blocks(&mut f);
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn thread_local_flush_blocks(&self, blocks: impl IntoIterator<Item = Block>) {
+        self.queue.flush_blocks(blocks);
     }
 
     /// Flush the block queue

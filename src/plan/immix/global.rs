@@ -1,5 +1,6 @@
 use super::gc_work::ImmixGCWorkContext;
 use super::mutator::ALLOCATOR_MAPPING;
+use crate::plan::barriers::BarrierSelector;
 use crate::plan::global::BasePlan;
 use crate::plan::global::CommonPlan;
 use crate::plan::global::CreateGeneralPlanArgs;
@@ -7,16 +8,30 @@ use crate::plan::global::CreateSpecificPlanArgs;
 use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
+#[cfg(feature = "thread_local_gc")]
+use crate::plan::PlanThreadlocalTraceObject;
+#[cfg(feature = "thread_local_gc")]
+use crate::plan::ThreadlocalTracedObjectType;
+#[cfg(feature = "thread_local_gc")]
+use crate::policy::gc_work::PolicyThreadlocalTraceObject;
 use crate::policy::immix::ImmixSpaceArgs;
 use crate::policy::immix::{TRACE_KIND_DEFRAG, TRACE_KIND_FAST};
 use crate::policy::space::Space;
+#[cfg(feature = "thread_local_gc")]
+use crate::scheduler::thread_local_gc_work::ThreadlocalPrepare;
 use crate::scheduler::*;
 use crate::util::alloc::allocators::AllocatorSelector;
 use crate::util::copy::*;
 use crate::util::heap::gc_trigger::SpaceStats;
 use crate::util::heap::VMRequest;
 use crate::util::metadata::side_metadata::SideMetadataContext;
+#[cfg(any(feature = "debug_publish_object", feature = "thread_local_gc"))]
+use crate::util::ObjectReference;
+#[cfg(feature = "thread_local_gc")]
+use crate::util::VMMutatorThread;
 use crate::vm::VMBinding;
+#[cfg(feature = "thread_local_gc")]
+use crate::Mutator;
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use std::sync::atomic::AtomicBool;
 
@@ -41,13 +56,28 @@ pub const IMMIX_CONSTRAINTS: PlanConstraints = PlanConstraints {
     moves_objects: crate::policy::immix::DEFRAG,
     // Max immix object size is half of a block.
     max_non_los_default_alloc_bytes: crate::policy::immix::MAX_IMMIX_OBJECT_SIZE,
-    needs_prepare_mutator: false,
+    barrier: BarrierSelector::PublicObjectMarkingBarrier,
     ..PlanConstraints::default()
 };
 
 impl<VM: VMBinding> Plan for Immix<VM> {
     fn collection_required(&self, space_full: bool, _space: Option<SpaceStats<Self::VM>>) -> bool {
         self.base().collection_required(self, space_full)
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn thread_local_collection_required(
+        &self,
+        _space_full: bool,
+        _space: Option<&dyn Space<Self::VM>>,
+        _tls: VMMutatorThread,
+    ) -> bool {
+        // let total_pages = self.base().gc_trigger.policy.get_heap_size_in_pages();
+        // // Simply use the defrag headhoom as the red zone size
+        // let red_zone_pages = self.get_collection_reserved_pages();
+        // let thread_local_copy_reserve_pages = self.get_thread_local_collection_reserved_pages();
+        // self.get_used_pages() + thread_local_copy_reserve_pages + red_zone_pages >= total_pages
+        true
     }
 
     fn last_collection_was_exhaustive(&self) -> bool {
@@ -76,6 +106,23 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             ImmixGCWorkContext<VM, TRACE_KIND_FAST>,
             ImmixGCWorkContext<VM, TRACE_KIND_DEFRAG>,
         >(self, &self.immix_space, scheduler)
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn do_thread_local_collection(
+        &'static self,
+        tls: VMMutatorThread,
+        mmtk: &'static crate::MMTK<VM>,
+    ) {
+        use crate::policy::immix::{TRACE_THREAD_LOCAL_DEFRAG, TRACE_THREAD_LOCAL_FAST};
+
+        self.base().set_collection_kind::<Self>(self);
+        // self.base().set_gc_status(GcStatus::GcPrepare);
+        Self::schedule_and_do_immix_thread_local_collection::<
+            Immix<VM>,
+            ImmixGCWorkContext<VM, TRACE_THREAD_LOCAL_FAST>,
+            ImmixGCWorkContext<VM, TRACE_THREAD_LOCAL_DEFRAG>,
+        >(tls, self, &self.immix_space, mmtk)
     }
 
     fn get_allocator_mapping(&self) -> &'static EnumMap<AllocationSemantics, AllocatorSelector> {
@@ -115,6 +162,38 @@ impl<VM: VMBinding> Plan for Immix<VM> {
 
     fn common(&self) -> &CommonPlan<VM> {
         &self.common
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn publish_object(&self, object: ObjectReference) {
+        if self.immix_space.in_space(object) {
+            self.immix_space.publish_object(object);
+        } else {
+            self.common().publish_object(object);
+        }
+    }
+
+    #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
+    fn get_object_owner(&self, _object: ObjectReference) -> Option<u32> {
+        if self.immix_space.in_space(_object) {
+            return Some(self.immix_space.get_object_owner(_object));
+        }
+        if self.common.get_los().in_space(_object) {
+            return Some(self.common.get_los().get_object_owner(_object));
+        }
+        None
+    }
+
+    #[cfg(feature = "debug_publish_object")]
+    fn is_object_published(&self, object: ObjectReference) -> bool {
+        debug_assert!(object.is_null() == false, "object is null");
+        if self.immix_space.in_space(object) {
+            self.immix_space.is_object_published(object)
+        } else {
+            // the object is not in immix space, it will not be moved
+            // so simply check if the object has been published or not
+            crate::util::public_bit::is_public::<VM>(object)
+        }
     }
 }
 
@@ -184,5 +263,183 @@ impl<VM: VMBinding> Immix<VM> {
 
     pub(in crate::plan) fn set_last_gc_was_defrag(&self, defrag: bool, order: Ordering) {
         self.last_gc_was_defrag.store(defrag, order)
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub(crate) fn schedule_and_do_immix_thread_local_collection<
+        PlanType: Plan<VM = VM>,
+        FastContext: 'static + GCWorkContext<VM = VM, PlanType = PlanType>,
+        DefragContext: 'static + GCWorkContext<VM = VM, PlanType = PlanType>,
+    >(
+        tls: VMMutatorThread,
+        plan: &'static PlanType,
+        immix_space: &ImmixSpace<VM>,
+        mmtk: &'static crate::MMTK<VM>,
+    ) {
+        use crate::policy::immix::{TRACE_THREAD_LOCAL_DEFRAG, TRACE_THREAD_LOCAL_FAST};
+        use crate::scheduler::thread_local_gc_work::{
+            EndOfThreadLocalGC, PlanThreadlocalObjectGraphTraversalClosure, ScanMutator,
+            ThreadlocalFinalization, ThreadlocalRelease,
+        };
+
+        let in_defrag = immix_space.decide_whether_to_defrag_in_thread_local_gc(
+            plan.is_emergency_collection(),
+            false,
+            plan.base().cur_collection_attempts.load(Ordering::SeqCst),
+            plan.base().is_user_triggered_collection(),
+            *plan.base().options.full_heap_system_gc,
+        );
+
+        if in_defrag {
+            // Prepare global/collectors/mutators
+            ThreadlocalPrepare::<VM>::new(tls).execute();
+
+            //Scan mutator
+            ScanMutator::<
+                VM,
+                PlanThreadlocalObjectGraphTraversalClosure<
+                    VM,
+                    Immix<VM>,
+                    TRACE_THREAD_LOCAL_DEFRAG,
+                >,
+            >::new(tls, mmtk)
+            .execute();
+
+            // Finalization has to be done before Release as it may resurrect objects
+            if !*plan.base().options.no_finalizer {
+                // finalization
+                ThreadlocalFinalization::<
+                    VM,
+                    PlanThreadlocalObjectGraphTraversalClosure<
+                        VM,
+                        Immix<VM>,
+                        TRACE_THREAD_LOCAL_DEFRAG,
+                    >,
+                >::new(tls, mmtk)
+                .do_finalization();
+            }
+
+            ThreadlocalRelease::<VM>::new(tls).execute();
+            let mut end_of_thread_local_gc = EndOfThreadLocalGC { tls };
+
+            end_of_thread_local_gc.execute(mmtk);
+        } else {
+            // Prepare global/collectors/mutators
+            ThreadlocalPrepare::<VM>::new(tls).execute();
+
+            //Scan mutator
+            ScanMutator::<
+                VM,
+                PlanThreadlocalObjectGraphTraversalClosure<VM, Immix<VM>, TRACE_THREAD_LOCAL_FAST>,
+            >::new(tls, mmtk)
+            .execute();
+
+            // Finalization and then do release
+            if !*plan.base().options.no_finalizer {
+                // finalization
+                ThreadlocalFinalization::<
+                    VM,
+                    PlanThreadlocalObjectGraphTraversalClosure<
+                        VM,
+                        Immix<VM>,
+                        TRACE_THREAD_LOCAL_FAST,
+                    >,
+                >::new(tls, mmtk)
+                .do_finalization();
+            }
+            ThreadlocalRelease::<VM>::new(tls).execute();
+            let mut end_of_thread_local_gc = EndOfThreadLocalGC { tls };
+
+            end_of_thread_local_gc.execute(mmtk);
+        }
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn get_thread_local_collection_reserved_pages(&self) -> usize {
+        #[cfg(feature = "thread_local_gc_copying")]
+        return self.immix_space.thread_local_gc_copy_reserve_pages();
+        #[cfg(not(feature = "thread_local_gc_copying"))]
+        return 0;
+    }
+}
+
+#[cfg(feature = "thread_local_gc")]
+impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for Immix<VM> {
+    fn thread_local_post_scan_object(&self, mutator: &Mutator<VM>, object: ObjectReference) {
+        if self.immix_space.in_space(object) {
+            <ImmixSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_post_scan_object(
+                &self.immix_space,
+                mutator,
+                object,
+            );
+            return;
+        }
+        <CommonPlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_post_scan_object(
+            &self.common,
+            mutator,
+            object,
+        )
+    }
+
+    fn thread_local_may_move_objects<const KIND: crate::policy::gc_work::TraceKind>() -> bool {
+        false
+            || <ImmixSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_may_move_objects::<
+                KIND,
+            >()
+            || <CommonPlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_may_move_objects::<
+                KIND,
+            >()
+    }
+
+    #[cfg(not(feature = "debug_publish_object"))]
+    fn thread_local_trace_object<const KIND: crate::policy::gc_work::TraceKind>(
+        &self,
+        mutator: &mut Mutator<VM>,
+        object: ObjectReference,
+    ) -> ThreadlocalTracedObjectType {
+        if self.immix_space.in_space(object) {
+            return <ImmixSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<
+                KIND,
+            >(
+                &self.immix_space,
+                mutator,
+                object,
+                Some(CopySemantics::DefaultCopy),
+            );
+        }
+        <CommonPlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+            &self.common,
+            mutator,
+            object,
+        )
+    }
+
+    #[cfg(feature = "debug_publish_object")]
+    fn thread_local_trace_object<const KIND: crate::policy::gc_work::TraceKind>(
+        &self,
+        mutator: &mut Mutator<VM>,
+        source: ObjectReference,
+        slot: VM::VMEdge,
+        object: ObjectReference,
+    ) -> ThreadlocalTracedObjectType {
+        if self.immix_space.in_space(object) {
+            return <ImmixSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<
+                KIND,
+            >(
+                &self.immix_space,
+                mutator,
+                source,
+                slot,
+                object,
+                Some(CopySemantics::DefaultCopy),
+            );
+        }
+        <CommonPlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+            &self.common,
+            mutator,
+            source,
+            slot,
+            object,
+        )
     }
 }

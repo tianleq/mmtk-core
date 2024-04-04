@@ -21,7 +21,10 @@ impl MockScanning {
     }
 
     fn mock_scan_roots(&self, mut factory: impl mmtk::vm::RootsWorkFactory<Address>) {
+        #[cfg(not(feature = "debug_publish_object"))]
         factory.create_process_edge_roots_work(self.roots.clone());
+        #[cfg(feature = "debug_publish_object")]
+        factory.create_process_edge_roots_work(0, self.roots.clone());
     }
 }
 
@@ -42,7 +45,32 @@ struct MockFactory {
 }
 
 impl RootsWorkFactory<Address> for MockFactory {
+    #[cfg(not(feature = "debug_publish_object"))]
     fn create_process_edge_roots_work(&mut self, edges: Vec<Address>) {
+        assert_eq!(edges, EDGES);
+        match self.round {
+            1 => {
+                assert_eq!(self.v, "y");
+                assert_eq!(*self.b, "b");
+                assert_eq!(self.a.lock().unwrap().clone(), "a");
+            }
+            2 => {
+                assert_eq!(self.v, "y");
+                assert_eq!(*self.b, "b");
+                assert_eq!(self.a.lock().unwrap().clone(), "a2");
+            }
+            3 => {
+                assert_eq!(self.v, "y2");
+                assert_eq!(*self.b, "b2");
+                assert_eq!(self.a.lock().unwrap().clone(), "a2");
+            }
+            _ => {
+                panic!("Unreachable");
+            }
+        }
+    }
+    #[cfg(feature = "debug_publish_object")]
+    fn create_process_edge_roots_work(&mut self, _vm_roots: u8, edges: Vec<Address>) {
         assert_eq!(edges, EDGES);
         match self.round {
             1 => {

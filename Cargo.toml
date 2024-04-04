@@ -64,7 +64,7 @@ name = "main"
 harness = false
 
 [features]
-default = []
+default = ["public_bit","immix_non_moving"]
 
 # This feature is only supported on x86-64 for now
 # It's manually added to CI scripts
@@ -108,6 +108,29 @@ is_mmtk_object = ["vo_bit"]
 
 # Enable object pinning, in particular, enable pinning/unpinning, and its metadata
 object_pinning = []
+
+# Enable marking public objects
+public_bit = []
+
+#Enable allocate extra header of each individual object
+extra_header = []
+
+#Enable debugging publishing object
+debug_publish_object = ["extra_header", "public_bit"]
+
+debug_publish_object_overhead = ["public_bit"]
+
+#Enable thread local gc
+thread_local_gc = ["public_bit"]
+
+#Enable ibm style thread local gc
+thread_local_gc_ibm_style = ["thread_local_gc", "immix_non_moving"]
+
+#Enable ibm style thread local gc
+thread_local_gc_copying = ["thread_local_gc"]
+
+#Enable object publication analysis
+public_object_analysis = []
 
 # The following two features are useful for using Immix for VMs that do not support moving GC.
 

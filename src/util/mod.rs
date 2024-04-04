@@ -65,6 +65,12 @@ pub(crate) mod statistics;
 /// A treadmill implementation.
 pub(crate) mod treadmill;
 
+#[cfg(feature = "public_bit")]
+pub(crate) mod public_bit;
+
+#[cfg(feature = "extra_header")]
+pub(crate) mod object_extra_header_metadata;
+
 // These modules are private. They are only used by other util modules.
 
 /// A very simple, generic malloc-free allocator
@@ -75,6 +81,32 @@ mod int_array_freelist;
 /// on demand direct from the OS (via mmap).
 mod raw_memory_freelist;
 
+use std::sync::atomic::AtomicU32;
+
 pub use self::address::Address;
 pub use self::address::ObjectReference;
 pub use self::opaque_pointer::*;
+
+pub(crate) static MUTATOR_ID_GENERATOR: AtomicU32 = AtomicU32::new(1);
+#[cfg(feature = "public_object_analysis")]
+#[derive(Default)]
+pub(crate) struct Statistics {
+    pub allocation_count: usize,
+    pub allocation_bytes: usize,
+    pub public_count: usize,
+    pub public_bytes: usize,
+}
+
+#[cfg(feature = "public_object_analysis")]
+lazy_static! {
+    pub(crate) static ref REQUEST_SCOPE_OBJECTS_STATS: std::sync::Mutex<Statistics> =
+        std::sync::Mutex::new(Statistics::default());
+    pub(crate) static ref HARNESS_SCOPE_OBJECTS_STATS: std::sync::Mutex<Statistics> =
+        std::sync::Mutex::new(Statistics::default());
+    pub(crate) static ref ALL_SCOPE_OBJECTS_STATS: std::sync::Mutex<Statistics> =
+        std::sync::Mutex::new(Statistics::default());
+}
+
+#[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
+pub(crate) static LOCAL_GC_ID_GENERATOR: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(1);

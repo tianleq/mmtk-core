@@ -3,17 +3,20 @@ use super::*;
 use crate::vm::VMBinding;
 use crossbeam::deque::{Injector, Steal, Worker};
 use enum_map::Enum;
+use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 struct BucketQueue<VM: VMBinding> {
     queue: Injector<Box<dyn GCWork<VM>>>,
+    sentinel: RefCell<Steal<Box<dyn GCWork<VM>>>>,
 }
 
 impl<VM: VMBinding> BucketQueue<VM> {
     fn new() -> Self {
         Self {
             queue: Injector::new(),
+            sentinel: RefCell::new(Steal::Empty),
         }
     }
 
@@ -37,6 +40,30 @@ impl<VM: VMBinding> BucketQueue<VM> {
             self.queue.push(w);
         }
     }
+
+    fn steal(&self) -> Steal<Box<dyn GCWork<VM>>> {
+        self.queue.steal()
+    }
+
+    fn set_sentinel(&self, w: Box<dyn GCWork<VM>>) {
+        let sentinel = self.sentinel.replace(Steal::Success(w));
+        debug_assert!(
+            sentinel.is_empty(),
+            "Local sentinel is not cleared properly"
+        );
+        debug_assert!(self.sentinel_exists(), "sentinel is missing");
+    }
+
+    fn sentinel_exists(&self) -> bool {
+        !self.sentinel.borrow().is_empty()
+    }
+
+    fn steal_sentinel(&self) -> Steal<Box<dyn GCWork<VM>>> {
+        let steal = self.sentinel.replace(Steal::Empty);
+        debug_assert!(steal.is_success(), "Local sentinel is empty");
+
+        steal
+    }
 }
 
 pub type BucketOpenCondition<VM> = Box<dyn (Fn(&GCWorkScheduler<VM>) -> bool) + Send>;
@@ -44,6 +71,7 @@ pub type BucketOpenCondition<VM> = Box<dyn (Fn(&GCWorkScheduler<VM>) -> bool) + 
 pub struct WorkBucket<VM: VMBinding> {
     active: AtomicBool,
     queue: BucketQueue<VM>,
+    thread_local_queues: Vec<BucketQueue<VM>>,
     prioritized_queue: Option<BucketQueue<VM>>,
     monitor: Arc<WorkerMonitor>,
     can_open: Option<BucketOpenCondition<VM>>,
@@ -62,10 +90,15 @@ pub struct WorkBucket<VM: VMBinding> {
 }
 
 impl<VM: VMBinding> WorkBucket<VM> {
-    pub(crate) fn new(active: bool, monitor: Arc<WorkerMonitor>) -> Self {
+    pub(crate) fn new(active: bool, monitor: Arc<WorkerMonitor>, num_workers: usize) -> Self {
+        let mut thread_local_queues = Vec::with_capacity(num_workers);
+        for _ in 0..num_workers {
+            thread_local_queues.push(BucketQueue::<VM>::new());
+        }
         Self {
             active: AtomicBool::new(active),
             queue: BucketQueue::new(),
+            thread_local_queues,
             prioritized_queue: None,
             monitor,
             can_open: None,
@@ -102,12 +135,24 @@ impl<VM: VMBinding> WorkBucket<VM> {
 
     /// Test if the bucket is drained
     pub fn is_empty(&self) -> bool {
-        self.queue.is_empty()
-            && self
-                .prioritized_queue
-                .as_ref()
-                .map(|q| q.is_empty())
-                .unwrap_or(true)
+        let ordinal = crate::scheduler::current_worker_ordinal();
+        if ordinal.is_none() {
+            self.queue.is_empty()
+                && self
+                    .prioritized_queue
+                    .as_ref()
+                    .map(|q| q.is_empty())
+                    .unwrap_or(true)
+        } else {
+            self.thread_local_queues[ordinal.unwrap()].is_empty()
+                && !self.has_local_sentinel()
+                && self.queue.is_empty()
+                && self
+                    .prioritized_queue
+                    .as_ref()
+                    .map(|q| q.is_empty())
+                    .unwrap_or(true)
+        }
     }
 
     pub fn is_drained(&self) -> bool {
@@ -125,6 +170,14 @@ impl<VM: VMBinding> WorkBucket<VM> {
     pub fn add_prioritized(&self, work: Box<dyn GCWork<VM>>) {
         self.prioritized_queue.as_ref().unwrap().push(work);
         self.notify_one_worker();
+    }
+
+    /// Add a work packet to the local queue
+    /// This function can only be called by gc threads who owns the local queue
+    /// so no need to notify other gc threads
+    pub fn add_local<W: GCWork<VM>>(&self, work: W) {
+        let ordinal = crate::scheduler::current_worker_ordinal().unwrap();
+        self.thread_local_queues[ordinal].push(Box::new(work));
     }
 
     /// Add a work packet to this bucket
@@ -159,12 +212,31 @@ impl<VM: VMBinding> WorkBucket<VM> {
         }
     }
 
+    /// Add multiple packets
+    pub fn bulk_add_local(&self, work_vec: Vec<Box<dyn GCWork<VM>>>) {
+        if work_vec.is_empty() {
+            return;
+        }
+        let ordinal = crate::scheduler::current_worker_ordinal().unwrap();
+
+        for w in work_vec {
+            self.thread_local_queues[ordinal].push(w);
+        }
+    }
+
     /// Get a work packet from this bucket
     pub fn poll(&self, worker: &Worker<Box<dyn GCWork<VM>>>) -> Steal<Box<dyn GCWork<VM>>> {
         if !self.is_activated() || self.is_empty() {
             return Steal::Empty;
         }
-        if let Some(prioritized_queue) = self.prioritized_queue.as_ref() {
+        let oridinal = crate::scheduler::current_worker_ordinal().unwrap();
+        // check private local queue first, if it is empty
+        // then check the local sentinel
+        if !self.thread_local_queues[oridinal].is_empty() {
+            self.thread_local_queues[oridinal].steal()
+        } else if self.has_local_sentinel() {
+            self.thread_local_queues[oridinal].steal_sentinel()
+        } else if let Some(prioritized_queue) = self.prioritized_queue.as_ref() {
             prioritized_queue
                 .steal_batch_and_pop(worker)
                 .or_else(|| self.queue.steal_batch_and_pop(worker))
@@ -188,6 +260,16 @@ impl<VM: VMBinding> WorkBucket<VM> {
     pub fn has_sentinel(&self) -> bool {
         let sentinel = self.sentinel.lock().unwrap();
         sentinel.is_some()
+    }
+
+    fn has_local_sentinel(&self) -> bool {
+        let ordinal = crate::scheduler::current_worker_ordinal().unwrap();
+        self.thread_local_queues[ordinal].sentinel_exists()
+    }
+
+    pub fn set_local_sentinel(&self, new_sentinel: Box<dyn GCWork<VM>>) {
+        let ordinal = crate::scheduler::current_worker_ordinal().unwrap();
+        self.thread_local_queues[ordinal].set_sentinel(new_sentinel);
     }
 
     pub fn update(&self, scheduler: &GCWorkScheduler<VM>) -> bool {

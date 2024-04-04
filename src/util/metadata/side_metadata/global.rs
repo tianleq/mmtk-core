@@ -6,6 +6,7 @@ use crate::util::memory;
 use crate::util::metadata::metadata_val_traits::*;
 #[cfg(feature = "vo_bit")]
 use crate::util::metadata::vo_bit::VO_BIT_SIDE_METADATA_SPEC;
+use crate::util::public_bit::PUBLIC_SIDE_METADATA_SPEC;
 use crate::util::Address;
 use num_traits::FromPrimitive;
 use std::fmt;
@@ -1046,6 +1047,7 @@ impl SideMetadataContext {
 
         #[cfg(feature = "vo_bit")]
         ret.push(VO_BIT_SIDE_METADATA_SPEC);
+        ret.push(PUBLIC_SIDE_METADATA_SPEC);
 
         if let Some(spec) = crate::mmtk::SFT_MAP.get_side_metadata() {
             if spec.is_global {

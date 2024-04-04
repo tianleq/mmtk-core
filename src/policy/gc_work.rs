@@ -6,10 +6,13 @@ pub const DEFAULT_TRACE: u8 = u8::MAX;
 pub const TRACE_KIND_TRANSITIVE_PIN: u8 = DEFAULT_TRACE - 1;
 
 use crate::plan::ObjectQueue;
+#[cfg(feature = "thread_local_gc")]
+use crate::plan::ThreadlocalTracedObjectType;
 use crate::scheduler::GCWorker;
 use crate::util::copy::CopySemantics;
-
 use crate::util::ObjectReference;
+#[cfg(feature = "thread_local_gc")]
+use crate::Mutator;
 
 use crate::vm::VMBinding;
 
@@ -37,4 +40,39 @@ pub trait PolicyTraceObject<VM: VMBinding> {
 
     /// Return whether the policy moves objects.
     fn may_move_objects<const KIND: TraceKind>() -> bool;
+}
+
+#[cfg(feature = "thread_local_gc")]
+pub trait PolicyThreadlocalTraceObject<VM: VMBinding> {
+    #[cfg(not(feature = "debug_publish_object"))]
+    /// Trace object in the policy. If the policy copies objects, we should
+    /// expect `copy` to be a `Some` value.
+    fn thread_local_trace_object<const KIND: TraceKind>(
+        &self,
+        mutator: &mut Mutator<VM>,
+        object: ObjectReference,
+        copy: Option<CopySemantics>,
+    ) -> ThreadlocalTracedObjectType;
+
+    #[cfg(feature = "debug_publish_object")]
+    /// Trace object in the policy. If the policy copies objects, we should
+    /// expect `copy` to be a `Some` value.
+    fn thread_local_trace_object<const KIND: TraceKind>(
+        &self,
+        mutator: &mut Mutator<VM>,
+        source: ObjectReference,
+        slot: VM::VMEdge,
+        object: ObjectReference,
+        copy: Option<CopySemantics>,
+        // worker: &mut GCWorker<VM>,
+    ) -> ThreadlocalTracedObjectType;
+
+    /// Policy-specific post-scan-object hook.  It is called after scanning
+    /// each object in this space.
+    fn thread_local_post_scan_object(&self, _mutator: &Mutator<VM>, _object: ObjectReference) {
+        // Do nothing.
+    }
+
+    /// Return whether the policy moves objects.
+    fn thread_local_may_move_objects<const KIND: TraceKind>() -> bool;
 }

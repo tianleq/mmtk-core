@@ -93,7 +93,6 @@ impl<VM: VMBinding> GCController<VM> {
             self.scheduler.worker_monitor.debug_is_sleeping(),
             "Workers are still doing work when GC started."
         );
-
         // Add a ScheduleCollection work packet.  It is the seed of other work packets.
         self.scheduler.work_buckets[WorkBucketStage::Unconstrained].add(ScheduleCollection);
 
@@ -144,5 +143,25 @@ impl<VM: VMBinding> GCController<VM> {
         end_of_gc.do_work_with_stat(&mut self.coordinator_worker, self.mmtk);
 
         self.scheduler.debug_assert_all_buckets_deactivated();
+    }
+
+    /// Find more work for workers to do.  Return true if more work is available.
+    fn find_more_work_for_workers(&mut self) -> bool {
+        if self.scheduler.worker_group.has_designated_work() {
+            return true;
+        }
+
+        // See if any bucket has a sentinel.
+        if self.scheduler.schedule_sentinels() {
+            return true;
+        }
+
+        // Try to open new buckets.
+        if self.scheduler.update_buckets() {
+            return true;
+        }
+
+        // If all of the above failed, it means GC has finished.
+        false
     }
 }

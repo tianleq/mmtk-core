@@ -80,6 +80,9 @@ impl<VM: VMBinding> Plan for NoGC<VM> {
             + self.los.reserved_pages()
             + self.base.get_used_pages()
     }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn publish_object(&self, _object: crate::util::ObjectReference) {}
 }
 
 impl<VM: VMBinding> NoGC<VM> {

@@ -27,6 +27,8 @@ pub(crate) use global::CreateGeneralPlanArgs;
 pub(crate) use global::HasSpaces;
 pub use global::Plan;
 pub(crate) use global::PlanTraceObject;
+#[cfg(feature = "thread_local_gc")]
+pub(crate) use global::{PlanThreadlocalTraceObject, ThreadlocalTracedObjectType};
 
 mod mutator_context;
 pub use mutator_context::Mutator;
@@ -37,7 +39,9 @@ pub use plan_constraints::PlanConstraints;
 pub(crate) use plan_constraints::DEFAULT_PLAN_CONSTRAINTS;
 
 mod tracing;
-pub use tracing::{ObjectQueue, ObjectsClosure, VectorObjectQueue, VectorQueue};
+pub use tracing::{
+    ObjectQueue, ObjectsClosure, PublishObjectClosure, VectorObjectQueue, VectorQueue,
+};
 
 /// Generational plans (with a copying nursery)
 mod generational;

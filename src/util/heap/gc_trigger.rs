@@ -4,13 +4,19 @@ use crate::global_state::GlobalState;
 use crate::plan::gc_requester::GCRequester;
 use crate::plan::Plan;
 use crate::policy::space::Space;
-use crate::util::conversions;
 use crate::util::options::{GCTriggerSelector, Options};
+use crate::util::{conversions, VMMutatorThread};
 use crate::vm::VMBinding;
 use crate::MMTK;
 use std::mem::MaybeUninit;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum GCKind {
+    GLOBAL,
+    LOCAL,
+}
 
 /// GCTrigger is responsible for triggering GCs based on the given policy.
 /// All the decisions about heap limit and GC triggering should be resolved here.
@@ -65,7 +71,12 @@ impl<VM: VMBinding> GCTrigger<VM> {
     /// Arguments:
     /// * `space_full`: Space request failed, must recover pages within 'space'.
     /// * `space`: The space that triggered the poll. This could `None` if the poll is not triggered by a space.
-    pub fn poll(&self, space_full: bool, space: Option<&dyn Space<VM>>) -> bool {
+    pub fn poll(
+        &self,
+        space_full: bool,
+        space: Option<&dyn Space<VM>>,
+        _tls: VMMutatorThread,
+    ) -> Option<GCKind> {
         let plan = unsafe { self.plan.assume_init() };
         if self
             .policy
@@ -82,10 +93,11 @@ impl<VM: VMBinding> GCTrigger<VM> {
                 plan.get_reserved_pages(),
                 plan.get_total_pages(),
             );
+
             self.gc_requester.request();
-            return true;
+            return Some(GCKind::GLOBAL);
         }
-        false
+        None
     }
 
     pub fn should_do_stress_gc(&self) -> bool {
@@ -159,6 +171,21 @@ pub trait GCTriggerPolicy<VM: VMBinding>: Sync + Send {
         space: Option<SpaceStats<VM>>,
         plan: &dyn Plan<VM = VM>,
     ) -> bool;
+
+    #[cfg(feature = "thread_local_gc")]
+    /// Is a thread-local GC required now?
+    fn is_thread_local_gc_required(
+        &self,
+        space_full: bool,
+        space: Option<SpaceStats<VM>>,
+        plan: &dyn Plan<VM = VM>,
+        tls: VMMutatorThread,
+    ) -> bool;
+    
+    #[cfg(feature = "thread_local_gc")]
+    fn on_thread_local_gc_start(&self, _mmtk: &'static MMTK<VM>) {}
+    #[cfg(feature = "thread_local_gc")]
+    fn on_thread_local_gc_end(&self, _mmtk: &'static MMTK<VM>) {}
     /// Is current heap full?
     fn is_heap_full(&self, plan: &dyn Plan<VM = VM>) -> bool;
     /// Return the current heap size (in pages)
@@ -200,6 +227,20 @@ impl<VM: VMBinding> GCTriggerPolicy<VM> for FixedHeapSizeTrigger {
     fn can_heap_size_grow(&self) -> bool {
         false
     }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn is_thread_local_gc_required(
+        &self,
+        space_full: bool,
+        space: Option<&dyn Space<VM>>,
+        plan: &dyn Plan<VM = VM>,
+        tls: VMMutatorThread,
+    ) -> bool {
+        plan.thread_local_collection_required(space_full, space, tls)
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn on_thread_local_gc_end(&self, _mmtk: &'static MMTK<VM>) {}
 }
 
 use atomic_refcell::AtomicRefCell;
@@ -465,6 +506,17 @@ impl<VM: VMBinding> GCTriggerPolicy<VM> for MemBalancerTrigger {
 
     fn can_heap_size_grow(&self) -> bool {
         self.current_heap_pages.load(Ordering::Relaxed) < self.max_heap_pages
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn is_thread_local_gc_required(
+        &self,
+        _space_full: bool,
+        _space: Option<&dyn Space<VM>>,
+        _plan: &dyn Plan<VM = VM>,
+        _tls: VMMutatorThread,
+    ) -> bool {
+        false
     }
 }
 impl MemBalancerTrigger {

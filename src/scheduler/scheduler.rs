@@ -41,7 +41,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         let mut work_buckets = EnumMap::from_array(array_from_fn(|stage_num| {
             let stage = WorkBucketStage::from_usize(stage_num);
             let active = stage == WorkBucketStage::Unconstrained;
-            WorkBucket::new(active, worker_monitor.clone())
+            WorkBucket::new(active, worker_monitor.clone(), num_workers)
         }));
 
         // Set the open condition of each bucket.
@@ -180,7 +180,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         //
         // It is also not sound for MMTk core to turn off weak
         // reference processing or finalization alone, because (1) not all VMs have the notion of
-        // weak references or finalizers, so it may not make sence, and (2) the VM may
+        // weak references or finalizers, so it may not make sense, and (2) the VM may
         // processing them together.
 
         // VM-specific weak ref processing
@@ -312,13 +312,14 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             return Steal::Success(w);
         }
         // Try get a packet from a work bucket.
-        for work_bucket in self.work_buckets.values() {
+        for (_, work_bucket) in self.work_buckets.iter() {
             match work_bucket.poll(&worker.local_work_buffer) {
                 Steal::Success(w) => return Steal::Success(w),
                 Steal::Retry => should_retry = true,
                 _ => {}
             }
         }
+
         // Try steal some packets from any worker
         for (id, worker_shared) in self.worker_group.workers_shared.iter().enumerate() {
             if id == worker.ordinal {
@@ -330,6 +331,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 _ => {}
             }
         }
+
         if should_retry {
             Steal::Retry
         } else {

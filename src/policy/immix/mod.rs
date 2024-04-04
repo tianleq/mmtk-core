@@ -31,10 +31,24 @@ pub const DEFRAG: bool = !cfg!(feature = "immix_non_moving"); // defrag if we ar
 // | `DEFRAG_HEADROOM_PERCENT` | default | `2`     | Immix stops copying when space exhausted.                            |
 // | `DEFRAG_HEADROOM_PERCENT` | stress  | `50`    | Reserve enough headroom to copy all objects.  50% is like SemiSpace. |
 
+#[cfg(not(feature = "thread_local_gc"))]
 /// Make every GC a defragment GC. (for debugging)
 pub const STRESS_DEFRAG: bool = false;
 
+#[cfg(not(feature = "thread_local_gc"))]
 /// Mark every allocated block as defragmentation source before GC. (for debugging)
+pub const DEFRAG_EVERY_BLOCK: bool = false;
+
+#[cfg(feature = "thread_local_gc")]
+/// Make every GC a defragment GC to make sure
+/// public objects are always strictly evacuated
+/// in global gc
+pub const STRESS_DEFRAG: bool = DEFRAG;
+
+#[cfg(feature = "thread_local_gc")]
+/// Mark every allocated block as defragmentation source before GC.
+/// This and `STRESS_DEFRAG` are used to ensure public objects are
+/// always strictly evacuated in global gc
 pub const DEFRAG_EVERY_BLOCK: bool = false;
 
 /// Percentage of heap size reserved for defragmentation.
@@ -67,3 +81,7 @@ fn validate_features() {
     // Number of lines in a block should not exceed BlockState::MARK_MARKED
     assert!(Block::LINES / 2 <= u8::MAX as usize - 2);
 }
+
+#[cfg(feature = "thread_local_gc_copying")]
+pub(crate) static LOCAL_GC_COPY_RESERVE_PAGES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);

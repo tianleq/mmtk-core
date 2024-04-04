@@ -429,21 +429,21 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.defrag.in_defrag()
     }
 
-    #[cfg(feature = "thread_local_gc")]
-    /// check if the current GC should do defragmentation.
-    pub fn decide_whether_to_defrag_in_thread_local_gc(
-        &self,
-        _emergency_collection: bool,
-        _collect_whole_heap: bool,
-        _collection_attempts: usize,
-        _user_triggered_collection: bool,
-        _full_heap_system_gc: bool,
-    ) -> bool {
-        #[cfg(feature = "thread_local_gc_ibm_style")]
-        return false;
-        #[cfg(feature = "thread_local_gc_copying")]
-        return true;
-    }
+    // #[cfg(feature = "thread_local_gc")]
+    // /// check if the current GC should do defragmentation.
+    // pub fn decide_whether_to_defrag_in_thread_local_gc(
+    //     &self,
+    //     _emergency_collection: bool,
+    //     _collect_whole_heap: bool,
+    //     _collection_attempts: usize,
+    //     _user_triggered_collection: bool,
+    //     _full_heap_system_gc: bool,
+    // ) -> bool {
+    //     #[cfg(feature = "thread_local_gc_ibm_style")]
+    //     return false;
+    //     #[cfg(feature = "thread_local_gc_copying")]
+    //     return true;
+    // }
 
     #[cfg(feature = "thread_local_gc_copying")]
     pub fn thread_local_gc_copy_reserve_pages(&self) -> usize {
@@ -734,7 +734,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                             object,
                             metadata,
                             Block::containing::<VM>(object).owner(),
-                            ForwardingWord::attempt_to_forward::<VM>(object),
+                            object_forwarding::attempt_to_forward::<VM>(object),
                             self.is_marked(object)
                         );
                     }
@@ -771,7 +771,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                             object,
                             metadata,
                             Block::containing::<VM>(object).owner(),
-                            ForwardingWord::attempt_to_forward::<VM>(object),
+                            object_forwarding::attempt_to_forward::<VM>(object),
                             self.is_marked(object)
                         );
                     }
@@ -891,12 +891,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 // When local gc is enabled, global gc only evacuates public object
                 #[cfg(feature = "thread_local_gc_copying")]
                 let new_object =
-                    ForwardingWord::forward_public_object::<VM>(object, semantics, copy_context);
+                    object_forwarding::forward_public_object::<VM>(object, semantics, copy_context);
 
                 // When local gc is enabled, global gc only evacuates public object
                 #[cfg(feature = "thread_local_gc_copying")]
                 let new_object =
-                    ForwardingWord::forward_public_object::<VM>(object, semantics, copy_context);
+                    object_forwarding::forward_public_object::<VM>(object, semantics, copy_context);
 
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_object_forwarded::<VM>(new_object);
@@ -1081,11 +1081,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         #[cfg(feature = "vo_bit")]
         vo_bit::helper::on_trace_object::<VM>(object);
         // Now object must be private, it needs to be evacuated
-        if ForwardingWord::thread_local_is_forwarded::<VM>(object) {
+        if object_forwarding::thread_local_is_forwarded::<VM>(object) {
             // Note that the object may not necessarily get forwarded
             // since Immix opportunistically moves objects.
             #[allow(clippy::let_and_return)]
-            let new_object = ForwardingWord::thread_local_get_forwarded_object::<VM>(object);
+            let new_object = object_forwarding::thread_local_get_forwarded_object::<VM>(object);
             #[cfg(debug_assertions)]
             {
                 if new_object == object {
@@ -1123,7 +1123,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 "Forwarded object is the same as original object {} even though it should have been copied",
                 object,
             );
-            ForwardingWord::clear_forwarding_bits::<VM>(object);
+            object_forwarding::clear_forwarding_bits::<VM>(object);
             ThreadlocalTracedObjectType::Scanned(object)
         } else {
             // actually forward and copy the object if it is not pinned
@@ -1141,8 +1141,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
                 // Clippy complains if the "vo_bit" feature is not enabled.
                 #[allow(clippy::let_and_return)]
-                let new_object =
-                    ForwardingWord::thread_local_forward_object::<VM>(object, semantics, mutator);
+                let new_object = object_forwarding::thread_local_forward_object::<VM>(
+                    object, semantics, mutator,
+                );
 
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_object_forwarded::<VM>(new_object);
@@ -1518,11 +1519,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     pub fn is_object_published(&self, object: ObjectReference) -> bool {
         debug_assert!(!object.is_null());
         let is_published = crate::util::public_bit::is_public::<VM>(object);
-        if ForwardingWord::is_forwarded_or_being_forwarded::<VM>(object) {
+        if object_forwarding::is_forwarded_or_being_forwarded::<VM>(object) {
             // object's public bit may have been cleared, so need to read the public bit on the forwarded object
-            let new_object = ForwardingWord::spin_and_get_forwarded_object::<VM>(
+            let new_object = object_forwarding::spin_and_get_forwarded_object::<VM>(
                 object,
-                ForwardingWord::get_forwarding_status::<VM>(object),
+                object_forwarding::get_forwarding_status::<VM>(object),
             );
 
             let is_published = crate::util::public_bit::is_public::<VM>(new_object);
@@ -1675,13 +1676,6 @@ impl<VM: VMBinding> PrepareBlockState<VM> {
         if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC {
             side.bzero_metadata(self.chunk.start(), Chunk::BYTES);
         }
-    }
-
-    #[cfg(feature = "thread_local_gc")]
-    fn reset_public_line_mark(&self) {
-        // In a non-moving setting, this is a no-op as public objects are not evacuated.
-        #[cfg(not(feature = "immix_non_moving"))]
-        Line::LINE_PUBLICATION_TABLE.bzero_metadata(self.chunk.start(), Chunk::BYTES);
     }
 
     #[cfg(feature = "thread_local_gc")]

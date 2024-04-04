@@ -135,15 +135,6 @@ pub trait RootsWorkFactory<ES: Edge>: Clone + Send + 'static {
     /// * `edges`: A vector of edges.
     fn create_process_edge_roots_work(&mut self, vm_roots_type: u8, edges: Vec<ES>);
 
-    #[cfg(feature = "debug_publish_object")]
-    /// Create work packets to handle root edges.
-    ///
-    /// The work packet may update the edges.
-    ///
-    /// Arguments:
-    /// * `edges`: A vector of edges.
-    fn create_process_edge_roots_work(&mut self, vm_roots_type: u8, edges: Vec<ES>);
-
     /// Create work packets to handle non-transitively pinning roots.
     ///
     /// The work packet will prevent the objects in `nodes` from moving,
@@ -165,11 +156,6 @@ pub trait RootsWorkFactory<ES: Edge>: Clone + Send + 'static {
     /// Arguments:
     /// * `nodes`: A vector of references to objects pointed by root edges.
     fn create_process_tpinning_roots_work(&mut self, nodes: Vec<ObjectReference>);
-}
-
-#[cfg(feature = "thread_local_gc")]
-pub trait ObjectGraphTraversal<ES: Edge> {
-    fn traverse_from_roots(&mut self, root_slots: Vec<ES>);
 }
 
 #[cfg(feature = "thread_local_gc")]
@@ -303,17 +289,6 @@ pub trait Scanning<VM: VMBinding> {
     /// * `tls`: The GC thread that is performing this scanning.
     /// * `factory`: The VM uses it to create work packets for scanning roots.
     fn scan_vm_specific_roots(tls: VMWorkerThread, factory: impl RootsWorkFactory<VM::VMEdge>);
-
-    /// Scan VM-specific roots in single thread. The creation of all root scan tasks (except thread scanning)
-    /// goes here.
-    ///
-    /// Arguments:
-    /// * `tls`: The GC thread that is performing this scanning.
-    /// * `factory`: The VM uses it to create work packets for scanning roots.
-    fn single_thread_scan_vm_specific_roots(
-        tls: VMWorkerThread,
-        factory: impl RootsWorkFactory<VM::VMEdge>,
-    );
 
     /// Return whether the VM supports return barriers. This is unused at the moment.
     fn supports_return_barrier() -> bool;

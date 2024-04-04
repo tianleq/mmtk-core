@@ -41,7 +41,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         let mut work_buckets = EnumMap::from_array(array_from_fn(|stage_num| {
             let stage = WorkBucketStage::from_usize(stage_num);
             let active = stage == WorkBucketStage::Unconstrained;
-            WorkBucket::new(active, worker_monitor.clone(), num_workers)
+            WorkBucket::new(active, worker_monitor.clone())
         }));
 
         // Set the open condition of each bucket.

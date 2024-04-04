@@ -550,7 +550,7 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
         let mut closure = PublishObjectClosure::<VM>::new(self.mmtk);
         set_public_bit::<VM>(value);
         #[cfg(feature = "thread_local_gc")]
-        self.mmtk.plan.publish_object(value);
+        self.mmtk.get_plan().publish_object(value);
         VM::VMScanning::scan_object(VMWorkerThread(VMThread::UNINITIALIZED), value, &mut closure);
         closure.do_closure();
         #[cfg(feature = "public_object_analysis")]

@@ -29,22 +29,20 @@ impl<VM: VMBinding> ExecuteThreadlocalCollection<VM> {
 
         // A hook of local gc, no-op at the moment
         self.mmtk
-            .plan
-            .base()
             .gc_trigger
             .policy
             .on_thread_local_gc_start(self.mmtk);
 
         self.mmtk
-            .plan
+            .get_plan()
             .do_thread_local_collection(self.mutator_tls, self.mmtk);
         let elapsed = self.start_time.elapsed();
         mutator.thread_local_gc_status = THREAD_LOCAL_GC_INACTIVE;
         info!(
             "End of Thread local GC {} ({}/{} pages, took {} ms)",
             mutator.mutator_id,
-            self.mmtk.plan.get_reserved_pages(),
-            self.mmtk.plan.get_total_pages(),
+            self.mmtk.get_plan().get_reserved_pages(),
+            self.mmtk.get_plan().get_total_pages(),
             elapsed.as_millis()
         );
         // local gc has finished, notify any mutator that has local gc pending
@@ -124,11 +122,7 @@ impl EndOfThreadLocalGC {
             mmtk.edge_logger.reset();
         }
 
-        mmtk.plan
-            .base()
-            .gc_trigger
-            .policy
-            .on_thread_local_gc_end(mmtk);
+        mmtk.gc_trigger.policy.on_thread_local_gc_end(mmtk);
     }
 }
 
@@ -158,7 +152,7 @@ where
 
     pub fn execute(&mut self) {
         trace!("scan_mutator start");
-        self.mmtk.plan.base().prepare_for_stack_scanning();
+        self.mmtk.state.prepare_for_stack_scanning();
         let object_graph_traversal =
             ThreadlocalObjectGraphTraversal::<VM, Closure>::new(self.mmtk, self.tls);
         VM::VMCollection::scan_mutator(self.tls, object_graph_traversal);
@@ -249,7 +243,7 @@ where
         }
 
         Self {
-            plan: mmtk.plan.downcast_ref::<P>().unwrap(),
+            plan: mmtk.get_plan().downcast_ref::<P>().unwrap(),
             tls,
             edge_buffer,
             #[cfg(feature = "debug_publish_object")]

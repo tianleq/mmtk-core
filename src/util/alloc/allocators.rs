@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use memoffset::offset_of;
 
-use crate::policy::immix::ImmixSpace;
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::marksweepspace::malloc_ms::MallocSpace;
 use crate::policy::marksweepspace::native_ms::MarkSweepSpace;

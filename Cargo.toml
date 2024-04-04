@@ -64,7 +64,7 @@ name = "main"
 harness = false
 
 [features]
-default = ["public_bit","immix_non_moving"]
+default = ["thread_local_gc"]
 
 # This feature is only supported on x86-64 for now
 # It's manually added to CI scripts

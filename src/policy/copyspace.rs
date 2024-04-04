@@ -206,10 +206,9 @@ impl<VM: VMBinding> CopySpace<VM> {
         // } else {
         //     panic!("bulk clearing public bit is not supported in discontiguous setting");
         // }
-        unsafe {
-            for (start, size) in self.pr.iterate_allocated_regions() {
-                crate::util::public_bit::bzero_public_bit(start, size);
-            }
+
+        for (start, size) in self.pr.iterate_allocated_regions() {
+            crate::util::public_bit::bzero_public_bit(start, size);
         }
     }
 

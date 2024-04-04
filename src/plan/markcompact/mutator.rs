@@ -2,7 +2,6 @@ use super::MarkCompact;
 use crate::plan::barriers::NoBarrier;
 use crate::plan::mutator_context::create_allocator_mapping;
 use crate::plan::mutator_context::create_space_mapping;
-use crate::plan::mutator_context::unreachable_prepare_func;
 #[cfg(feature = "thread_local_gc_copying")]
 use crate::plan::mutator_context::generic_thread_local_alloc_copy;
 #[cfg(feature = "thread_local_gc_copying")]
@@ -11,6 +10,7 @@ use crate::plan::mutator_context::generic_thread_local_post_copy;
 use crate::plan::mutator_context::generic_thread_local_prepare;
 #[cfg(feature = "thread_local_gc")]
 use crate::plan::mutator_context::generic_thread_local_release;
+use crate::plan::mutator_context::unreachable_prepare_func;
 use crate::plan::mutator_context::Mutator;
 use crate::plan::mutator_context::MutatorConfig;
 use crate::plan::mutator_context::ReservedAllocators;
@@ -79,12 +79,6 @@ pub fn create_markcompact_mutator<VM: VMBinding>(
         #[cfg(feature = "public_object_analysis")]
         copy_bytes: 0,
     }
-}
-
-pub fn markcompact_mutator_prepare<VM: VMBinding>(
-    _mutator: &mut Mutator<VM>,
-    _tls: VMWorkerThread,
-) {
 }
 
 pub fn markcompact_mutator_release<VM: VMBinding>(

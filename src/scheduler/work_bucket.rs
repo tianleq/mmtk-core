@@ -44,7 +44,6 @@ pub type BucketOpenCondition<VM> = Box<dyn (Fn(&GCWorkScheduler<VM>) -> bool) + 
 pub struct WorkBucket<VM: VMBinding> {
     active: AtomicBool,
     queue: BucketQueue<VM>,
-    thread_local_queues: Vec<BucketQueue<VM>>,
     prioritized_queue: Option<BucketQueue<VM>>,
     monitor: Arc<WorkerMonitor>,
     can_open: Option<BucketOpenCondition<VM>>,
@@ -63,15 +62,10 @@ pub struct WorkBucket<VM: VMBinding> {
 }
 
 impl<VM: VMBinding> WorkBucket<VM> {
-    pub(crate) fn new(active: bool, monitor: Arc<WorkerMonitor>, num_workers: usize) -> Self {
-        let mut thread_local_queues = Vec::with_capacity(num_workers);
-        for _ in 0..num_workers {
-            thread_local_queues.push(BucketQueue::<VM>::new());
-        }
+    pub(crate) fn new(active: bool, monitor: Arc<WorkerMonitor>) -> Self {
         Self {
             active: AtomicBool::new(active),
             queue: BucketQueue::new(),
-            thread_local_queues,
             prioritized_queue: None,
             monitor,
             can_open: None,

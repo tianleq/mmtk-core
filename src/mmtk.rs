@@ -347,6 +347,29 @@ impl<VM: VMBinding> MMTK<VM> {
         }
     }
 
+    #[cfg(feature = "thread_local_gc")]
+    pub fn handle_thread_local_collection(&self, tls: VMMutatorThread, mmtk: &'static MMTK<VM>) {
+        use crate::vm::Collection;
+
+        if self.gc_requester.request_thread_local_gc(tls) {
+            #[cfg(feature = "debug_publish_object")]
+            let id = crate::util::LOCAL_GC_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);
+
+            crate::scheduler::thread_local_gc_work::ExecuteThreadlocalCollection {
+                mmtk,
+                mutator_tls: tls,
+                start_time: std::time::Instant::now(),
+                #[cfg(feature = "debug_publish_object")]
+                id,
+            }
+            .execute();
+        } else {
+            // A global gc has already been triggered, so cannot do local gc,
+            // instead, block and wait for global gc to finish
+            VM::VMCollection::block_for_gc(tls);
+        }
+    }
+
     /// MMTK has requested stop-the-world activity (e.g., stw within a concurrent gc).
     // This is not used, as we do not have a concurrent plan.
     #[allow(unused)]

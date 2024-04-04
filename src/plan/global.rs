@@ -227,16 +227,16 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
     fn thread_local_collection_required(
         &self,
         _space_full: bool,
-        _space: Option<&dyn Space<Self::VM>>,
+        _space: Option<SpaceStats<Self::VM>>,
         _tls: VMMutatorThread,
     ) -> bool {
         false
     }
 
-    #[cfg(feature = "thread_local_gc")]
-    fn handle_thread_local_collection(&self, tls: VMMutatorThread, mmtk: &'static MMTK<Self::VM>) {
-        self.base().handle_thread_local_collection(tls, mmtk);
-    }
+    // #[cfg(feature = "thread_local_gc")]
+    // fn handle_thread_local_collection(&self, tls: VMMutatorThread, mmtk: &'static MMTK<Self::VM>) {
+    //     self.base().handle_thread_local_collection(tls, mmtk);
+    // }
 
     #[cfg(feature = "thread_local_gc")]
     fn do_thread_local_collection(
@@ -592,6 +592,150 @@ impl<VM: VMBinding> BasePlan<VM> {
         let heap_full = plan.base().gc_trigger.is_heap_full();
 
         space_full || stress_force_gc || heap_full
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn publish_object(&self, _object: ObjectReference) {
+        #[cfg(feature = "code_space")]
+        if self.code_space.in_space(_object) {
+            trace!("publish_object: object in code space");
+            self.code_space.publish_object(_object);
+            return;
+        }
+
+        #[cfg(feature = "code_space")]
+        if self.code_lo_space.in_space(_object) {
+            trace!("publish_object: object in large code space");
+            self.code_lo_space.publish_object(_object);
+            return;
+        }
+
+        #[cfg(feature = "ro_space")]
+        if self.ro_space.in_space(_object) {
+            trace!("publish_object: object in ro_space space");
+            self.ro_space.publish_object(_object);
+            return;
+        }
+
+        #[cfg(feature = "vm_space")]
+        if self.vm_space.in_space(_object) {
+            trace!("publish_object: object in boot space");
+            self.vm_space.publish_object(_object);
+            return;
+        }
+    }
+}
+
+#[cfg(feature = "thread_local_gc")]
+impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for BasePlan<VM> {
+    #[cfg(not(feature = "debug_publish_object"))]
+    fn thread_local_trace_object<const KIND: TraceKind>(
+        &self,
+        _mutator: &mut Mutator<VM>,
+        object: ObjectReference,
+    ) -> ThreadlocalTracedObjectType {
+        #[cfg(feature = "code_space")]
+        if self.code_space.in_space(object) {
+            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+                &self.code_space,
+                _mutator,
+                object,
+                None,
+            );
+        }
+
+        #[cfg(feature = "code_space")]
+        if self.code_lo_space.in_space(object) {
+            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+                &self.code_lo_space,
+                _mutator,
+                object,
+                None,
+            );
+        }
+
+        #[cfg(feature = "ro_space")]
+        if self.ro_space.in_space(object) {
+            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+                &self.ro_space,
+                _mutator,
+                object,
+                None,
+            );
+        }
+
+        #[cfg(feature = "vm_space")]
+        if self.vm_space.in_space(object) {
+            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+                &self.vm_space,
+                _mutator,
+                object,
+                None,
+            );
+        }
+
+        ThreadlocalTracedObjectType::Scanned(object)
+    }
+
+    #[cfg(feature = "debug_publish_object")]
+    fn thread_local_trace_object<const KIND: TraceKind>(
+        &self,
+        _mutator: &mut Mutator<VM>,
+        _source: ObjectReference,
+        _slot: VM::VMEdge,
+        object: ObjectReference,
+    ) -> ThreadlocalTracedObjectType {
+        #[cfg(feature = "code_space")]
+        if self.code_space.in_space(object) {
+            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+                &self.code_space,
+                _mutator,
+                source,
+                object,
+                None,
+            );
+        }
+
+        #[cfg(feature = "code_space")]
+        if self.code_lo_space.in_space(object) {
+            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+                &self.code_lo_space,
+                _mutator,
+                source,
+                object,
+                None,
+            );
+        }
+
+        #[cfg(feature = "ro_space")]
+        if self.ro_space.in_space(object) {
+            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+                &self.ro_space,
+                _mutator,
+                source,
+                object,
+                None,
+            );
+        }
+
+        #[cfg(feature = "vm_space")]
+        if self.vm_space.in_space(object) {
+            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+                &self.vm_space,
+                _mutator,
+                source,
+                object,
+                None,
+            );
+        }
+
+        ThreadlocalTracedObjectType::Scanned(object)
+    }
+
+    fn thread_local_post_scan_object(&self, _mutator: &Mutator<VM>, _object: ObjectReference) {}
+
+    fn thread_local_may_move_objects<const KIND: TraceKind>() -> bool {
+        false
     }
 }
 

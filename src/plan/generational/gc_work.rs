@@ -2,7 +2,7 @@ use atomic::Ordering;
 
 use crate::plan::PlanTraceObject;
 use crate::scheduler::{gc_work::*, GCWork, GCWorker, WorkBucketStage};
-use crate::util::{ObjectReference, VMMutatorThread};
+use crate::util::ObjectReference;
 use crate::vm::edge_shape::{Edge, MemorySlice};
 use crate::vm::*;
 use crate::MMTK;
@@ -43,9 +43,9 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>> ProcessEdg
         roots: bool,
         vm_roots: u8,
         mmtk: &'static MMTK<VM>,
-        _mutator_id: Option<VMMutatorThread>,
+        bucket: WorkBucketStage,
     ) -> Self {
-        let base = ProcessEdgesBase::new(sources, edges, roots, vm_roots, mmtk);
+        let base = ProcessEdgesBase::new(sources, edges, roots, vm_roots, mmtk, bucket);
         let plan = base.plan().downcast_ref().unwrap();
         Self { plan, base }
     }

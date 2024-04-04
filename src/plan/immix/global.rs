@@ -69,7 +69,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     fn thread_local_collection_required(
         &self,
         _space_full: bool,
-        _space: Option<&dyn Space<Self::VM>>,
+        _space: Option<SpaceStats<VM>>,
         _tls: VMMutatorThread,
     ) -> bool {
         // let total_pages = self.base().gc_trigger.policy.get_heap_size_in_pages();
@@ -116,7 +116,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     ) {
         use crate::policy::immix::{TRACE_THREAD_LOCAL_DEFRAG, TRACE_THREAD_LOCAL_FAST};
 
-        self.base().set_collection_kind::<Self>(self);
+        // self.base().set_collection_kind::<Self>(self);
         // self.base().set_gc_status(GcStatus::GcPrepare);
         Self::schedule_and_do_immix_thread_local_collection::<
             Immix<VM>,
@@ -273,7 +273,7 @@ impl<VM: VMBinding> Immix<VM> {
     >(
         tls: VMMutatorThread,
         plan: &'static PlanType,
-        immix_space: &ImmixSpace<VM>,
+        _immix_space: &ImmixSpace<VM>,
         mmtk: &'static crate::MMTK<VM>,
     ) {
         use crate::policy::immix::{TRACE_THREAD_LOCAL_DEFRAG, TRACE_THREAD_LOCAL_FAST};
@@ -282,13 +282,10 @@ impl<VM: VMBinding> Immix<VM> {
             ThreadlocalFinalization, ThreadlocalRelease,
         };
 
-        let in_defrag = immix_space.decide_whether_to_defrag_in_thread_local_gc(
-            plan.is_emergency_collection(),
-            false,
-            plan.base().cur_collection_attempts.load(Ordering::SeqCst),
-            plan.base().is_user_triggered_collection(),
-            *plan.base().options.full_heap_system_gc,
-        );
+        #[cfg(feature = "thread_local_gc_ibm_style")]
+        let in_defrag = false;
+        #[cfg(feature = "thread_local_gc_copying")]
+        let in_defrag = true;
 
         if in_defrag {
             // Prepare global/collectors/mutators

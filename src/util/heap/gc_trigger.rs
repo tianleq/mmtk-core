@@ -181,7 +181,7 @@ pub trait GCTriggerPolicy<VM: VMBinding>: Sync + Send {
         plan: &dyn Plan<VM = VM>,
         tls: VMMutatorThread,
     ) -> bool;
-    
+
     #[cfg(feature = "thread_local_gc")]
     fn on_thread_local_gc_start(&self, _mmtk: &'static MMTK<VM>) {}
     #[cfg(feature = "thread_local_gc")]
@@ -232,7 +232,7 @@ impl<VM: VMBinding> GCTriggerPolicy<VM> for FixedHeapSizeTrigger {
     fn is_thread_local_gc_required(
         &self,
         space_full: bool,
-        space: Option<&dyn Space<VM>>,
+        space: Option<SpaceStats<VM>>,
         plan: &dyn Plan<VM = VM>,
         tls: VMMutatorThread,
     ) -> bool {
@@ -512,7 +512,7 @@ impl<VM: VMBinding> GCTriggerPolicy<VM> for MemBalancerTrigger {
     fn is_thread_local_gc_required(
         &self,
         _space_full: bool,
-        _space: Option<&dyn Space<VM>>,
+        _space: Option<SpaceStats<VM>>,
         _plan: &dyn Plan<VM = VM>,
         _tls: VMMutatorThread,
     ) -> bool {

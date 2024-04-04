@@ -4,7 +4,6 @@ use super::Immix;
 use crate::plan::barriers::{PublicObjectMarkingBarrier, PublicObjectMarkingBarrierSemantics};
 use crate::plan::mutator_context::create_allocator_mapping;
 use crate::plan::mutator_context::create_space_mapping;
-use crate::plan::mutator_context::unreachable_prepare_func;
 use crate::plan::mutator_context::Mutator;
 use crate::plan::mutator_context::MutatorConfig;
 use crate::plan::mutator_context::ReservedAllocators;
@@ -164,7 +163,7 @@ pub fn create_immix_mutator<VM: VMBinding>(
             vec.push((AllocatorSelector::Immix(0), &immix.immix_space));
             vec
         }),
-        prepare_func: &unreachable_prepare_func,
+        prepare_func: &immix_mutator_prepare,
         release_func: &immix_mutator_release,
         #[cfg(feature = "thread_local_gc")]
         thread_local_prepare_func: &immix_mutator_thread_local_prepare,

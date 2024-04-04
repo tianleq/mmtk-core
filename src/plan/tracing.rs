@@ -3,7 +3,7 @@
 
 use crate::scheduler::gc_work::{EdgeOf, ProcessEdgesWork};
 use crate::scheduler::{GCWorker, WorkBucketStage};
-use crate::util::{ObjectReference, VMMutatorThread};
+use crate::util::ObjectReference;
 use crate::vm::edge_shape::Edge;
 use crate::vm::EdgeVisitor;
 use crate::vm::Scanning;
@@ -89,7 +89,6 @@ pub struct ObjectsClosure<'a, E: ProcessEdgesWork> {
     sources: VectorQueue<ObjectReference>,
     pub(crate) worker: &'a mut GCWorker<E::VM>,
     bucket: WorkBucketStage,
-    _mutator_tls: Option<VMMutatorThread>,
 }
 
 impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
@@ -98,19 +97,13 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
     /// Arguments:
     /// * `worker`: the current worker. The objects closure should not leave the context of this worker.
     /// * `bucket`: new work generated will be push ed to the bucket.
-    pub fn new(
-        worker: &'a mut GCWorker<E::VM>,
-        bucket: WorkBucketStage,
-
-        mutator_tls: Option<VMMutatorThread>,
-    ) -> Self {
+    pub fn new(worker: &'a mut GCWorker<E::VM>, bucket: WorkBucketStage) -> Self {
         Self {
             buffer: VectorQueue::new(),
             #[cfg(feature = "debug_publish_object")]
             sources: VectorQueue::new(),
             worker,
             bucket,
-            _mutator_tls: mutator_tls,
         }
     }
 
@@ -220,7 +213,7 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
                 // set public bit on the object
                 crate::util::public_bit::set_public_bit::<VM>(object);
                 #[cfg(feature = "thread_local_gc")]
-                self._mmtk.plan.publish_object(object);
+                self._mmtk.get_plan().publish_object(object);
                 VM::VMScanning::scan_object(
                     crate::util::VMWorkerThread(crate::util::VMThread::UNINITIALIZED),
                     object,

@@ -180,7 +180,6 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for Finalization<E> {
             0,
             mmtk,
             WorkBucketStage::FinalRefClosure,
-            None,
         );
         w.set_worker(worker);
         finalizable_processor.scan(worker.tls, &mut w, is_nursery_gc(mmtk.get_plan()));

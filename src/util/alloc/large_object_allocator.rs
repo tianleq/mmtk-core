@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use std::sync::Arc;
 
+use super::allocator::AllocatorContext;
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::Space;
 use crate::util::alloc::{allocator, Allocator};
@@ -11,12 +12,6 @@ use crate::vm::VMBinding;
 
 #[cfg(feature = "thread_local_gc")]
 const LOS_OBJECT_OWNER_BYTES: usize = 8;
-
-#[cfg(feature = "thread_local_gc")]
-const LOS_OBJECT_OWNER_BYTES: usize = 8;
-
-use super::allocator::AllocatorContext;
-
 
 /// An allocator that only allocates at page granularity.
 /// This is intended for large objects.

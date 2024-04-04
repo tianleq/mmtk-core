@@ -760,7 +760,7 @@ pub fn harness_end<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
 /// * `object`: The object that has a finalizer
 pub fn add_finalizer<VM: VMBinding>(
     mmtk: &'static MMTK<VM>,
-    _mutator: &'static mut Mutator<VM>,
+    _mutator: &mut Mutator<VM>,
     object: <VM::VMReferenceGlue as ReferenceGlue<VM>>::FinalizableType,
 ) {
     if *mmtk.options.no_finalizer {
@@ -919,7 +919,7 @@ pub fn mmtk_set_public_bit<VM: VMBinding>(_mmtk: &'static MMTK<VM>, object: Obje
     debug_assert!(!object.is_null(), "object is null!");
     crate::util::public_bit::set_public_bit::<VM>(object);
     #[cfg(feature = "thread_local_gc")]
-    _mmtk.plan.publish_object(object);
+    _mmtk.get_plan().publish_object(object);
 }
 
 #[cfg(feature = "public_bit")]
@@ -957,12 +957,9 @@ pub fn mmtk_request_thread_local_gc<VM: VMBinding>(
 ) -> bool {
     use crate::scheduler::thread_local_gc_work::{ACTIVE_LOCAL_GC_COUNTER, LOCAL_GC_SYNC};
 
-    // let mut active_local_gc_counter = ACTIVE_LOCAL_GC_COUNTER.lock().unwrap();
-    // while *active_local_gc_counter > 0 {
-    //     active_local_gc_counter = LOCAL_GC_SYNC.wait(active_local_gc_counter).unwrap();
-    // }
-
-    let required = mmtk.plan.thread_local_collection_required(false, None, tls);
+    let required = mmtk
+        .get_plan()
+        .thread_local_collection_required(false, None, tls);
     if required {
         let mut active_local_gc_counter = ACTIVE_LOCAL_GC_COUNTER.lock().unwrap();
         while *active_local_gc_counter > 0 {
@@ -980,7 +977,7 @@ pub fn mmtk_handle_user_triggered_local_gc<VM: VMBinding>(
     mmtk: &'static MMTK<VM>,
     tls: VMMutatorThread,
 ) {
-    mmtk.get_plan().handle_thread_local_collection(tls, mmtk);
+    mmtk.handle_thread_local_collection(tls, mmtk);
 }
 
 pub fn mmtk_handle_user_triggered_global_gc<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {

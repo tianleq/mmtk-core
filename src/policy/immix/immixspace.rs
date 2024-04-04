@@ -622,6 +622,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         Some(block)
     }
 
+    #[cfg(not(feature = "thread_local_gc_ibm_style"))]
     pub fn get_reusable_block(&self, copy: bool) -> Option<Block> {
         if super::BLOCK_ONLY {
             return None;
@@ -744,8 +745,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
         #[cfg(feature = "thread_local_gc")]
         let is_private_object = !crate::util::public_bit::is_public::<VM>(object);
-        #[cfg(not(feature = "thread_local_gc"))]
-        let is_private_object = false;
+        // #[cfg(not(feature = "thread_local_gc"))]
+        // let is_private_object = false;
 
         #[cfg(all(debug_assertions, feature = "thread_local_gc"))]
         {
@@ -887,11 +888,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 #[allow(clippy::let_and_return)]
                 let new_object =
                     object_forwarding::forward_object::<VM>(object, semantics, copy_context);
-
-                // When local gc is enabled, global gc only evacuates public object
-                #[cfg(feature = "thread_local_gc_copying")]
-                let new_object =
-                    object_forwarding::forward_public_object::<VM>(object, semantics, copy_context);
 
                 // When local gc is enabled, global gc only evacuates public object
                 #[cfg(feature = "thread_local_gc_copying")]
@@ -1180,7 +1176,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
                     #[cfg(feature = "public_object_analysis")]
                     {
-                        let req_id = (metadata
+                        let _req_id = (metadata
                             & crate::util::object_extra_header_metadata::TOP_HALF_MASK)
                             >> 32;
 
@@ -1592,7 +1588,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
         _source: ObjectReference,
         _slot: VM::VMEdge,
         object: ObjectReference,
-        copy: Option<CopySemantics>,
+        _copy: Option<CopySemantics>,
     ) -> ThreadlocalTracedObjectType {
         if KIND == TRACE_THREAD_LOCAL_FAST {
             #[cfg(feature = "thread_local_gc_copying")]
@@ -1615,7 +1611,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
                         _source,
                         _slot,
                         object,
-                        copy.unwrap(),
+                        _copy.unwrap(),
                         // // This should not be nursery collection. Nursery collection does not use PolicyTraceObject.
                         // false,
                     )

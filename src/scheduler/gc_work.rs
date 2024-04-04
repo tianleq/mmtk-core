@@ -776,7 +776,6 @@ pub trait ProcessEdgesWork:
                 continue;
             }
             let new_object = self.trace_object(object);
-            #[cfg(feature = "debug_publish_object")]
             {
                 // In the case of a root packet, sources[i] might contain a stale object
                 // is_object_published will make sure to read the public bit on the correct
@@ -1417,7 +1416,7 @@ impl<VM: VMBinding> ProcessEdgesWork for UnsupportedProcessEdges<VM> {
         _sources: Vec<ObjectReference>,
         _edges: Vec<EdgeOf<Self>>,
         _roots: bool,
-        vm_roots: u8,
+        _vm_roots: u8,
         _mmtk: &'static MMTK<Self::VM>,
         _bucket: WorkBucketStage,
     ) -> Self {

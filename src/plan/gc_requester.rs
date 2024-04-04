@@ -77,7 +77,10 @@ impl<VM: VMBinding> GCRequester<VM> {
     }
 
     pub fn clear_request(&self) {
+        #[cfg(feature = "thread_local_gc")]
         let mut guard = self.request_sync.lock().unwrap();
+        #[cfg(not(feature = "thread_local_gc"))]
+        let guard = self.request_sync.lock().unwrap();
         self.request_flag.store(false, Ordering::Relaxed);
         #[cfg(feature = "thread_local_gc")]
         {

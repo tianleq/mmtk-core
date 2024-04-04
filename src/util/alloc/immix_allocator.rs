@@ -131,7 +131,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 );
             } else {
                 // In a copying local gc setting, a global gc evacuates public objects, local blocks should be private again
-                #[cfg(debug_assertions)]
                 {
                     #[cfg(feature = "thread_local_gc_copying")]
                     debug_assert!(

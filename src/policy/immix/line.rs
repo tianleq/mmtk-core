@@ -40,8 +40,8 @@ impl Line {
     #[cfg(feature = "thread_local_gc")]
     pub const MAX_MARK_STATE: u8 =
         (Self::GLOBAL_RESET_MARK_STATE << Self::MARK_STATE_BITS) - Self::GLOBAL_RESET_MARK_STATE;
-    #[cfg(feature = "thread_local_gc")]
-    pub const LOCAL_MAX_MARK_STATE: u8 = (1 << Self::LOCAL_MARK_STATE_BITS) - 1;
+    // #[cfg(feature = "thread_local_gc")]
+    // pub const LOCAL_MAX_MARK_STATE: u8 = (1 << Self::LOCAL_MARK_STATE_BITS) - 1;
     #[cfg(feature = "thread_local_gc")]
     pub const GLOBAL_LINE_MARK_STATE_MASK: u8 = 0xF0;
     #[cfg(feature = "thread_local_gc")]

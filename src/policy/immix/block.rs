@@ -163,7 +163,7 @@ impl Block {
         Self::BLOCK_PUBLICATION_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst) == 1
     }
 
-    #[cfg(all(feature = "thread_local_gc", debug_assertions))]
+    #[cfg(feature = "thread_local_gc_copying")]
     pub fn are_lines_valid(&self, forbidden_state: u8) -> bool {
         for line in self.lines() {
             if line.is_marked(forbidden_state) {
@@ -173,15 +173,15 @@ impl Block {
         true
     }
 
-    #[cfg(feature = "thread_local_gc")]
-    pub fn is_block_full(&self, state: u8) -> bool {
-        for line in self.lines() {
-            if !line.is_marked(state) {
-                return false;
-            }
-        }
-        true
-    }
+    // #[cfg(feature = "thread_local_gc")]
+    // pub fn is_block_full(&self, state: u8) -> bool {
+    //     for line in self.lines() {
+    //         if !line.is_marked(state) {
+    //             return false;
+    //         }
+    //     }
+    //     true
+    // }
 
     // Defrag byte
 
@@ -656,11 +656,13 @@ impl ReusableBlockPool {
         self.queue.len()
     }
 
+    #[cfg(not(feature = "thread_local_gc_ibm_style"))]
     /// Add a block to the list.
     pub fn push(&self, block: Block) {
         self.queue.push(block)
     }
 
+    #[cfg(not(feature = "thread_local_gc_ibm_style"))]
     /// Pop a block out of the list.
     pub fn pop(&self) -> Option<Block> {
         self.queue.pop()
@@ -676,7 +678,7 @@ impl ReusableBlockPool {
         self.queue.iterate_blocks(&mut f);
     }
 
-    #[cfg(feature = "thread_local_gc")]
+    #[cfg(feature = "thread_local_gc_copying")]
     pub fn thread_local_flush_blocks(&self, blocks: impl IntoIterator<Item = Block>) {
         self.queue.flush_blocks(blocks);
     }

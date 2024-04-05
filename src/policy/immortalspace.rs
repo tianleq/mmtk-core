@@ -242,7 +242,7 @@ impl<VM: VMBinding> ImmortalSpace<VM> {
             "{:x}: VO bit not set",
             object
         );
-        if crate::util::public_bit::is_public::<VM>(object) {
+        if crate::util::metadata::public_bit::is_public::<VM>(object) {
             return ThreadlocalTracedObjectType::Scanned(object);
         }
         if self.mark_state.test_and_mark::<VM>(object) {

@@ -1,7 +1,6 @@
 use super::SemiSpace;
 #[cfg(not(feature = "public_bit"))]
 use crate::plan::barriers::NoBarrier;
-use crate::plan::mutator_context::unreachable_prepare_func;
 use crate::plan::barriers::PublicObjectMarkingBarrier;
 use crate::plan::barriers::PublicObjectMarkingBarrierSemantics;
 #[cfg(feature = "thread_local_gc_copying")]
@@ -12,6 +11,7 @@ use crate::plan::mutator_context::generic_thread_local_post_copy;
 use crate::plan::mutator_context::generic_thread_local_prepare;
 #[cfg(feature = "thread_local_gc")]
 use crate::plan::mutator_context::generic_thread_local_release;
+use crate::plan::mutator_context::unreachable_prepare_func;
 use crate::plan::mutator_context::Mutator;
 use crate::plan::mutator_context::MutatorConfig;
 use crate::plan::mutator_context::{
@@ -84,7 +84,11 @@ pub fn create_ss_mutator<VM: VMBinding>(
     let mutator_id = crate::util::MUTATOR_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);
     #[cfg(feature = "public_bit")]
     let barrier = Box::new(PublicObjectMarkingBarrier::new(
-        PublicObjectMarkingBarrierSemantics::new(mmtk),
+        PublicObjectMarkingBarrierSemantics::new(
+            mmtk,
+            #[cfg(feature = "debug_publish_object")]
+            mutator_id,
+        ),
     ));
     #[cfg(not(feature = "public_bit"))]
     let barrier = Box::new(NoBarrier);

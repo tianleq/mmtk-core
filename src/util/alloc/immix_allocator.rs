@@ -83,6 +83,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     pub fn prepare(&mut self) {
         #[cfg(debug_assertions)]
         {
+            use std::collections::HashSet;
+
+            let mut set = HashSet::new();
             for &block in self.local_blocks.iter() {
                 if block.get_state() == BlockState::Unallocated {
                     panic!(
@@ -90,7 +93,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         block,
                     );
                 }
-
+                set.insert(block.start());
                 assert!(
                     block.owner() == self.mutator_id,
                     "block: {:?} | block state: {:?} | owner: {} != mutator: {}",
@@ -100,6 +103,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     self.mutator_id
                 );
             }
+            debug_assert!(set.len() == self.local_blocks.len());
         }
     }
 
@@ -117,9 +121,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             .extend(self.local_reusable_blocks.drain(..));
 
         // remove freed blocks from the local block list
-        // After the global gc, freed blocks have been given back to the global block page resource,
-        // so simply remove those from the local block list. Also remove public blocks from the local
-        // block list
+        // After the global gc, freed blocks have been given
+        // back to the global block page resource, so simply
+        // remove those from the local block list.
+        // Also remove public blocks from the local block list
         let mut blocks = vec![];
         for block in self.local_blocks.drain(..) {
             if block.get_state() == BlockState::Unallocated {
@@ -174,23 +179,12 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             atomic::Ordering::SeqCst,
         );
 
-        // // Also release all local free blocks to the page resource
-        for block in self.local_free_blocks.drain(..) {
-            #[cfg(debug_assertions)]
-            {
-                assert!(
-                    block.get_state() == BlockState::Unallocated,
-                    "local free block list contains {:?} block: {:?}",
-                    block.get_state(),
-                    block
-                );
-            }
-            self.space.release_block(block);
-        }
-
         // verify thread local block list
         #[cfg(debug_assertions)]
         {
+            use std::collections::HashSet;
+
+            let mut set = HashSet::new();
             for &block in self.local_blocks.iter() {
                 if crate::policy::immix::BLOCK_ONLY {
                     // After a global gc, local list should not have blocks whose state
@@ -217,7 +211,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     block.owner(),
                     self.mutator_id,
                 );
+                set.insert(block.start());
             }
+            debug_assert!(set.len() == self.local_blocks.len());
         }
     }
 
@@ -322,8 +318,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
             if block.thread_local_can_sweep(self.space, mark_hisogram, line_mark_state) {
                 // release free blocks for now, may cache those blocks locally
-                block.clear_owner();
-                block.deinit();
+                // block.clear_owner();
+                // block.deinit();
                 self.local_free_blocks.push(block);
             } else {
                 #[cfg(not(feature = "thread_local_gc_copying"))]
@@ -359,21 +355,21 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         }
         self.local_blocks.extend(blocks);
 
-        // #[cfg(debug_assertions)]
-        // {
-        //     info!("free {} blocks in local gc", self.local_free_blocks.len())
-        // }
-
         // Give back free blocks
+        // local free block list may contain pre-allocated block
+        // need to deinit those blocks, otherwise, a subsequent global
+        // will double free those blocks
         self.space
-            .thread_local_release_blocks(self.local_free_blocks.drain(..));
+            .thread_local_release_blocks(self.local_free_blocks.drain(..).map(|block| {
+                block.clear_owner();
+                block.deinit();
+                block
+            }));
         #[cfg(feature = "thread_local_gc_copying")]
         // Give back public reusable blocks
         self.space
             .reusable_blocks
             .thread_local_flush_blocks(global_reusable_blocks.drain(..));
-
-        debug_assert_eq!(self.local_free_blocks.len(), 0);
 
         // verify thread local block list
         #[cfg(debug_assertions)]
@@ -461,6 +457,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 self.bump_pointer.cursor,
                 self.bump_pointer.limit
             );
+
             result
         }
     }
@@ -491,7 +488,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             );
             if !rtn.is_zero() {
                 debug_assert!(
-                    !crate::util::public_bit::is_public_object(rtn + VM::EXTRA_HEADER_BYTES),
+                    !crate::util::metadata::public_bit::is_public_object(
+                        rtn + VM::EXTRA_HEADER_BYTES
+                    ),
                     "public bit is not cleared properly"
                 );
                 rtn + VM::EXTRA_HEADER_BYTES
@@ -565,7 +564,7 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
         // Note that `rtn` can be null in the case of OOM
         if !rtn.is_zero() {
             debug_assert!(
-                !crate::util::public_bit::is_public_object(rtn + VM::EXTRA_HEADER_BYTES),
+                !crate::util::metadata::public_bit::is_public_object(rtn + VM::EXTRA_HEADER_BYTES),
                 "public bit is not cleared properly"
             );
             rtn + VM::EXTRA_HEADER_BYTES
@@ -763,10 +762,12 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     end_line,
                     self.tls
                 );
-                crate::util::public_bit::bzero_public_bit(
+
+                crate::util::metadata::public_bit::bzero_public_bit(
                     self.bump_pointer.cursor,
                     self.bump_pointer.limit - self.bump_pointer.cursor,
                 );
+
                 // stale public line bit needs to be cleared,
                 #[cfg(all(feature = "thread_local_gc", debug_assertions))]
                 {
@@ -935,7 +936,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 #[cfg(feature = "thread_local_gc")]
                 {
                     block.set_owner(self.mutator_id);
-                    // maintain the doubly linked list of blocks allocated by this allocator
 
                     if let Some(semantic) = self.semantic {
                         // This is collector
@@ -990,14 +990,11 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 block.end()
             );
 
-            debug_assert!(
-                block.owner() == self.mutator_id,
-                "block: {:?} owner: {}, mutator: {}",
-                block,
-                block.owner(),
-                self.mutator_id
-            );
+            #[cfg(feature = "thread_local_gc_copying")]
+            debug_assert!(self.copy && VM::VMActivePlan::is_mutator(self.tls));
+
             block.init(self.copy);
+            block.set_owner(self.mutator_id);
             // Not sure if the following is needed
             self.immix_space().chunk_map.set(
                 block.chunk(),
@@ -1006,7 +1003,16 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
             return Some(block);
         }
-        self.immix_space().get_clean_block(self.tls, self.copy)
+        let block = self.immix_space().get_clean_block(self.tls, self.copy);
+        debug_assert!(
+            block.is_none() || block.unwrap().owner() == 0,
+            "block: {:?}, existing owner: {:?}, mutator: {:?}",
+            block.unwrap(),
+            block.unwrap().owner(),
+            self.mutator_id
+        );
+
+        block
     }
 
     /// Return whether the TLAB has been exhausted and we need to acquire a new block. Assumes that

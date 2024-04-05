@@ -65,7 +65,7 @@ impl<VM: VMBinding> TreadMill<VM> {
             let mut guard = self.collect_nursery.lock().unwrap();
             #[cfg(feature = "thread_local_gc")]
             {
-                if !crate::util::public_bit::is_public::<VM>(object) {}
+                if !crate::util::metadata::public_bit::is_public::<VM>(object) {}
             }
             debug_assert!(
                 guard.contains(&object),

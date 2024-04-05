@@ -1,6 +1,6 @@
 //! Read/Write barrier implementations.
 
-use crate::util::public_bit::{is_public, set_public_bit};
+use crate::util::metadata::public_bit::{is_public, set_public_bit};
 use crate::vm::edge_shape::{Edge, MemorySlice};
 use crate::vm::ObjectModel;
 use crate::MMTK;
@@ -539,16 +539,32 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
 
 pub struct PublicObjectMarkingBarrierSemantics<VM: VMBinding> {
     mmtk: &'static MMTK<VM>,
+    #[cfg(feature = "debug_publish_object")]
+    mutator_id: u32,
 }
 
 impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
-    pub fn new(mmtk: &'static MMTK<VM>) -> Self {
-        Self { mmtk }
+    pub fn new(
+        mmtk: &'static MMTK<VM>,
+        #[cfg(feature = "debug_publish_object")] mutator_id: u32,
+    ) -> Self {
+        Self {
+            mmtk,
+            #[cfg(feature = "debug_publish_object")]
+            mutator_id,
+        }
     }
 
     fn trace_public_object(&mut self, _src: ObjectReference, value: ObjectReference) {
-        let mut closure = PublishObjectClosure::<VM>::new(self.mmtk);
-        set_public_bit::<VM>(value);
+        let mut closure = PublishObjectClosure::<VM>::new(
+            self.mmtk,
+            #[cfg(feature = "debug_publish_object")]
+            self.mutator_id,
+        );
+        #[cfg(feature = "debug_publish_object")]
+        set_public_bit::<VM>(value, Some(self.mutator_id));
+        #[cfg(not(feature = "debug_publish_object"))]
+        set_public_bit::<VM>(object);
         #[cfg(feature = "thread_local_gc")]
         self.mmtk.get_plan().publish_object(value);
         VM::VMScanning::scan_object(VMWorkerThread(VMThread::UNINITIALIZED), value, &mut closure);

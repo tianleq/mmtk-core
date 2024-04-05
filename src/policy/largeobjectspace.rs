@@ -236,20 +236,20 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         _mutator: &crate::Mutator<VM>,
     ) -> ThreadlocalTracedObjectType {
         #[cfg(not(feature = "debug_publish_object"))]
-        if crate::util::public_bit::is_public::<VM>(object) {
+        if crate::util::metadata::public_bit::is_public::<VM>(object) {
             return ThreadlocalTracedObjectType::Scanned(object);
         }
         #[cfg(feature = "debug_publish_object")]
         {
-            if !source.is_null() && crate::util::public_bit::is_public::<VM>(source) {
+            if !source.is_null() && crate::util::metadata::public_bit::is_public::<VM>(source) {
                 assert!(
-                    crate::util::public_bit::is_public::<VM>(object),
+                    crate::util::metadata::public_bit::is_public::<VM>(object),
                     "public src: {:?} --> private child; {:?}",
                     source,
                     object
                 );
             }
-            if crate::util::public_bit::is_public::<VM>(object) {
+            if crate::util::metadata::public_bit::is_public::<VM>(object) {
                 return ThreadlocalTracedObjectType::Scanned(object);
             }
             #[cfg(debug_assertions)]
@@ -301,7 +301,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                 {
                     // When enabling thread_local_gc, local/private objects are not in the global tredmill
                     // So only copy public objects
-                    if crate::util::public_bit::is_public::<VM>(object) {
+                    if crate::util::metadata::public_bit::is_public::<VM>(object) {
                         self.treadmill.copy(object, nursery_object);
                     }
 
@@ -339,10 +339,10 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             #[cfg(feature = "thread_local_gc")]
             {
                 debug_assert!(
-                    crate::util::public_bit::is_public::<VM>(object),
+                    crate::util::metadata::public_bit::is_public::<VM>(object),
                     "local los object exists in global los treadmill"
                 );
-                crate::util::public_bit::unset_public_bit::<VM>(object);
+                crate::util::metadata::public_bit::unset_public_bit::<VM>(object);
             }
 
             self.pr
@@ -364,7 +364,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         #[cfg(feature = "vo_bit")]
         crate::util::metadata::vo_bit::unset_vo_bit::<VM>(object);
         debug_assert!(
-            !crate::util::public_bit::is_public::<VM>(object),
+            !crate::util::metadata::public_bit::is_public::<VM>(object),
             "public object is reclaimed in thread local gc"
         );
         self.pr

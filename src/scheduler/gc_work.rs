@@ -785,12 +785,13 @@ pub trait ProcessEdgesWork:
                     if !new_object.is_null() {
                         // source is public, then its child new_object must be public, otherwise, leakage
                         // occurs
-                        let valid = crate::util::public_bit::is_public::<Self::VM>(new_object);
+                        let valid =
+                            crate::util::metadata::public_bit::is_public::<Self::VM>(new_object);
                         if !valid {
                             let metadata_address =
-                                crate::util::public_bit::public_bit_metadata_address::<Self::VM>(
-                                    new_object,
-                                );
+                                crate::util::metadata::public_bit::public_bit_metadata_address::<
+                                    Self::VM,
+                                >(new_object);
                             <Self::VM as VMBinding>::VMObjectModel::dump_object(source);
                             info!(
                                 "################ metadata: {:?} ################",

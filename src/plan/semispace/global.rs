@@ -135,12 +135,12 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
         debug_assert!(object.is_null() == false, "object is null");
         if self.tospace().in_space(object) {
             // object has already been forwarded, simply check the public bit
-            crate::util::public_bit::is_public::<VM>(object)
+            crate::util::metadata::public_bit::is_public::<VM>(object)
         } else if self.fromspace().in_space(object) {
             self.fromspace().is_object_published(object)
         } else {
             // object is not in copyspace, so it is not moved
-            crate::util::public_bit::is_public::<VM>(object)
+            crate::util::metadata::public_bit::is_public::<VM>(object)
         }
     }
 }

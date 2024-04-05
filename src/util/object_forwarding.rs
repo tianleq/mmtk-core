@@ -104,12 +104,17 @@ pub fn forward_public_object<VM: VMBinding>(
     object: ObjectReference,
     semantics: CopySemantics,
     copy_context: &mut GCWorkerCopyContext<VM>,
+    #[cfg(feature = "debug_publish_object")] mutator_id: u32,
 ) -> ObjectReference {
-    debug_assert!(crate::util::public_bit::is_public::<VM>(object));
+    debug_assert!(crate::util::metadata::public_bit::is_public::<VM>(object));
     let new_object = VM::VMObjectModel::copy(object, semantics, copy_context);
     // make sure the public bit is set before forwarding bit gets updated
     // otherwise, there will be a race in assertion (a gc thread may see forwarded object without public bit being set)
-    crate::util::public_bit::set_public_bit::<VM>(new_object);
+    #[cfg(feature = "debug_publish_object")]
+    crate::util::metadata::public_bit::set_public_bit::<VM>(new_object, Some(mutator_id));
+    #[cfg(not(feature = "debug_publish_object"))]
+    crate::util::metadata::public_bit::set_public_bit::<VM>(new_object);
+
     if let Some(shift) = forwarding_bits_offset_in_forwarding_pointer::<VM>() {
         VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC.store_atomic::<VM, usize>(
             object,
@@ -139,7 +144,7 @@ pub fn thread_local_forward_object<VM: VMBinding>(
     #[cfg(feature = "vo_bit")]
     crate::util::metadata::vo_bit::set_vo_bit::<VM>(new_object);
     debug_assert!(
-        !crate::util::public_bit::is_public::<VM>(object),
+        !crate::util::metadata::public_bit::is_public::<VM>(object),
         "thread local gc move public object"
     );
     if let Some(shift) = forwarding_bits_offset_in_forwarding_pointer::<VM>() {
@@ -168,7 +173,7 @@ pub fn thread_local_forward_object<VM: VMBinding>(
 #[cfg(feature = "thread_local_gc")]
 pub fn thread_local_is_forwarded<VM: VMBinding>(object: ObjectReference) -> bool {
     debug_assert!(
-        !crate::util::public_bit::is_public::<VM>(object),
+        !crate::util::metadata::public_bit::is_public::<VM>(object),
         "thread local gc touch public object"
     );
     unsafe {

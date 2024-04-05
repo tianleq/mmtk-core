@@ -145,7 +145,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn get_collection_reserved_pages(&self) -> usize {
-        self.immix_space.defrag_headroom_pages()
+        self.immix_space.defrag_headroom_pages() + self.immix_space.public_object_reserve_pages()
     }
 
     fn get_used_pages(&self) -> usize {
@@ -192,7 +192,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         } else {
             // the object is not in immix space, it will not be moved
             // so simply check if the object has been published or not
-            crate::util::public_bit::is_public::<VM>(object)
+            crate::util::metadata::public_bit::is_public::<VM>(object)
         }
     }
 }

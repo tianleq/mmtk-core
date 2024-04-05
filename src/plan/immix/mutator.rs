@@ -177,7 +177,11 @@ pub fn create_immix_mutator<VM: VMBinding>(
     let mutator_id = crate::util::MUTATOR_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);
     #[cfg(feature = "public_bit")]
     let barrier = Box::new(PublicObjectMarkingBarrier::new(
-        PublicObjectMarkingBarrierSemantics::new(mmtk),
+        PublicObjectMarkingBarrierSemantics::new(
+            mmtk,
+            #[cfg(feature = "debug_publish_object")]
+            mutator_id,
+        ),
     ));
     #[cfg(not(feature = "public_bit"))]
     let barrier = Box::new(NoBarrier);

@@ -291,9 +291,9 @@ where
                 .thread_local_trace_object::<KIND>(mutator, _source, slot, object)
             {
                 Scanned(new_object) => {
-                    if crate::util::public_bit::is_public::<VM>(object) {
+                    if crate::util::metadata::public_bit::is_public::<VM>(object) {
                         assert!(
-                            crate::util::public_bit::is_public::<VM>(new_object),
+                            crate::util::metadata::public_bit::is_public::<VM>(new_object),
                             "public bit is corrupted. public obj: {} | private new_obj: {} ",
                             object,
                             new_object
@@ -317,9 +317,10 @@ where
             {
                 // in a local gc, public objects are not moved, so source is
                 // the exact object that needs to be looked at
-                if !_source.is_null() && crate::util::public_bit::is_public::<VM>(_source) {
+                if !_source.is_null() && crate::util::metadata::public_bit::is_public::<VM>(_source)
+                {
                     assert!(
-                        crate::util::public_bit::is_public::<VM>(new_object),
+                        crate::util::metadata::public_bit::is_public::<VM>(new_object),
                         "public object: {:?} {:?} points to private object: {:?} {:?}",
                         _source,
                         crate::util::object_extra_header_metadata::get_extra_header_metadata::<
@@ -497,7 +498,7 @@ where
             let reff: ObjectReference = f.get_reference();
 
             trace!("Pop {:?} for finalization in local gc", reff);
-            if crate::util::public_bit::is_public::<VM>(reff) {
+            if crate::util::metadata::public_bit::is_public::<VM>(reff) {
                 // public object is untouched, so nothing needs to be done
                 continue;
             }

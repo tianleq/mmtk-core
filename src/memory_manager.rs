@@ -917,19 +917,26 @@ pub fn add_work_packets<VM: VMBinding>(
 #[cfg(feature = "public_bit")]
 pub fn mmtk_set_public_bit<VM: VMBinding>(_mmtk: &'static MMTK<VM>, object: ObjectReference) {
     debug_assert!(!object.is_null(), "object is null!");
-    crate::util::public_bit::set_public_bit::<VM>(object);
+    #[cfg(feature = "debug_publish_object")]
+    crate::util::metadata::public_bit::set_public_bit::<VM>(object, None);
+    #[cfg(not(feature = "debug_publish_object"))]
+    crate::util::metadata::public_bit::set_public_bit::<VM>(object);
     #[cfg(feature = "thread_local_gc")]
     _mmtk.get_plan().publish_object(object);
 }
 
 #[cfg(feature = "public_bit")]
 pub fn mmtk_publish_object<VM: VMBinding>(_mmtk: &'static MMTK<VM>, _object: ObjectReference) {
-    if _object.is_null() || crate::util::public_bit::is_public::<VM>(_object) {
+    if _object.is_null() || crate::util::metadata::public_bit::is_public::<VM>(_object) {
         return;
     }
 
     let mut closure: crate::plan::PublishObjectClosure<VM> =
-        crate::plan::PublishObjectClosure::<VM>::new(_mmtk);
+        crate::plan::PublishObjectClosure::<VM>::new(
+            _mmtk,
+            #[cfg(feature = "debug_publish_object")]
+            u32::MAX,
+        );
 
     mmtk_set_public_bit(_mmtk, _object);
     // Publish all the descendants
@@ -946,7 +953,7 @@ pub fn mmtk_is_object_published<VM: VMBinding>(object: ObjectReference) -> bool 
     if object.is_null() {
         false
     } else {
-        crate::util::public_bit::is_public::<VM>(object)
+        crate::util::metadata::public_bit::is_public::<VM>(object)
     }
 }
 

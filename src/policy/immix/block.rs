@@ -136,13 +136,18 @@ impl Block {
         Self::MARK_TABLE.store_atomic::<u8>(self.start(), state, Ordering::SeqCst);
     }
 
+    /// Publish block
     #[cfg(feature = "thread_local_gc")]
-    pub fn publish(&self, publish_lines: bool) {
-        Self::BLOCK_PUBLICATION_TABLE.store_atomic::<u8>(self.start(), 1, Ordering::SeqCst);
+    pub fn publish(&self, publish_lines: bool) -> bool {
+        let prev_value =
+            Self::BLOCK_PUBLICATION_TABLE.fetch_or_atomic::<u8>(self.start(), 1, Ordering::SeqCst);
+
+        // Self::BLOCK_PUBLICATION_TABLE.store_atomic::<u8>(self.start(), 1, Ordering::SeqCst);
         // Also publish all lines within the block
         if publish_lines {
             Line::LINE_PUBLICATION_TABLE.bset_metadata(self.start(), Self::BYTES);
         }
+        prev_value == 0
     }
 
     #[cfg(feature = "thread_local_gc")]
@@ -220,19 +225,20 @@ impl Block {
         } else {
             BlockState::Unmarked
         });
+
         Self::DEFRAG_STATE_TABLE.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
     }
 
     /// Deinitalize a block before releasing.
     pub fn deinit(&self) {
-        #[cfg(feature = "public_bit")]
-        crate::util::public_bit::bzero_public_bit(self.start(), Self::BYTES);
         self.set_state(BlockState::Unallocated);
         #[cfg(feature = "thread_local_gc")]
         {
             // clear line state
             self.reset_line_mark_state();
         }
+        #[cfg(feature = "public_bit")]
+        crate::util::metadata::public_bit::bzero_public_bit(self.start(), Self::BYTES);
     }
 
     pub fn start_line(&self) -> Line {

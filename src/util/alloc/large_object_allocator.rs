@@ -110,7 +110,7 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
         if !cell.is_zero() {
             let rtn = allocator::align_allocation::<VM>(cell, align, offset);
             debug_assert!(
-                !crate::util::public_bit::is_public_object(rtn),
+                !crate::util::metadata::public_bit::is_public_object(rtn),
                 "public bit is not cleared properly"
             );
             debug_assert!(
@@ -139,7 +139,7 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
         // Those public los objects have been added to the global tredmill
         // and are managed there.
         self.local_los_objects
-            .retain(|object| !crate::util::public_bit::is_public::<VM>(*object))
+            .retain(|object| !crate::util::metadata::public_bit::is_public::<VM>(*object))
     }
 
     #[cfg(feature = "thread_local_gc")]
@@ -149,7 +149,7 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
         let mut live_objects = vec![];
         for object in self.local_los_objects.drain() {
             #[cfg(debug_assertions)]
-            if crate::util::public_bit::is_public::<VM>(object) {
+            if crate::util::metadata::public_bit::is_public::<VM>(object) {
                 panic!("Public Object:{:?} found in local los set", object);
             }
 
@@ -173,7 +173,7 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
         let mut live_objects = vec![];
         for object in self.local_los_objects.drain() {
             #[cfg(debug_assertions)]
-            if crate::util::public_bit::is_public::<VM>(object) {
+            if crate::util::metadata::public_bit::is_public::<VM>(object) {
                 panic!("Public Object:{:?} found in local los set", object);
             }
 

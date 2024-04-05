@@ -185,10 +185,15 @@ pub struct PublishObjectClosure<VM: crate::vm::VMBinding> {
     number_of_objects_published: usize,
     #[cfg(feature = "public_object_analysis")]
     number_of_bytes_published: usize,
+    #[cfg(feature = "debug_publish_object")]
+    mutator_id: u32,
 }
 
 impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
-    pub fn new(mmtk: &'static MMTK<VM>) -> Self {
+    pub fn new(
+        mmtk: &'static MMTK<VM>,
+        #[cfg(feature = "debug_publish_object")] mutator_id: u32,
+    ) -> Self {
         PublishObjectClosure {
             _mmtk: mmtk,
             edge_buffer: std::collections::VecDeque::new(),
@@ -199,6 +204,8 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
             number_of_objects_published: 0,
             #[cfg(feature = "public_object_analysis")]
             number_of_bytes_published: 0,
+            #[cfg(feature = "debug_publish_object")]
+            mutator_id,
         }
     }
 
@@ -209,9 +216,15 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
             if object.is_null() {
                 continue;
             }
-            if !crate::util::public_bit::is_public::<VM>(object) {
+            if !crate::util::metadata::public_bit::is_public::<VM>(object) {
                 // set public bit on the object
-                crate::util::public_bit::set_public_bit::<VM>(object);
+                #[cfg(feature = "debug_publish_object")]
+                crate::util::metadata::public_bit::set_public_bit::<VM>(
+                    object,
+                    Some(self.mutator_id),
+                );
+                #[cfg(not(feature = "debug_publish_object"))]
+                crate::util::metadata::public_bit::set_public_bit::<VM>(object);
                 #[cfg(feature = "thread_local_gc")]
                 self._mmtk.get_plan().publish_object(object);
                 VM::VMScanning::scan_object(

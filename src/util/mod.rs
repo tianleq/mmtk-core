@@ -65,9 +65,6 @@ pub(crate) mod statistics;
 /// A treadmill implementation.
 pub(crate) mod treadmill;
 
-#[cfg(feature = "public_bit")]
-pub(crate) mod public_bit;
-
 #[cfg(feature = "extra_header")]
 pub(crate) mod object_extra_header_metadata;
 

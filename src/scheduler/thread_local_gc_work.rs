@@ -232,7 +232,7 @@ where
         tls: VMMutatorThread,
         root_slots: Option<Vec<VM::VMEdge>>,
     ) -> Self {
-        let mut edge_buffer = VecDeque::new();
+        let mut edge_buffer = VecDeque::with_capacity(4096);
         #[cfg(feature = "debug_publish_object")]
         let mut source_buffer = VecDeque::new();
         if let Some(roots) = root_slots {

@@ -140,6 +140,13 @@ impl Defrag {
             available_clean_pages_for_defrag as usize + plan_stats.collection_reserved_pages,
             Ordering::Release,
         );
+
+        println!(
+            "available clean pages for defrag: {:?}, reserved pages: {}",
+            self.available_clean_pages_for_defrag
+                .load(Ordering::Acquire),
+            plan_stats.collection_reserved_pages
+        )
     }
 
     /// Get the numebr of all the recyclable lines in all the reusable blocks.

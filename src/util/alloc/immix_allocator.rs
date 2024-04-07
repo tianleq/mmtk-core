@@ -146,16 +146,30 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     );
                 }
                 #[cfg(feature = "thread_local_gc_copying")]
-                if !block.is_block_published() {
-                    if block.get_state().is_reusable() {
-                        debug_assert!(block.owner() == self.mutator_id);
-                        self.local_reusable_blocks.push(block)
+                if block.get_state().is_reusable() {
+                    if block.is_block_published() {
+                        debug_assert_eq!(block.owner(), u32::MAX);
                     } else {
-                        blocks.push(block);
+                        debug_assert!(block.owner() == self.mutator_id);
+                        self.local_reusable_blocks.push(block);
                     }
                 } else {
-                    debug_assert_eq!(block.owner(), u32::MAX);
+                    // always add non-reusable block back
+                    debug_assert!(block.get_state() == BlockState::Unmarked);
+                    debug_assert!(block.owner() == self.mutator_id);
+                    blocks.push(block);
                 }
+                // if !block.is_block_published() {
+                //     debug_assert!(block.owner() == self.mutator_id);
+                //     if block.get_state().is_reusable() {
+                //         self.local_reusable_blocks.push(block)
+                //     } else {
+                //         blocks.push(block);
+                //     }
+                // } else {
+                //     debug_assert_eq!(block.owner(), u32::MAX);
+                // }
+
                 // In a non-moving setting, there is no public reusable blocks
                 // because public objects and private objects resides in the same
                 // block
@@ -320,6 +334,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 // release free blocks for now, may cache those blocks locally
                 // block.clear_owner();
                 // block.deinit();
+                debug_assert!(block.is_block_published() == false);
                 self.local_free_blocks.push(block);
             } else {
                 #[cfg(not(feature = "thread_local_gc_copying"))]
@@ -348,6 +363,12 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         // block is not reusable, add to local block list
                         if !published {
                             blocks.push(block);
+                        } else {
+                            // block is published and not reusable, should we keep it in our local block list?
+                            // if not, then this block will no longer be visible in subsequest local gc (global
+                            // objects may become dead and a later global gc may make this block private again)
+                            debug_assert!(block.owner() == self.mutator_id);
+                            blocks.push(block);
                         }
                     }
                 }
@@ -356,7 +377,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         self.local_blocks.extend(blocks);
 
         // Give back free blocks
-        // local free block list may contain pre-allocated block
+        // local free block list may contain pre-allocated blocks
         // need to deinit those blocks, otherwise, a subsequent global
         // will double free those blocks
         self.space
@@ -519,6 +540,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         // local gc can always evacuate
         for _ in 0..number_of_clean_blocks {
             let block = self.immix_space().get_clean_block(self.tls, false).unwrap();
+            debug_assert!(block.is_block_published() == false);
             self.local_free_blocks.push(block);
         }
     }
@@ -945,15 +967,20 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         );
                         match semantic {
                             ImmixAllocSemantics::Public => {
+                                debug_assert!(
+                                    block.owner() == u32::MAX,
+                                    "block: {:?}, owner: {:?} ",
+                                    block,
+                                    block.owner()
+                                );
                                 // This only occurs during global gc, since only global gc evacuates public objects
-                                block.publish(true);
+                                block.publish(
+                                    true,
+                                    #[cfg(feature = "debug_publish_object")]
+                                    Some(u32::MAX),
+                                );
                             }
                             ImmixAllocSemantics::Private => {
-                                // This only occurs during a local gc, since a global gc leaves private objects in-place
-                                // Public objects now are moved to anonymous blocks, they do not belong to any mutator
-                                // So only private blocks (in a local gc) need to be added to mutator's thread-local list
-                                // Add the block to collector's local list first, when releasing the collector, adding all those
-                                // blocks to mutator's local list
                                 panic!("local gc is now done by the mutator")
                             }
                         }

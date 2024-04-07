@@ -64,7 +64,9 @@ pub struct ImmixSpace<VM: VMBinding> {
     /// Some settings for this space
     space_args: ImmixSpaceArgs,
     #[cfg(feature = "thread_local_gc_copying")]
-    number_of_published_blocks: AtomicUsize,
+    pub(super) number_of_published_blocks: AtomicUsize,
+    #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
+    pub(super) public_object_bytes_copied: AtomicUsize,
 }
 
 /// Some arguments for Immix Space.
@@ -396,6 +398,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             space_args,
             #[cfg(feature = "thread_local_gc_copying")]
             number_of_published_blocks: AtomicUsize::new(0),
+            #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
+            public_object_bytes_copied: AtomicUsize::new(0),
         }
     }
 
@@ -461,8 +465,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     #[cfg(feature = "thread_local_gc_copying")]
-    pub fn public_object_reserve_pages(&self) -> usize {
-        Block::PAGES * self.number_of_published_blocks.load(Ordering::SeqCst)
+    pub fn public_object_reserved_pages(&self) -> usize {
+        self.number_of_published_blocks.load(Ordering::SeqCst) / 2
     }
 
     /// Get work packet scheduler
@@ -519,6 +523,16 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 }
             }
         }
+
+        #[cfg(feature = "thread_local_gc_copying")]
+        let val = self
+            .number_of_published_blocks
+            .fetch_and(0, Ordering::SeqCst);
+
+        println!("******** number of published blocks before gc: {}", val);
+
+        #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
+        self.public_object_bytes_copied.store(0, Ordering::SeqCst);
 
         #[cfg(feature = "vo_bit")]
         if vo_bit::helper::need_to_clear_vo_bits_before_tracing::<VM>() {
@@ -582,6 +596,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
 
         self.lines_consumed.store(0, Ordering::Relaxed);
+
+        println!(
+            "******** copy {} bytes public object in the current global gc",
+            self.public_object_bytes_copied.load(Ordering::SeqCst)
+        );
 
         did_defrag
     }
@@ -757,43 +776,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             }
         }
 
-        #[cfg(feature = "thread_local_gc")]
-        let is_private_object = !crate::util::metadata::public_bit::is_public::<VM>(object);
-        // #[cfg(not(feature = "thread_local_gc"))]
-        // let is_private_object = false;
-
-        #[cfg(all(debug_assertions, feature = "thread_local_gc"))]
-        {
-            let is_published = Block::containing::<VM>(object).is_block_published();
-            if !is_private_object {
-                debug_assert!(is_published, "public block is corrupted");
-            } else {
-                #[cfg(feature = "debug_publish_object")]
-                {
-                    let owner = Block::containing::<VM>(object).owner();
-                    let metadata =
-                        crate::util::object_extra_header_metadata::get_extra_header_metadata::<
-                            VM,
-                            usize,
-                        >(object)
-                            & crate::util::object_extra_header_metadata::BOTTOM_HALF_MASK;
-                    if metadata != usize::try_from(owner).unwrap() {
-                        // private objects can live in reusable public blocks
-                        debug_assert!(
-                            metadata
-                                == usize::try_from(owner).unwrap() || is_published,
-                            "object: {:?}, metadata: {:?}, block owner: {:?}, forwarding status: {:?}, marked: {:?}",
-                            object,
-                            metadata,
-                            Block::containing::<VM>(object).owner(),
-                            object_forwarding::attempt_to_forward::<VM>(object),
-                            self.is_marked(object)
-                        );
-                    }
-                }
-            }
-        }
-
         let forwarding_status = object_forwarding::attempt_to_forward::<VM>(object);
         if object_forwarding::state_is_forwarded_or_being_forwarded(forwarding_status) {
             // We lost the forwarding race as some other thread has set the forwarding word; wait
@@ -862,10 +844,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             {
                 #[cfg(feature = "thread_local_gc_copying")]
                 {
-                    if !is_private_object {
-                        println!("defrag space exhausted: {}", self.defrag.space_exhausted());
-                    }
-                    debug_assert!(is_private_object, "public object cannot be left in-place");
+                    debug_assert!(
+                        is_private_object,
+                        "public object cannot be left in-place, defrag space exhausted: {}",
+                        self.defrag.space_exhausted()
+                    );
                 }
                 #[cfg(all(feature = "debug_publish_object", feature = "thread_local_gc"))]
                 {
@@ -903,6 +886,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 let new_object =
                     object_forwarding::forward_object::<VM>(object, semantics, copy_context);
 
+                #[cfg(all(feature = "thread_local_gc_copying", feature = "debug_publish_object"))]
+                self.public_object_bytes_copied.fetch_add(
+                    VM::VMObjectModel::get_current_size(object),
+                    Ordering::SeqCst,
+                );
                 // When local gc is enabled, global gc only evacuates public object
                 #[cfg(all(feature = "thread_local_gc_copying", feature = "debug_publish_object"))]
                 let new_object = object_forwarding::forward_public_object::<VM>(
@@ -1515,7 +1503,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             Line::publish_lines_of_object::<VM>(object, state);
         }
         let block = Block::containing::<VM>(object);
-        if block.publish(false) {
+        if block.publish(
+            false,
+            #[cfg(feature = "debug_publish_object")]
+            None,
+        ) {
             // block gets published, increase the copy reserve
             self.number_of_published_blocks
                 .fetch_add(1, Ordering::SeqCst);
@@ -1840,6 +1832,10 @@ impl<VM: VMBinding> FlushPageResource<VM> {
                     crate::scheduler::gc_work::ReleaseMutator::<VM>::new(mutator),
                 );
             }
+            println!(
+                "**************** number of public block: {} ****************",
+                self.space.number_of_published_blocks.load(Ordering::SeqCst)
+            );
         }
     }
 }
@@ -1880,9 +1876,6 @@ impl<VM: VMBinding> PolicyCopyContext for ImmixCopyContext<VM> {
                 result
             } else {
                 unreachable!("global gc trying to evacuate private objects");
-                // This branch will only be taken in a local gc and private objects
-                // can only live in a block of the same owner (not ture anymore as
-                // local gc is now executed by the mutator iteself)
             }
         }
     }

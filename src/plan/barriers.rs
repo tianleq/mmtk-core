@@ -564,7 +564,7 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
         #[cfg(feature = "debug_publish_object")]
         set_public_bit::<VM>(value, Some(self.mutator_id));
         #[cfg(not(feature = "debug_publish_object"))]
-        set_public_bit::<VM>(object);
+        set_public_bit::<VM>(value);
         #[cfg(feature = "thread_local_gc")]
         self.mmtk.get_plan().publish_object(value);
         VM::VMScanning::scan_object(VMWorkerThread(VMThread::UNINITIALIZED), value, &mut closure);

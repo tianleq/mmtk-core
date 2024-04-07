@@ -138,7 +138,11 @@ impl Block {
 
     /// Publish block
     #[cfg(feature = "thread_local_gc")]
-    pub fn publish(&self, publish_lines: bool) -> bool {
+    pub fn publish(
+        &self,
+        publish_lines: bool,
+        #[cfg(feature = "debug_publish_object")] _mutator: Option<u32>,
+    ) -> bool {
         let prev_value =
             Self::BLOCK_PUBLICATION_TABLE.fetch_or_atomic::<u8>(self.start(), 1, Ordering::SeqCst);
 
@@ -411,6 +415,7 @@ impl Block {
                 // liveness of public block is unknown during thread-local gc
                 // so conservatively treat it as alive
                 if is_published {
+                    debug_assert!(self.get_state() == BlockState::Unmarked);
                     false
                 } else {
                     #[cfg(all(feature = "debug_publish_object", debug_assertions))]
@@ -551,7 +556,7 @@ impl Block {
                 #[cfg(not(feature = "thread_local_gc"))]
                 let is_line_published = false;
 
-                #[cfg(feature = "thread_local_gc_copying")]
+                #[cfg(feature = "thread_local_gc")]
                 if is_line_published {
                     is_block_pubic = true;
                 }
@@ -571,6 +576,13 @@ impl Block {
                 }
             }
 
+            #[cfg(feature = "thread_local_gc")]
+            if !is_block_pubic {
+                self.reset_publication();
+            } else {
+                debug_assert!(self.is_block_published());
+            }
+
             if marked_lines == 0 {
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_region_swept::<VM, _>(self, false);
@@ -578,7 +590,7 @@ impl Block {
                 #[cfg(feature = "thread_local_gc")]
                 {
                     self.clear_owner();
-                    self.reset_publication();
+                    debug_assert!(self.is_block_published() == false);
                 }
                 space.release_block(*self);
 
@@ -597,17 +609,27 @@ impl Block {
                     // can be reused
                     #[cfg(feature = "thread_local_gc_copying")]
                     {
-                        if self.is_block_published() {
-                            if is_block_pubic {
-                                debug_assert!(!self.is_defrag_source());
-                                self.set_owner(u32::MAX);
-                                space.reusable_blocks.push(*self);
-                            } else {
-                                debug_assert!(self.is_defrag_source());
-                                // This block is now private again(all private objects have been evacuated)
-                                self.reset_publication();
-                            }
+                        if is_block_pubic {
+                            debug_assert!(self.owner() == u32::MAX);
+                            space.reusable_blocks.push(*self);
+                        } else {
+                            debug_assert!(self.owner() != u32::MAX);
+                            debug_assert!(!self.is_block_published());
                         }
+
+                        // if self.is_block_published() {
+                        //     if is_block_pubic {
+                        //         debug_assert!(!self.is_defrag_source());
+                        //         debug_assert!(self.owner() == u32::MAX);
+                        //         // self.set_owner(u32::MAX);
+                        //         space.reusable_blocks.push(*self);
+                        //     } else {
+                        //         debug_assert!(self.is_defrag_source());
+                        //         debug_assert!(self.owner() != u32::MAX);
+                        //         // This block is now private again(all public objects have been evacuated)
+                        //         self.reset_publication();
+                        //     }
+                        // }
                     }
                 } else {
                     // Clear mark state.
@@ -620,6 +642,14 @@ impl Block {
 
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_region_swept::<VM, _>(self, true);
+
+                // recalculate the public object copy reserve
+                #[cfg(feature = "thread_local_gc_copying")]
+                if self.is_block_published() {
+                    space
+                        .number_of_published_blocks
+                        .fetch_add(1, Ordering::SeqCst);
+                }
 
                 false
             }

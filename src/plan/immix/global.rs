@@ -74,10 +74,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     ) -> bool {
         let total_pages = self.get_total_pages();
         // Simply use the defrag headhoom as the red zone size
-        let red_zone_pages = self.get_collection_reserved_pages();
         let thread_local_copy_reserve_pages = self.get_thread_local_collection_reserved_pages();
+        let red_zone_pages = thread_local_copy_reserve_pages;
+
         self.get_used_pages() + thread_local_copy_reserve_pages + red_zone_pages >= total_pages
-        // true
     }
 
     fn last_collection_was_exhaustive(&self) -> bool {
@@ -145,7 +145,12 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn get_collection_reserved_pages(&self) -> usize {
-        self.immix_space.defrag_headroom_pages() + self.immix_space.public_object_reserve_pages()
+        #[cfg(feature = "thread_local_gc_copying")]
+        {
+            return self.immix_space.public_object_reserved_pages();
+        }
+        #[cfg(not(feature = "thread_local_gc_copying"))]
+        return self.immix_space.defrag_headroom_pages();
     }
 
     fn get_used_pages(&self) -> usize {

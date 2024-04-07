@@ -354,7 +354,7 @@ impl<VM: VMBinding> MMTK<VM> {
         if self.gc_requester.request_thread_local_gc(tls) {
             #[cfg(feature = "debug_publish_object")]
             let id = crate::util::LOCAL_GC_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);
-
+            mmtk.stats.start_local_gc();
             crate::scheduler::thread_local_gc_work::ExecuteThreadlocalCollection {
                 mmtk,
                 mutator_tls: tls,
@@ -363,6 +363,7 @@ impl<VM: VMBinding> MMTK<VM> {
                 id,
             }
             .execute();
+            mmtk.stats.end_local_gc();
         } else {
             // A global gc has already been triggered, so cannot do local gc,
             // instead, block and wait for global gc to finish

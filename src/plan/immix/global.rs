@@ -73,11 +73,24 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         _tls: VMMutatorThread,
     ) -> bool {
         let total_pages = self.get_total_pages();
-        // Simply use the defrag headhoom as the red zone size
+
         let thread_local_copy_reserve_pages = self.get_thread_local_collection_reserved_pages();
         let red_zone_pages = thread_local_copy_reserve_pages;
 
-        self.get_used_pages() + thread_local_copy_reserve_pages + red_zone_pages >= total_pages
+        let required =
+            self.get_used_pages() + thread_local_copy_reserve_pages + red_zone_pages >= total_pages;
+        #[cfg(feature = "debug_thread_local_gc_copying")]
+        {
+            // if required {
+            //     println!(
+            //         "used pages: {}, local copy reserve pages: {}, red zone pages: {}",
+            //         self.get_used_pages(),
+            //         thread_local_copy_reserve_pages,
+            //         red_zone_pages
+            //     );
+            // }
+        }
+        required
     }
 
     fn last_collection_was_exhaustive(&self) -> bool {
@@ -170,11 +183,23 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    fn publish_object(&self, object: ObjectReference) {
+    fn publish_object(
+        &self,
+        object: ObjectReference,
+        #[cfg(feature = "debug_thread_local_gc_copying")] _tls: crate::util::VMMutatorThread,
+    ) {
         if self.immix_space.in_space(object) {
-            self.immix_space.publish_object(object);
+            self.immix_space.publish_object(
+                object,
+                #[cfg(feature = "debug_thread_local_gc_copying")]
+                _tls,
+            );
         } else {
-            self.common().publish_object(object);
+            self.common().publish_object(
+                object,
+                #[cfg(feature = "debug_thread_local_gc_copying")]
+                _tls,
+            );
         }
     }
 

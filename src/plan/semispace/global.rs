@@ -128,7 +128,12 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    fn publish_object(&self, _object: crate::util::ObjectReference) {}
+    fn publish_object(
+        &self,
+        _object: crate::util::ObjectReference,
+        #[cfg(feature = "debug_thread_local_gc_copying")] _tls: crate::util::VMMutatorThread,
+    ) {
+    }
 
     #[cfg(feature = "debug_publish_object")]
     fn is_object_published(&self, object: crate::util::ObjectReference) -> bool {

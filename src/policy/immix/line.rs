@@ -191,12 +191,12 @@ impl Line {
         }
     }
 
-    #[cfg(feature = "thread_local_gc")]
+    #[cfg(all(feature = "thread_local_gc", debug_assertions))]
     pub fn is_public_line(&self) -> bool {
         unsafe { Line::LINE_PUBLICATION_TABLE.load::<u8>(self.start()) != 0 }
     }
 
-    #[cfg(feature = "thread_local_gc")]
+    #[cfg(all(feature = "thread_local_gc", debug_assertions))]
     pub fn reset_public_line(&self) {
         unsafe {
             Line::LINE_PUBLICATION_TABLE.store::<u8>(self.start(), 0);

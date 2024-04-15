@@ -463,6 +463,7 @@ impl Block {
         space: &ImmixSpace<VM>,
         mark_histogram: &mut Histogram,
         line_mark_state: Option<u8>,
+        #[cfg(feature = "debug_thread_local_gc_copying")] gc_stats: &mut crate::util::GCStatistics,
     ) -> bool {
         // This function is only called in a global gc
         if super::BLOCK_ONLY {
@@ -593,9 +594,20 @@ impl Block {
                     debug_assert!(self.is_block_published() == false);
                 }
                 space.release_block(*self);
+                #[cfg(feature = "debug_thread_local_gc_copying")]
+                {
+                    (*gc_stats).number_of_blocks_freed += 1;
+                }
 
                 true
             } else {
+                #[cfg(feature = "debug_thread_local_gc_copying")]
+                {
+                    (*gc_stats).number_of_live_blocks += 1;
+                    if is_block_pubic {
+                        (*gc_stats).number_of_live_public_blocks += 1;
+                    }
+                }
                 // There are some marked lines. Keep the block live.
                 if marked_lines != Block::LINES {
                     // There are holes. Mark the block as reusable.
@@ -612,24 +624,24 @@ impl Block {
                         if is_block_pubic {
                             debug_assert!(self.owner() == u32::MAX);
                             space.reusable_blocks.push(*self);
+                            #[cfg(feature = "debug_thread_local_gc_copying")]
+                            {
+                                (*gc_stats).number_of_global_reusable_blocks += 1;
+                                // println!(
+                                //     "Global GC {} | Found public reusable block: {:?} with {} lines marked",
+                                //     crate::util::GLOBAL_GC_ID.load(Ordering::SeqCst),
+                                //     self,
+                                //     marked_lines
+                                // );
+                            }
                         } else {
                             debug_assert!(self.owner() != u32::MAX);
                             debug_assert!(!self.is_block_published());
+                            #[cfg(feature = "debug_thread_local_gc_copying")]
+                            {
+                                (*gc_stats).number_of_local_reusable_blocks += 1;
+                            }
                         }
-
-                        // if self.is_block_published() {
-                        //     if is_block_pubic {
-                        //         debug_assert!(!self.is_defrag_source());
-                        //         debug_assert!(self.owner() == u32::MAX);
-                        //         // self.set_owner(u32::MAX);
-                        //         space.reusable_blocks.push(*self);
-                        //     } else {
-                        //         debug_assert!(self.is_defrag_source());
-                        //         debug_assert!(self.owner() != u32::MAX);
-                        //         // This block is now private again(all public objects have been evacuated)
-                        //         self.reset_publication();
-                        //     }
-                        // }
                     }
                 } else {
                     // Clear mark state.
@@ -642,14 +654,6 @@ impl Block {
 
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_region_swept::<VM, _>(self, true);
-
-                // recalculate the public object copy reserve
-                #[cfg(feature = "thread_local_gc_copying")]
-                if self.is_block_published() {
-                    space
-                        .number_of_published_blocks
-                        .fetch_add(1, Ordering::SeqCst);
-                }
 
                 false
             }

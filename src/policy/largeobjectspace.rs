@@ -10,6 +10,7 @@ use crate::util::heap::{FreeListPageResource, PageResource};
 use crate::util::metadata;
 use crate::util::opaque_pointer::*;
 use crate::util::treadmill::TreadMill;
+use crate::util::GLOBAL_GC_STATISTICS;
 use crate::util::{Address, ObjectReference};
 use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
@@ -254,11 +255,12 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             }
             #[cfg(debug_assertions)]
             {
-                let valid = self.get_object_owner(object) == _mutator.mutator_id;
-                assert!(
-                    valid,
-                    "mutator: {:?}, request_id: {} immix source: {:?} --> los target: {:?} owner: {}",
-                    _mutator.mutator_id, _mutator.request_id, source, object,
+                debug_assert!(
+                    self.get_object_owner(object) == _mutator.mutator_id,
+                    "mutator: {:?}, source: {:?} --> target: {:?} owner: {}",
+                    _mutator.mutator_id,
+                    source,
+                    object,
                     self.get_object_owner(object)
                 );
             }
@@ -332,30 +334,50 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     }
 
     fn sweep_large_pages(&mut self, sweep_nursery: bool) {
-        let sweep = |object: ObjectReference| {
-            #[cfg(feature = "vo_bit")]
-            crate::util::metadata::vo_bit::unset_vo_bit::<VM>(object);
+        #[cfg(feature = "debug_thread_local_gc_copying")]
+        let mut pages = 0;
+        let sweep =
+            |object: ObjectReference,
+             #[cfg(feature = "debug_thread_local_gc_copying")] pages: &mut i32| {
+                #[cfg(feature = "vo_bit")]
+                crate::util::metadata::vo_bit::unset_vo_bit::<VM>(object);
 
-            #[cfg(feature = "thread_local_gc")]
-            {
-                debug_assert!(
-                    crate::util::metadata::public_bit::is_public::<VM>(object),
-                    "local los object exists in global los treadmill"
-                );
-                crate::util::metadata::public_bit::unset_public_bit::<VM>(object);
-            }
+                #[cfg(feature = "thread_local_gc")]
+                {
+                    debug_assert!(
+                        crate::util::metadata::public_bit::is_public::<VM>(object),
+                        "local los object exists in global los treadmill"
+                    );
+                    crate::util::metadata::public_bit::unset_public_bit::<VM>(object);
+                }
 
-            self.pr
-                .release_pages(get_super_page(object.to_object_start::<VM>()));
-        };
+                *pages += self
+                    .pr
+                    .release_pages(get_super_page(object.to_object_start::<VM>()));
+            };
         if sweep_nursery {
             for object in self.treadmill.collect_nursery() {
-                sweep(object);
+                sweep(
+                    object,
+                    #[cfg(feature = "debug_thread_local_gc_copying")]
+                    &mut pages,
+                );
             }
         } else {
             for object in self.treadmill.collect() {
-                sweep(object);
+                sweep(
+                    object,
+                    #[cfg(feature = "debug_thread_local_gc_copying")]
+                    &mut pages,
+                );
             }
+        }
+
+        #[cfg(feature = "debug_thread_local_gc_copying")]
+        {
+            let mut guard = GLOBAL_GC_STATISTICS.lock().unwrap();
+            assert!(pages >= 0);
+            guard.number_of_los_pages -= pages as usize;
         }
     }
 
@@ -478,7 +500,11 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             == NURSERY_BIT
     }
 
-    pub fn publish_object(&self, _object: ObjectReference) {
+    pub fn publish_object(
+        &self,
+        _object: ObjectReference,
+        #[cfg(feature = "debug_thread_local_gc_copying")] _tls: VMMutatorThread,
+    ) {
         self.treadmill.add_to_treadmill(_object, false);
     }
 

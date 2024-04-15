@@ -104,6 +104,42 @@ lazy_static! {
         std::sync::Mutex::new(Statistics::default());
 }
 
-#[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
-pub(crate) static LOCAL_GC_ID_GENERATOR: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(1);
+#[cfg(feature = "debug_thread_local_gc_copying")]
+#[derive(Default)]
+pub(crate) struct GCStatistics {
+    pub bytes_allocated: usize,
+    pub bytes_published: usize,
+    pub number_of_published_blocks: usize,
+    pub number_of_live_blocks: usize,
+    pub number_of_live_public_blocks: usize,
+    // The following are local gc related
+    pub bytes_copied: usize,
+    pub number_of_blocks_freed: usize,
+    pub number_of_blocks_acquired_for_evacuation: usize,
+    pub number_of_local_reusable_blocks: usize,
+    pub number_of_global_reusable_blocks: usize,
+    pub number_of_los_pages: usize,
+}
+
+#[cfg(feature = "debug_thread_local_gc_copying")]
+pub(crate) static TOTAL_ALLOCATION_BYTES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(feature = "debug_thread_local_gc_copying")]
+pub(crate) static GLOBAL_GC_STATISTICS: std::sync::Mutex<GCStatistics> =
+    std::sync::Mutex::new(GCStatistics {
+        bytes_allocated: 0,
+        bytes_published: 0,
+        number_of_published_blocks: 0,
+        number_of_live_blocks: 0,
+        number_of_live_public_blocks: 0,
+        bytes_copied: 0,
+        number_of_blocks_freed: 0,
+        number_of_blocks_acquired_for_evacuation: 0,
+        number_of_local_reusable_blocks: 0,
+        number_of_global_reusable_blocks: 0,
+        number_of_los_pages: 0,
+    });
+
+#[cfg(feature = "debug_thread_local_gc_copying")]
+pub(crate) static GLOBAL_GC_ID: AtomicU32 = AtomicU32::new(1);

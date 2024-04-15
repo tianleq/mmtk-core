@@ -16,8 +16,6 @@ pub struct ExecuteThreadlocalCollection<VM: VMBinding> {
     pub mmtk: &'static MMTK<VM>,
     pub mutator_tls: VMMutatorThread,
     pub start_time: std::time::Instant,
-    #[cfg(feature = "debug_publish_object")]
-    pub id: usize,
 }
 
 impl<VM: VMBinding> ExecuteThreadlocalCollection<VM> {
@@ -30,7 +28,7 @@ impl<VM: VMBinding> ExecuteThreadlocalCollection<VM> {
         self.mmtk
             .gc_trigger
             .policy
-            .on_thread_local_gc_start(self.mmtk);
+            .on_thread_local_gc_start(self.mmtk, mutator);
 
         self.mmtk
             .get_plan()
@@ -44,6 +42,12 @@ impl<VM: VMBinding> ExecuteThreadlocalCollection<VM> {
             self.mmtk.get_plan().get_total_pages(),
             elapsed.as_millis()
         );
+        self.mmtk
+            .gc_trigger
+            .policy
+            .on_thread_local_gc_end(self.mmtk, mutator);
+        #[cfg(feature = "debug_thread_local_gc_copying")]
+        mutator.reset_stats();
         // local gc has finished,
         match LOCAL_GC_ACTIVE.compare_exchange(
             true,
@@ -119,14 +123,12 @@ pub struct EndOfThreadLocalGC {
 }
 
 impl EndOfThreadLocalGC {
-    pub fn execute<VM: VMBinding>(&mut self, mmtk: &'static MMTK<VM>) {
+    pub fn execute<VM: VMBinding>(&mut self, _mmtk: &'static MMTK<VM>) {
         #[cfg(feature = "extreme_assertions")]
         if crate::util::edge_logger::should_check_duplicate_edges(&*mmtk.plan) {
             // reset the logging info at the end of each GC
             mmtk.edge_logger.reset();
         }
-
-        mmtk.gc_trigger.policy.on_thread_local_gc_end(mmtk);
     }
 }
 

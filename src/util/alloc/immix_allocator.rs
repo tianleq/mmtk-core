@@ -14,7 +14,7 @@ use crate::util::alloc::Allocator;
 use crate::util::linear_scan::Region;
 use crate::util::opaque_pointer::VMThread;
 use crate::util::rust_util::unlikely;
-use crate::util::Address;
+use crate::util::{Address, VMMutatorThread};
 use crate::vm::*;
 
 #[repr(i32)]
@@ -159,16 +159,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     debug_assert!(block.owner() == self.mutator_id);
                     blocks.push(block);
                 }
-                // if !block.is_block_published() {
-                //     debug_assert!(block.owner() == self.mutator_id);
-                //     if block.get_state().is_reusable() {
-                //         self.local_reusable_blocks.push(block)
-                //     } else {
-                //         blocks.push(block);
-                //     }
-                // } else {
-                //     debug_assert_eq!(block.owner(), u32::MAX);
-                // }
 
                 // In a non-moving setting, there is no public reusable blocks
                 // because public objects and private objects resides in the same
@@ -274,10 +264,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             #[cfg(not(feature = "thread_local_gc_copying"))]
             let is_defrag_source = false;
             #[cfg(feature = "thread_local_gc_copying")]
-            let is_defrag_source = block.is_block_published();
+            let is_defrag_source = true;
 
-            // in a local gc, only do the evaucation of private objects living in
-            // public blocks
+            // in a local gc, always do evacuation
             block.set_as_defrag_source(is_defrag_source);
 
             // clear object mark bit
@@ -314,6 +303,12 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         {
             self.copy = false;
         }
+        #[cfg(feature = "debug_thread_local_gc_copying")]
+        let mutator = VM::VMActivePlan::mutator(VMMutatorThread(self.tls));
+        #[cfg(feature = "debug_thread_local_gc_copying")]
+        {
+            mutator.stats.number_of_blocks_acquired_for_evacuation -= self.local_free_blocks.len();
+        }
 
         // TODO defrag in local gc is different, needs to be revisited
         let mut histogram = self.space.defrag.new_histogram();
@@ -336,6 +331,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 // block.deinit();
                 debug_assert!(block.is_block_published() == false);
                 self.local_free_blocks.push(block);
+                #[cfg(feature = "debug_thread_local_gc_copying")]
+                {
+                    mutator.stats.number_of_blocks_freed += 1;
+                }
             } else {
                 #[cfg(not(feature = "thread_local_gc_copying"))]
                 {
@@ -374,6 +373,20 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 }
             }
         }
+
+        #[cfg(feature = "debug_thread_local_gc_copying")]
+        {
+            mutator.stats.number_of_global_reusable_blocks = global_reusable_blocks.len();
+            mutator.stats.number_of_local_reusable_blocks = self.local_reusable_blocks.len();
+            mutator.stats.number_of_live_blocks = self.local_reusable_blocks.len() + blocks.len();
+            mutator.stats.number_of_live_public_blocks = 0;
+            for b in &blocks {
+                if b.is_block_published() {
+                    mutator.stats.number_of_live_public_blocks += 1;
+                }
+            }
+        }
+
         self.local_blocks.extend(blocks);
 
         // Give back free blocks
@@ -453,6 +466,16 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         let new_cursor = result + size;
 
         if new_cursor > self.bump_pointer.limit {
+            #[cfg(feature = "debug_thread_local_gc_copying")]
+            {
+                use crate::util::GLOBAL_GC_STATISTICS;
+
+                if self.copy && self.mutator_id == u32::MAX {
+                    // allocation occurs in gc phase
+                    let mut guard = GLOBAL_GC_STATISTICS.lock().unwrap();
+                    guard.number_of_blocks_acquired_for_evacuation += 1;
+                }
+            }
             trace!(
                 "{:?}: Thread local buffer used up, go to alloc slow path",
                 self.tls
@@ -460,10 +483,21 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             if get_maximum_aligned_size::<VM>(size, align) > Line::BYTES {
                 // Size larger than a line: do large allocation
                 let rtn = self.overflow_alloc(size, align, offset); // overflow_allow will never use reusable blocks
+
                 rtn
             } else {
                 // Size smaller than a line: fit into holes
                 let rtn = self.alloc_slow_hot(size, align, offset, clean_page_only);
+                // #[cfg(feature = "debug_thread_local_gc_copying")]
+                // {
+                //     if self.copy && self.semantic.is_some() {
+                //         println!(
+                //             "Global GC: {} | alloc block: {:?}",
+                //             GLOBAL_GC_ID.load(atomic::Ordering::SeqCst),
+                //             Block::from_unaligned_address(rtn)
+                //         );
+                //     }
+                // }
                 rtn
             }
         } else {
@@ -536,6 +570,11 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             LOCAL_GC_COPY_RESERVE_PAGES.load(Ordering::SeqCst) % Block::PAGES == 0,
             "number of copy reserve pages is not a multiply of blocks"
         );
+        #[cfg(feature = "debug_thread_local_gc_copying")]
+        {
+            let mutator = VM::VMActivePlan::mutator(VMMutatorThread(self.tls));
+            mutator.stats.number_of_blocks_acquired_for_evacuation += number_of_clean_blocks;
+        }
         // pre-allocate copy reserve pages into local cache to make sure
         // local gc can always evacuate
         for _ in 0..number_of_clean_blocks {
@@ -713,7 +752,16 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             self.request_for_large = true;
             let rtn = self.alloc_slow_inline(size, align, offset);
             self.request_for_large = false;
-
+            // #[cfg(feature = "debug_thread_local_gc_copying")]
+            // {
+            //     if self.copy && self.semantic.is_some() {
+            //         println!(
+            //             "Global GC: {} | overflow alloc block: {:?}",
+            //             GLOBAL_GC_ID.load(atomic::Ordering::SeqCst),
+            //             Block::from_unaligned_address(rtn)
+            //         );
+            //     }
+            // }
             rtn
         } else {
             fill_alignment_gap::<VM>(self.large_bump_pointer.cursor, start);
@@ -1017,6 +1065,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 block.end()
             );
 
+            // only reach here during local gc phase
             #[cfg(feature = "thread_local_gc_copying")]
             debug_assert!(self.copy && VM::VMActivePlan::is_mutator(self.tls));
 
@@ -1030,6 +1079,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
             return Some(block);
         }
+        #[cfg(feature = "thread_local_gc_copying")]
+        debug_assert!(!self.copy || !VM::VMActivePlan::is_mutator(self.tls));
         let block = self.immix_space().get_clean_block(self.tls, self.copy);
         debug_assert!(
             block.is_none() || block.unwrap().owner() == 0,
@@ -1038,6 +1089,19 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             block.unwrap().owner(),
             self.mutator_id
         );
+        #[cfg(feature = "debug_thread_local_gc_copying")]
+        {
+            use crate::util::GLOBAL_GC_STATISTICS;
+
+            if block.is_some() {
+                if VM::VMActivePlan::is_mutator(self.tls) {
+                    let mutator = VM::VMActivePlan::mutator(VMMutatorThread(self.tls));
+                    mutator.stats.number_of_live_blocks += 1;
+                }
+                let mut guard = GLOBAL_GC_STATISTICS.lock().unwrap();
+                guard.number_of_live_blocks += 1;
+            }
+        }
 
         block
     }

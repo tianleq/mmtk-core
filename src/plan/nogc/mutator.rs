@@ -1,6 +1,4 @@
 use crate::plan::barriers::NoBarrier;
-use crate::plan::mutator_context::unreachable_prepare_func;
-use crate::plan::mutator_context::unreachable_release_func;
 #[cfg(feature = "thread_local_gc_copying")]
 use crate::plan::mutator_context::generic_thread_local_alloc_copy;
 #[cfg(feature = "thread_local_gc_copying")]
@@ -9,6 +7,8 @@ use crate::plan::mutator_context::generic_thread_local_post_copy;
 use crate::plan::mutator_context::generic_thread_local_prepare;
 #[cfg(feature = "thread_local_gc")]
 use crate::plan::mutator_context::generic_thread_local_release;
+use crate::plan::mutator_context::unreachable_prepare_func;
+use crate::plan::mutator_context::unreachable_release_func;
 use crate::plan::mutator_context::Mutator;
 use crate::plan::mutator_context::MutatorConfig;
 use crate::plan::mutator_context::{
@@ -85,11 +85,12 @@ pub fn create_nogc_mutator<VM: VMBinding>(
         finalizable_candidates: Box::new(Vec::new()),
         #[cfg(feature = "public_object_analysis")]
         allocation_count: 0,
-        #[cfg(feature = "public_object_analysis")]
-        bytes_allocated: 0,
-        #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
+        #[cfg(any(
+            feature = "debug_thread_local_gc_copying",
+            feature = "debug_publish_object"
+        ))]
         request_id: 0,
-        #[cfg(feature = "public_object_analysis")]
-        copy_bytes: 0,
+        #[cfg(feature = "debug_thread_local_gc_copying")]
+        stats: Box::new(crate::util::GCStatistics::default()),
     }
 }

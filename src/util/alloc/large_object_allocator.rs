@@ -6,7 +6,7 @@ use super::allocator::AllocatorContext;
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::Space;
 use crate::util::alloc::{allocator, Allocator};
-use crate::util::{conversions, opaque_pointer::*};
+use crate::util::{conversions, opaque_pointer::*, GLOBAL_GC_STATISTICS};
 use crate::util::{Address, ObjectReference};
 use crate::vm::VMBinding;
 
@@ -86,6 +86,15 @@ impl<VM: VMBinding> Allocator<VM> for LargeObjectAllocator<VM> {
 
         let maxbytes = allocator::get_maximum_aligned_size::<VM>(size, align);
         let pages = crate::util::conversions::bytes_to_pages_up(maxbytes);
+        #[cfg(feature = "debug_thread_local_gc_copying")]
+        {
+            use crate::vm::ActivePlan;
+
+            let mutator = VM::VMActivePlan::mutator(VMMutatorThread(self.tls));
+            mutator.stats.number_of_los_pages += pages;
+            let mut guard = GLOBAL_GC_STATISTICS.lock().unwrap();
+            guard.number_of_los_pages += pages;
+        }
         self.space.allocate_pages(self.tls, pages)
     }
 }
@@ -148,16 +157,34 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
         use crate::policy::sft::SFT;
         let mut live_objects = vec![];
         for object in self.local_los_objects.drain() {
-            #[cfg(debug_assertions)]
-            if crate::util::metadata::public_bit::is_public::<VM>(object) {
-                panic!("Public Object:{:?} found in local los set", object);
-            }
+            debug_assert!(
+                !crate::util::metadata::public_bit::is_public::<VM>(object),
+                "Public Object:{:?} found in local los set",
+                object
+            );
 
             if self.space.is_live(object) {
                 live_objects.push(object);
             } else {
                 // local/private objects also need to be reclaimed in a global gc
                 self.space.thread_local_sweep_large_object(object);
+                #[cfg(feature = "debug_thread_local_gc_copying")]
+                {
+                    use crate::vm::ActivePlan;
+                    use crate::vm::ObjectModel;
+
+                    let mutator = VM::VMActivePlan::mutator(VMMutatorThread(self.tls));
+                    let size = VM::VMObjectModel::get_current_size(object);
+                    let maxbytes = allocator::get_maximum_aligned_size::<VM>(
+                        size,
+                        crate::util::constants::BYTES_IN_WORD,
+                    );
+                    let pages = crate::util::conversions::bytes_to_pages_up(maxbytes);
+
+                    mutator.stats.number_of_los_pages -= pages;
+                    let mut guard = GLOBAL_GC_STATISTICS.lock().unwrap();
+                    guard.number_of_los_pages -= pages;
+                }
             }
         }
         self.local_los_objects.extend(live_objects);
@@ -172,17 +199,34 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
     pub fn thread_local_release(&mut self) {
         let mut live_objects = vec![];
         for object in self.local_los_objects.drain() {
-            #[cfg(debug_assertions)]
-            if crate::util::metadata::public_bit::is_public::<VM>(object) {
-                panic!("Public Object:{:?} found in local los set", object);
-            }
-
+            debug_assert!(
+                !crate::util::metadata::public_bit::is_public::<VM>(object),
+                "Public Object:{:?} found in local los set",
+                object
+            );
             if self.space.is_live_in_thread_local_gc(object) {
                 // clear the local mark state
                 self.space.clear_thread_local_mark(object);
                 live_objects.push(object);
             } else {
                 self.space.thread_local_sweep_large_object(object);
+                #[cfg(feature = "debug_thread_local_gc_copying")]
+                {
+                    use crate::vm::ActivePlan;
+                    use crate::vm::ObjectModel;
+
+                    let mutator = VM::VMActivePlan::mutator(VMMutatorThread(self.tls));
+                    let size = VM::VMObjectModel::get_current_size(object);
+                    let maxbytes = allocator::get_maximum_aligned_size::<VM>(
+                        size,
+                        crate::util::constants::BYTES_IN_WORD,
+                    );
+                    let pages = crate::util::conversions::bytes_to_pages_up(maxbytes);
+
+                    mutator.stats.number_of_los_pages -= pages;
+                    let mut guard = GLOBAL_GC_STATISTICS.lock().unwrap();
+                    guard.number_of_los_pages -= pages;
+                }
             }
         }
 

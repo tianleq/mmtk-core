@@ -54,6 +54,53 @@ impl<C: GCWorkContext> Prepare<C> {
 
 impl<C: GCWorkContext> GCWork<C::VM> for Prepare<C> {
     fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
+        #[cfg(feature = "debug_thread_local_gc_copying")]
+        {
+            use std::{fs::OpenOptions, io::Write};
+
+            let mut file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/home/tianleq/misc/global-gc-stats.log")
+                .unwrap();
+            let mut guard = GLOBAL_GC_STATISTICS.lock().unwrap();
+            writeln!(file,
+                "Before Global {} | bytes allocated: {}, bytes_published: {}, bytes_copied: {}, number_of_published_blocks: {}, number_of_blocks_acquired_for_evacuation: {}, number_of_blocks_freed: {}, number_of_global_reusable_blocks: {}, number_of_local_reusable_blocks: {}, number_of_live_blocks: {}, number_of_live_public_blocks: {}, number_of_los_pages: {}, total_allocation: {}",
+                GLOBAL_GC_ID.load(atomic::Ordering::SeqCst),
+                guard.bytes_allocated,
+                guard.bytes_published,
+                guard.bytes_copied,
+                guard.number_of_published_blocks,
+                guard.number_of_blocks_acquired_for_evacuation,
+                guard.number_of_blocks_freed,
+                guard.number_of_global_reusable_blocks,
+                guard.number_of_local_reusable_blocks,
+                guard.number_of_live_blocks,
+                guard.number_of_live_public_blocks,
+                guard.number_of_los_pages,
+                TOTAL_ALLOCATION_BYTES.load(atomic::Ordering::SeqCst)
+            ).unwrap();
+            // println!(
+            //     "Before Global {} | bytes allocated: {}, bytes_published: {}, bytes_copied: {}, number_of_published_blocks: {}, number_of_blocks_acquired_for_evacuation: {}, number_of_blocks_freed: {}, number_of_global_reusable_blocks: {}, number_of_local_reusable_blocks: {}, number_of_live_blocks: {}, number_of_live_public_blocks: {}, number_of_los_pages: {}, total_allocation: {}",
+            //     GLOBAL_GC_ID.load(atomic::Ordering::SeqCst),
+            //     guard.bytes_allocated,
+            //     guard.bytes_published,
+            //     guard.bytes_copied,
+            //     guard.number_of_published_blocks,
+            //     guard.number_of_blocks_acquired_for_evacuation,
+            //     guard.number_of_blocks_freed,
+            //     guard.number_of_global_reusable_blocks,
+            //     guard.number_of_local_reusable_blocks,
+            //     guard.number_of_live_blocks,
+            //     guard.number_of_live_public_blocks,
+            //     guard.number_of_los_pages,
+            //     TOTAL_ALLOCATION_BYTES.load(atomic::Ordering::SeqCst)
+            // );
+
+            guard.number_of_live_blocks = 0;
+            guard.number_of_live_public_blocks = 0;
+        }
+
         trace!("Prepare Global");
         // We assume this is the only running work packet that accesses plan at the point of execution
         let plan_mut: &mut C::PlanType = unsafe { &mut *(self.plan as *const _ as *mut _) };
@@ -245,13 +292,6 @@ pub struct EndOfGC {
 
 impl<VM: VMBinding> GCWork<VM> for EndOfGC {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        println!(
-            "End of GC ({}/{} pages, took {} ms)",
-            mmtk.get_plan().get_reserved_pages(),
-            mmtk.get_plan().get_total_pages(),
-            self.elapsed.as_millis()
-        );
-
         #[cfg(feature = "count_live_bytes_in_gc")]
         {
             let live_bytes = mmtk.state.get_live_bytes_in_last_gc();

@@ -94,6 +94,20 @@ impl<VM: VMBinding> GCTrigger<VM> {
                 plan.get_total_pages(),
             );
 
+            println!(
+                "[POLL] {}{} ({}/{} pages) | ({}/{} pages)",
+                if let Some(space) = space {
+                    format!("{}: ", space.get_name())
+                } else {
+                    "".to_string()
+                },
+                "Triggering collection",
+                plan.get_reserved_pages(),
+                plan.get_total_pages(),
+                plan.get_used_pages(),
+                plan.get_collection_reserved_pages()
+            );
+
             self.gc_requester.request();
             return Some(GCKind::GLOBAL);
         }
@@ -183,9 +197,14 @@ pub trait GCTriggerPolicy<VM: VMBinding>: Sync + Send {
     ) -> bool;
 
     #[cfg(feature = "thread_local_gc")]
-    fn on_thread_local_gc_start(&self, _mmtk: &'static MMTK<VM>) {}
+    fn on_thread_local_gc_start(
+        &self,
+        _mmtk: &'static MMTK<VM>,
+        _mutator: &mut crate::Mutator<VM>,
+    ) {
+    }
     #[cfg(feature = "thread_local_gc")]
-    fn on_thread_local_gc_end(&self, _mmtk: &'static MMTK<VM>) {}
+    fn on_thread_local_gc_end(&self, _mmtk: &'static MMTK<VM>, _mutator: &mut crate::Mutator<VM>) {}
     /// Is current heap full?
     fn is_heap_full(&self, plan: &dyn Plan<VM = VM>) -> bool;
     /// Return the current heap size (in pages)
@@ -228,6 +247,65 @@ impl<VM: VMBinding> GCTriggerPolicy<VM> for FixedHeapSizeTrigger {
         false
     }
 
+    fn on_gc_start(&self, _mmtk: &'static MMTK<VM>) {}
+
+    fn on_gc_end(&self, _mmtk: &'static MMTK<VM>) {
+        #[cfg(feature = "debug_thread_local_gc_copying")]
+        {
+            use crate::util::{GLOBAL_GC_ID, GLOBAL_GC_STATISTICS, TOTAL_ALLOCATION_BYTES};
+
+            use std::{fs::OpenOptions, io::Write};
+
+            let mut file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/home/tianleq/misc/global-gc-stats.log")
+                .unwrap();
+
+            let mut guard = GLOBAL_GC_STATISTICS.lock().unwrap();
+            writeln!(file,
+                "After Global {} | bytes allocated: {}, bytes_published: {}, bytes_copied: {}, number_of_published_blocks: {}, number_of_blocks_acquired_for_evacuation: {}, number_of_blocks_freed: {}, number_of_global_reusable_blocks: {}, number_of_local_reusable_blocks: {}, number_of_live_blocks: {}, number_of_live_public_blocks: {}, number_of_los_pages: {}, total_allocation: {}",
+                GLOBAL_GC_ID.fetch_add(1, Ordering::SeqCst),
+                guard.bytes_allocated,
+                guard.bytes_published,
+                guard.bytes_copied,
+                guard.number_of_published_blocks,
+                guard.number_of_blocks_acquired_for_evacuation,
+                guard.number_of_blocks_freed,
+                guard.number_of_global_reusable_blocks,
+                guard.number_of_local_reusable_blocks,
+                guard.number_of_live_blocks,
+                guard.number_of_live_public_blocks,
+                guard.number_of_los_pages,
+                TOTAL_ALLOCATION_BYTES.load(atomic::Ordering::SeqCst)
+            ).unwrap();
+            // println!(
+            //     "After Global {} | bytes allocated: {}, bytes_published: {}, bytes_copied: {}, number_of_published_blocks: {}, number_of_blocks_acquired_for_evacuation: {}, number_of_blocks_freed: {}, number_of_global_reusable_blocks: {}, number_of_local_reusable_blocks: {}, number_of_live_blocks: {}, number_of_live_public_blocks: {}, number_of_los_pages: {}, total_allocation: {}",
+            //     GLOBAL_GC_ID.fetch_add(1, Ordering::SeqCst),
+            //     guard.bytes_allocated,
+            //     guard.bytes_published,
+            //     guard.bytes_copied,
+            //     guard.number_of_published_blocks,
+            //     guard.number_of_blocks_acquired_for_evacuation,
+            //     guard.number_of_blocks_freed,
+            //     guard.number_of_global_reusable_blocks,
+            //     guard.number_of_local_reusable_blocks,
+            //     guard.number_of_live_blocks,
+            //     guard.number_of_live_public_blocks,
+            //     guard.number_of_los_pages,
+            //     TOTAL_ALLOCATION_BYTES.load(atomic::Ordering::SeqCst)
+            // );
+            guard.bytes_allocated = 0;
+            guard.bytes_published = 0;
+            guard.bytes_copied = 0;
+            guard.number_of_blocks_acquired_for_evacuation = 0;
+            guard.number_of_blocks_freed = 0;
+            guard.number_of_published_blocks = 0;
+            guard.number_of_global_reusable_blocks = 0;
+            guard.number_of_local_reusable_blocks = 0;
+        }
+    }
+
     #[cfg(feature = "thread_local_gc")]
     fn is_thread_local_gc_required(
         &self,
@@ -240,7 +318,24 @@ impl<VM: VMBinding> GCTriggerPolicy<VM> for FixedHeapSizeTrigger {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    fn on_thread_local_gc_end(&self, _mmtk: &'static MMTK<VM>) {}
+    fn on_thread_local_gc_start(
+        &self,
+        _mmtk: &'static MMTK<VM>,
+        _mutator: &mut crate::Mutator<VM>,
+    ) {
+        #[cfg(feature = "debug_thread_local_gc_copying")]
+        {
+            _mutator.print_stats_before_thread_local_gc();
+        }
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn on_thread_local_gc_end(&self, _mmtk: &'static MMTK<VM>, _mutator: &mut crate::Mutator<VM>) {
+        #[cfg(feature = "debug_thread_local_gc_copying")]
+        {
+            _mutator.print_stats_after_thread_local_gc();
+        }
+    }
 }
 
 use atomic_refcell::AtomicRefCell;

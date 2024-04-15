@@ -3,7 +3,6 @@ use crate::plan::barriers::ObjectBarrier;
 use crate::plan::generational::barrier::GenObjectBarrierSemantics;
 use crate::plan::generational::create_gen_space_mapping;
 use crate::plan::generational::immix::GenImmix;
-use crate::plan::mutator_context::unreachable_prepare_func;
 #[cfg(feature = "thread_local_gc_copying")]
 use crate::plan::mutator_context::generic_thread_local_alloc_copy;
 #[cfg(feature = "thread_local_gc_copying")]
@@ -12,6 +11,7 @@ use crate::plan::mutator_context::generic_thread_local_post_copy;
 use crate::plan::mutator_context::generic_thread_local_prepare;
 #[cfg(feature = "thread_local_gc")]
 use crate::plan::mutator_context::generic_thread_local_release;
+use crate::plan::mutator_context::unreachable_prepare_func;
 use crate::plan::mutator_context::Mutator;
 use crate::plan::mutator_context::MutatorConfig;
 use crate::plan::AllocationSemantics;
@@ -69,13 +69,14 @@ pub fn create_genimmix_mutator<VM: VMBinding>(
         thread_local_gc_status: 0,
         #[cfg(feature = "thread_local_gc")]
         finalizable_candidates: Box::new(Vec::new()),
-        #[cfg(feature = "public_object_analysis")]
-        allocation_count: 0,
-        #[cfg(feature = "public_object_analysis")]
-        bytes_allocated: 0,
-        #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
+        #[cfg(any(
+            feature = "debug_thread_local_gc_copying",
+            feature = "debug_publish_object"
+        ))]
         request_id: 0,
         #[cfg(feature = "public_object_analysis")]
-        copy_bytes: 0,
+        allocation_count: 0,
+        #[cfg(feature = "debug_thread_local_gc_copying")]
+        stats: Box::new(crate::util::GCStatistics::default()),
     }
 }

@@ -183,7 +183,12 @@ impl<VM: VMBinding> Plan for GenImmix<VM> {
         Some(self)
     }
     #[cfg(feature = "thread_local_gc")]
-    fn publish_object(&self, _object: ObjectReference) {}
+    fn publish_object(
+        &self,
+        _object: ObjectReference,
+        #[cfg(feature = "debug_thread_local_gc_copying")] _tls: crate::util::VMMutatorThread,
+    ) {
+    }
 }
 
 impl<VM: VMBinding> GenerationalPlan for GenImmix<VM> {

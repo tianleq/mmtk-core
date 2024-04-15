@@ -115,14 +115,13 @@ pub struct Mutator<VM: VMBinding> {
     #[cfg(feature = "thread_local_gc")]
     pub finalizable_candidates:
         Box<Vec<<VM::VMReferenceGlue as crate::vm::ReferenceGlue<VM>>::FinalizableType>>,
-    #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
+    #[cfg(any(
+        feature = "debug_thread_local_gc_copying",
+        feature = "debug_publish_object"
+    ))]
     pub request_id: usize,
-    #[cfg(feature = "public_object_analysis")]
-    pub allocation_count: usize,
-    #[cfg(feature = "public_object_analysis")]
-    pub bytes_allocated: usize,
-    #[cfg(feature = "public_object_analysis")]
-    pub copy_bytes: u32,
+    #[cfg(feature = "debug_thread_local_gc_copying")]
+    pub(crate) stats: Box<crate::util::GCStatistics>,
 }
 
 impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
@@ -141,6 +140,11 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         offset: usize,
         semantics: AllocationSemantics,
     ) -> Address {
+        #[cfg(feature = "debug_thread_local_gc_copying")]
+        {
+            crate::util::TOTAL_ALLOCATION_BYTES.fetch_add(size, atomic::Ordering::SeqCst);
+            self.stats.bytes_allocated += size;
+        }
         unsafe {
             self.allocators
                 .get_allocator_mut(self.config.allocator_mapping[semantics])
@@ -394,6 +398,111 @@ impl<VM: VMBinding> Mutator<VM> {
                 }
                 AllocatorSelector::None => panic!("Expect a valid AllocatorSelector, found None"),
             }
+    }
+
+    #[cfg(feature = "debug_thread_local_gc_copying")]
+    pub fn print_stats_before_thread_local_gc(&self) {
+        use crate::util::TOTAL_ALLOCATION_BYTES;
+        use std::{fs::OpenOptions, io::Write};
+
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/home/tianleq/misc/local-gc-stats.log")
+            .unwrap();
+
+        writeln!(file,
+            "Before Local {}->{} | bytes allocated: {}, bytes_published: {}, bytes_copied: {}, number_of_published_blocks: {}, number_of_blocks_acquired_for_evacuation: {}, number_of_blocks_freed: {}, number_of_global_reusable_blocks: {}, number_of_local_reusable_blocks: {}, number_of_live_blocks: {}, number_of_live_public_blocks: {}, number_of_los_pages: {}, total_allocation: {}",
+            self.mutator_id,
+            self.request_id,
+            self.stats.bytes_allocated,
+            self.stats.bytes_published,
+            self.stats.bytes_copied,
+            self.stats.number_of_published_blocks,
+            self.stats.number_of_blocks_acquired_for_evacuation,
+            self.stats.number_of_blocks_freed,
+            self.stats.number_of_global_reusable_blocks,
+            self.stats.number_of_local_reusable_blocks,
+            self.stats.number_of_live_blocks,
+            self.stats.number_of_live_public_blocks,
+            self.stats.number_of_los_pages,
+            TOTAL_ALLOCATION_BYTES.load(atomic::Ordering::SeqCst)
+        ).unwrap();
+        // println!(
+        //     "Before Local {}->{} | bytes allocated: {}, bytes_published: {}, bytes_copied: {}, number_of_published_blocks: {}, number_of_blocks_acquired_for_evacuation: {}, number_of_blocks_freed: {}, number_of_global_reusable_blocks: {}, number_of_local_reusable_blocks: {}, number_of_live_blocks: {}, number_of_live_public_blocks: {}, number_of_los_pages: {}, total_allocation: {}",
+        //     self.mutator_id,
+        //     self.request_id,
+        //     self.stats.bytes_allocated,
+        //     self.stats.bytes_published,
+        //     self.stats.bytes_copied,
+        //     self.stats.number_of_published_blocks,
+        //     self.stats.number_of_blocks_acquired_for_evacuation,
+        //     self.stats.number_of_blocks_freed,
+        //     self.stats.number_of_global_reusable_blocks,
+        //     self.stats.number_of_local_reusable_blocks,
+        //     self.stats.number_of_live_blocks,
+        //     self.stats.number_of_live_public_blocks,
+        //     self.stats.number_of_los_pages,
+        //     TOTAL_ALLOCATION_BYTES.load(atomic::Ordering::SeqCst)
+        // );
+    }
+
+    #[cfg(feature = "debug_thread_local_gc_copying")]
+    pub fn print_stats_after_thread_local_gc(&self) {
+        use crate::util::TOTAL_ALLOCATION_BYTES;
+        use std::{fs::OpenOptions, io::Write};
+
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/home/tianleq/misc/local-gc-stats.log")
+            .unwrap();
+
+            writeln!(file, 
+                "After Local {}->{} | bytes allocated: {}, bytes_published: {}, bytes_copied: {}, number_of_published_blocks: {}, number_of_blocks_acquired_for_evacuation: {}, number_of_blocks_freed: {}, number_of_global_reusable_blocks: {}, number_of_local_reusable_blocks: {}, number_of_live_blocks: {}, number_of_live_public_blocks: {}, number_of_los_pages: {}, total_allocation: {}",
+                self.mutator_id,
+                self.request_id,
+                self.stats.bytes_allocated,
+                self.stats.bytes_published,
+                self.stats.bytes_copied,
+                self.stats.number_of_published_blocks,
+                self.stats.number_of_blocks_acquired_for_evacuation,
+                self.stats.number_of_blocks_freed,
+                self.stats.number_of_global_reusable_blocks,
+                self.stats.number_of_local_reusable_blocks,
+                self.stats.number_of_live_blocks,
+                self.stats.number_of_live_public_blocks,
+                self.stats.number_of_los_pages,
+                TOTAL_ALLOCATION_BYTES.load(atomic::Ordering::SeqCst)
+            ).unwrap();
+
+        // println!(
+        //     "After Local {}->{} | bytes allocated: {}, bytes_published: {}, bytes_copied: {}, number_of_published_blocks: {}, number_of_blocks_acquired_for_evacuation: {}, number_of_blocks_freed: {}, number_of_global_reusable_blocks: {}, number_of_local_reusable_blocks: {}, number_of_live_blocks: {}, number_of_live_public_blocks: {}, number_of_los_pages: {}, total_allocation: {}",
+        //     self.mutator_id,
+        //     self.request_id,
+        //     self.stats.bytes_allocated,
+        //     self.stats.bytes_published,
+        //     self.stats.bytes_copied,
+        //     self.stats.number_of_published_blocks,
+        //     self.stats.number_of_blocks_acquired_for_evacuation,
+        //     self.stats.number_of_blocks_freed,
+        //     self.stats.number_of_global_reusable_blocks,
+        //     self.stats.number_of_local_reusable_blocks,
+        //     self.stats.number_of_live_blocks,
+        //     self.stats.number_of_live_public_blocks,
+        //     self.stats.number_of_los_pages,
+        //     TOTAL_ALLOCATION_BYTES.load(atomic::Ordering::SeqCst)
+        // );
+    }
+
+    #[cfg(feature = "debug_thread_local_gc_copying")]
+    pub fn reset_stats(&mut self) {
+        self.stats.bytes_allocated = 0;
+        self.stats.bytes_copied = 0;
+        self.stats.bytes_published = 0;
+        self.stats.number_of_blocks_acquired_for_evacuation = 0;
+        self.stats.number_of_blocks_freed = 0;
+        self.stats.number_of_published_blocks = 0;
     }
 }
 

@@ -347,7 +347,11 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    fn publish_object(&self, _object: ObjectReference);
+    fn publish_object(
+        &self,
+        _object: ObjectReference,
+        #[cfg(feature = "debug_thread_local_gc_copying")] tls: VMMutatorThread,
+    );
 
     #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
     fn get_object_owner(&self, _object: ObjectReference) -> Option<u32> {
@@ -831,7 +835,11 @@ impl<VM: VMBinding> CommonPlan<VM> {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    pub fn publish_object(&self, object: ObjectReference) {
+    pub fn publish_object(
+        &self,
+        object: ObjectReference,
+        #[cfg(feature = "debug_thread_local_gc_copying")] _tls: crate::util::VMMutatorThread,
+    ) {
         if self.immortal.in_space(object) {
             trace!("publish_object: object in immortal space");
             self.immortal.publish_object(object);
@@ -839,7 +847,11 @@ impl<VM: VMBinding> CommonPlan<VM> {
         }
         if self.los.in_space(object) {
             trace!("publish_object: object in los");
-            self.los.publish_object(object);
+            self.los.publish_object(
+                object,
+                #[cfg(feature = "debug_thread_local_gc_copying")]
+                _tls,
+            );
             return;
         }
         if self.nonmoving.in_space(object) {

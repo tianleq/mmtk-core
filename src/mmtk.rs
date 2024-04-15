@@ -237,6 +237,17 @@ impl<VM: VMBinding> MMTK<VM> {
             stats.public_bytes = 0;
             stats.public_count = 0;
         }
+        #[cfg(feature = "debug_thread_local_gc_copying")]
+        {
+            use std::fs::OpenOptions;
+
+            let file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/home/tianleq/misc/global-gc-stats.log")
+                .unwrap();
+            file.set_len(0).unwrap();
+        }
     }
 
     /// Generic hook to allow benchmarks to be harnessed. MMTk will stop collecting
@@ -352,15 +363,11 @@ impl<VM: VMBinding> MMTK<VM> {
         use crate::vm::Collection;
 
         if self.gc_requester.request_thread_local_gc(tls) {
-            #[cfg(feature = "debug_publish_object")]
-            let id = crate::util::LOCAL_GC_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);
             mmtk.stats.start_local_gc();
             crate::scheduler::thread_local_gc_work::ExecuteThreadlocalCollection {
                 mmtk,
                 mutator_tls: tls,
                 start_time: std::time::Instant::now(),
-                #[cfg(feature = "debug_publish_object")]
-                id,
             }
             .execute();
             mmtk.stats.end_local_gc();

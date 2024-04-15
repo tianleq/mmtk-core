@@ -118,8 +118,6 @@ extra_header = []
 #Enable debugging publishing object
 debug_publish_object = ["extra_header", "public_bit"]
 
-debug_publish_object_overhead = ["public_bit"]
-
 #Enable thread local gc
 thread_local_gc = ["public_bit"]
 
@@ -131,6 +129,8 @@ thread_local_gc_copying = ["thread_local_gc"]
 
 #Enable object publication analysis
 public_object_analysis = []
+
+debug_thread_local_gc_copying = ["thread_local_gc_copying"]
 
 # The following two features are useful for using Immix for VMs that do not support moving GC.
 

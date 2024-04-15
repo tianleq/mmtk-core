@@ -362,7 +362,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         self.inner_mut().common.release_discontiguous_chunks(chunk);
     }
 
-    pub fn release_pages(&self, first: Address) {
+    pub fn release_pages(&self, first: Address) -> i32 {
         debug_assert!(conversions::is_page_aligned(first));
         let page_offset = conversions::bytes_to_pages_up(first - self.start);
         let pages = self.free_list.size(page_offset as _);
@@ -384,6 +384,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
             // only discontiguous spaces use chunks
             self.release_free_chunks(first, freed as _, &mut sync);
         }
+        pages
     }
 
     fn release_free_chunks(

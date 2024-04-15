@@ -914,7 +914,7 @@ pub fn add_work_packets<VM: VMBinding>(
     mmtk.scheduler.work_buckets[bucket].bulk_add(packets)
 }
 
-#[cfg(feature = "public_bit")]
+#[cfg(all(feature = "public_bit", not(feature = "debug_thread_local_gc_copying")))]
 pub fn mmtk_set_public_bit<VM: VMBinding>(_mmtk: &'static MMTK<VM>, object: ObjectReference) {
     debug_assert!(!object.is_null(), "object is null!");
     #[cfg(feature = "debug_publish_object")]
@@ -925,7 +925,7 @@ pub fn mmtk_set_public_bit<VM: VMBinding>(_mmtk: &'static MMTK<VM>, object: Obje
     _mmtk.get_plan().publish_object(object);
 }
 
-#[cfg(feature = "public_bit")]
+#[cfg(all(feature = "public_bit", not(feature = "debug_thread_local_gc_copying")))]
 pub fn mmtk_publish_object<VM: VMBinding>(_mmtk: &'static MMTK<VM>, _object: ObjectReference) {
     if _object.is_null() || crate::util::metadata::public_bit::is_public::<VM>(_object) {
         return;
@@ -939,6 +939,59 @@ pub fn mmtk_publish_object<VM: VMBinding>(_mmtk: &'static MMTK<VM>, _object: Obj
         );
 
     mmtk_set_public_bit(_mmtk, _object);
+    // Publish all the descendants
+    VM::VMScanning::scan_object(
+        VMWorkerThread(VMThread::UNINITIALIZED),
+        _object,
+        &mut closure,
+    );
+    closure.do_closure();
+}
+
+#[cfg(all(feature = "public_bit", feature = "debug_thread_local_gc_copying"))]
+pub fn mmtk_set_public_bit<VM: VMBinding>(
+    _mmtk: &'static MMTK<VM>,
+    object: ObjectReference,
+    _tls: VMMutatorThread,
+) {
+    use crate::util::GLOBAL_GC_STATISTICS;
+    use crate::vm::ObjectModel;
+
+    debug_assert!(!object.is_null(), "object is null!");
+    #[cfg(feature = "debug_publish_object")]
+    crate::util::metadata::public_bit::set_public_bit::<VM>(object, None);
+    #[cfg(not(feature = "debug_publish_object"))]
+    crate::util::metadata::public_bit::set_public_bit::<VM>(object);
+    #[cfg(feature = "thread_local_gc")]
+    _mmtk.get_plan().publish_object(object, _tls);
+    if VM::VMActivePlan::is_mutator(_tls.0) {
+        let mutator = VM::VMActivePlan::mutator(_tls);
+        mutator.stats.bytes_published += VM::VMObjectModel::get_current_size(object);
+    }
+    let mut guard = GLOBAL_GC_STATISTICS.lock().unwrap();
+    guard.bytes_published += VM::VMObjectModel::get_current_size(object);
+}
+
+#[cfg(all(feature = "public_bit", feature = "debug_thread_local_gc_copying"))]
+pub fn mmtk_publish_object<VM: VMBinding>(
+    _mmtk: &'static MMTK<VM>,
+    _object: ObjectReference,
+    _tls: VMMutatorThread,
+) {
+    if _object.is_null() || crate::util::metadata::public_bit::is_public::<VM>(_object) {
+        return;
+    }
+
+    let mut closure: crate::plan::PublishObjectClosure<VM> =
+        crate::plan::PublishObjectClosure::<VM>::new(
+            _mmtk,
+            #[cfg(feature = "debug_publish_object")]
+            u32::MAX,
+            #[cfg(feature = "debug_thread_local_gc_copying")]
+            _tls,
+        );
+
+    mmtk_set_public_bit(_mmtk, _object, _tls);
     // Publish all the descendants
     VM::VMScanning::scan_object(
         VMWorkerThread(VMThread::UNINITIALIZED),

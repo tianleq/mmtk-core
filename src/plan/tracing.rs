@@ -3,8 +3,9 @@
 
 use crate::scheduler::gc_work::{EdgeOf, ProcessEdgesWork};
 use crate::scheduler::{GCWorker, WorkBucketStage};
-use crate::util::ObjectReference;
+use crate::util::{ObjectReference, VMMutatorThread};
 use crate::vm::edge_shape::Edge;
+use crate::vm::ActivePlan;
 use crate::vm::EdgeVisitor;
 use crate::vm::Scanning;
 use crate::MMTK;
@@ -178,38 +179,46 @@ impl<'a, E: ProcessEdgesWork> Drop for ObjectsClosure<'a, E> {
 pub struct PublishObjectClosure<VM: crate::vm::VMBinding> {
     _mmtk: &'static MMTK<VM>,
     edge_buffer: std::collections::VecDeque<VM::VMEdge>,
-    #[cfg(any(
-        feature = "public_object_analysis",
-        feature = "debug_publish_object_overhead"
-    ))]
+    #[cfg(feature = "public_object_analysis")]
     number_of_objects_published: usize,
     #[cfg(feature = "public_object_analysis")]
     number_of_bytes_published: usize,
     #[cfg(feature = "debug_publish_object")]
     mutator_id: u32,
+    #[cfg(feature = "debug_thread_local_gc_copying")]
+    tls: VMMutatorThread,
 }
 
 impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
     pub fn new(
         mmtk: &'static MMTK<VM>,
         #[cfg(feature = "debug_publish_object")] mutator_id: u32,
+        #[cfg(feature = "debug_thread_local_gc_copying")] tls: VMMutatorThread,
     ) -> Self {
         PublishObjectClosure {
             _mmtk: mmtk,
             edge_buffer: std::collections::VecDeque::new(),
-            #[cfg(any(
-                feature = "public_object_analysis",
-                feature = "debug_publish_object_overhead"
-            ))]
+            #[cfg(feature = "public_object_analysis")]
             number_of_objects_published: 0,
             #[cfg(feature = "public_object_analysis")]
             number_of_bytes_published: 0,
             #[cfg(feature = "debug_publish_object")]
             mutator_id,
+            #[cfg(feature = "debug_thread_local_gc_copying")]
+            tls,
         }
     }
 
     pub fn do_closure(&mut self) {
+        #[cfg(feature = "debug_thread_local_gc_copying")]
+        let mut mutator = if VM::VMActivePlan::is_mutator(self.tls.0) {
+            Some(VM::VMActivePlan::mutator(self.tls))
+        } else {
+            None
+        };
+        #[cfg(feature = "debug_thread_local_gc_copying")]
+        let mut number_of_bytes_published = 0;
+
         while !self.edge_buffer.is_empty() {
             let slot = self.edge_buffer.pop_front().unwrap();
             let object = slot.load();
@@ -226,7 +235,7 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
                 #[cfg(not(feature = "debug_publish_object"))]
                 crate::util::metadata::public_bit::set_public_bit::<VM>(object);
                 #[cfg(feature = "thread_local_gc")]
-                self._mmtk.get_plan().publish_object(object);
+                self._mmtk.get_plan().publish_object(object, self.tls);
                 VM::VMScanning::scan_object(
                     crate::util::VMWorkerThread(crate::util::VMThread::UNINITIALIZED),
                     object,
@@ -238,21 +247,27 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
                     self.number_of_objects_published += 1;
                     self.number_of_bytes_published += VM::VMObjectModel::get_current_size(object);
                 }
-                #[cfg(feature = "debug_publish_object_overhead")]
+                #[cfg(feature = "debug_thread_local_gc_copying")]
                 {
-                    #[cfg(not(feature = "public_object_analysis"))]
-                    {
-                        self.number_of_objects_published += 1;
+                    use crate::vm::ObjectModel;
+
+                    if let Some(ref mut m) = mutator {
+                        m.stats.bytes_published += VM::VMObjectModel::get_current_size(object);
                     }
+                    number_of_bytes_published += VM::VMObjectModel::get_current_size(object);
                 }
             }
         }
+        #[cfg(feature = "debug_thread_local_gc_copying")]
+        {
+            use crate::util::GLOBAL_GC_STATISTICS;
+
+            let mut guard = GLOBAL_GC_STATISTICS.lock().unwrap();
+            guard.bytes_published += number_of_bytes_published;
+        }
     }
 
-    #[cfg(any(
-        feature = "public_object_analysis",
-        feature = "debug_publish_object_overhead"
-    ))]
+    #[cfg(feature = "public_object_analysis")]
     pub fn get_number_of_objects_published(&self) -> usize {
         self.number_of_objects_published
     }

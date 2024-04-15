@@ -88,6 +88,8 @@ pub fn create_ss_mutator<VM: VMBinding>(
             mmtk,
             #[cfg(feature = "debug_publish_object")]
             mutator_id,
+            #[cfg(feature = "debug_thread_local_gc_copying")]
+            mutator_tls,
         ),
     ));
     #[cfg(not(feature = "public_bit"))]
@@ -106,11 +108,12 @@ pub fn create_ss_mutator<VM: VMBinding>(
         finalizable_candidates: Box::new(Vec::new()),
         #[cfg(feature = "public_object_analysis")]
         allocation_count: 0,
-        #[cfg(feature = "public_object_analysis")]
-        bytes_allocated: 0,
-        #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
+        #[cfg(any(
+            feature = "debug_thread_local_gc_copying",
+            feature = "debug_publish_object"
+        ))]
         request_id: 0,
-        #[cfg(feature = "public_object_analysis")]
-        copy_bytes: 0,
+        #[cfg(feature = "debug_thread_local_gc_copying")]
+        stats: Box::new(crate::util::GCStatistics::default()),
     }
 }

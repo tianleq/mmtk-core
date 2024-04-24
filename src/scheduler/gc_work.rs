@@ -798,9 +798,6 @@ pub trait ProcessEdgesWork:
                     if self.vm_roots_type != 0 && !source.is_null() {
                         if !self.is_object_published(source) {
                             println!("root slot: {:?}", self.edges[i]);
-                            println!("###########");
-                            <Self::VM as VMBinding>::VMObjectModel::dump_object(source);
-                            println!("###########");
                             panic!(
                                 "VM Specific Root({:?}): {:?} is not published",
                                 self.vm_roots_type, source
@@ -828,16 +825,6 @@ pub trait ProcessEdgesWork:
                         let valid =
                             crate::util::metadata::public_bit::is_public::<Self::VM>(new_object);
                         if !valid {
-                            let metadata_address =
-                                crate::util::metadata::public_bit::public_bit_metadata_address::<
-                                    Self::VM,
-                                >(new_object);
-                            <Self::VM as VMBinding>::VMObjectModel::dump_object(source);
-                            info!(
-                                "################ metadata: {:?} ################",
-                                metadata_address
-                            );
-                            <Self::VM as VMBinding>::VMObjectModel::dump_object(new_object);
                             panic!(
                                 "public object: {:?} {:?} slot: {:?} points to private object: {:?} {:?}",
                                 source,

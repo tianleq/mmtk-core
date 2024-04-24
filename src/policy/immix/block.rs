@@ -138,19 +138,10 @@ impl Block {
 
     /// Publish block
     #[cfg(feature = "thread_local_gc")]
-    pub fn publish(
-        &self,
-        publish_lines: bool,
-        #[cfg(feature = "debug_publish_object")] _mutator: Option<u32>,
-    ) -> bool {
+    pub fn publish(&self, #[cfg(feature = "debug_publish_object")] _mutator: Option<u32>) -> bool {
         let prev_value =
             Self::BLOCK_PUBLICATION_TABLE.fetch_or_atomic::<u8>(self.start(), 1, Ordering::SeqCst);
 
-        // Self::BLOCK_PUBLICATION_TABLE.store_atomic::<u8>(self.start(), 1, Ordering::SeqCst);
-        // Also publish all lines within the block
-        if publish_lines {
-            Line::LINE_PUBLICATION_TABLE.bset_metadata(self.start(), Self::BYTES);
-        }
         prev_value == 0
     }
 
@@ -173,24 +164,40 @@ impl Block {
     }
 
     #[cfg(feature = "thread_local_gc_copying")]
-    pub fn are_lines_valid(&self, forbidden_state: u8) -> bool {
+    pub fn are_lines_private(&self) -> bool {
         for line in self.lines() {
-            if line.is_marked(forbidden_state) {
+            if line.is_line_published() {
                 return false;
             }
         }
         true
     }
 
-    // #[cfg(feature = "thread_local_gc")]
-    // pub fn is_block_full(&self, state: u8) -> bool {
-    //     for line in self.lines() {
-    //         if !line.is_marked(state) {
-    //             return false;
-    //         }
-    //     }
-    //     true
-    // }
+    #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
+    pub fn all_public_lines_marked_and_free_lines_unmarked(&self, state: u8) {
+        if !self.is_block_published() {
+            // trivially true for private block
+            return;
+        }
+        for line in self.lines() {
+            if line.is_line_published() {
+                if !line.is_marked(state) {
+                    panic!(
+                        "public block: {:?} -> public line: {:?} is not marked",
+                        self, line
+                    );
+                }
+            } else {
+                // free lines should not be marked
+                if line.is_marked(state) {
+                    panic!(
+                        "public block: {:?} -> free line: {:?} is marked",
+                        self, line
+                    );
+                }
+            }
+        }
+    }
 
     // Defrag byte
 
@@ -236,11 +243,7 @@ impl Block {
     /// Deinitalize a block before releasing.
     pub fn deinit(&self) {
         self.set_state(BlockState::Unallocated);
-        #[cfg(feature = "thread_local_gc")]
-        {
-            // clear line state
-            self.reset_line_mark_state();
-        }
+
         #[cfg(feature = "public_bit")]
         crate::util::metadata::public_bit::bzero_public_bit(self.start(), Self::BYTES);
     }
@@ -329,7 +332,6 @@ impl Block {
             let mut holes = 0;
             let mut prev_line_is_marked = true;
             let line_mark_state = line_mark_state.unwrap();
-            let publish_state = Line::public_line_mark_state(line_mark_state);
 
             let is_published = self.is_block_published();
 
@@ -338,58 +340,36 @@ impl Block {
                 {
                     #[cfg(feature = "thread_local_gc_copying")]
                     {
-                        if line.is_public_line() {
-                            assert!(
-                                line.is_published(publish_state),
-                                "public line: {:?} is not marked, owner: {:?}, line mark state: {}",
-                                line,
-                                self.owner(),
-                                line.get_line_mark_state()
-                            );
-                            assert!(
+                        if line.is_line_published() {
+                            debug_assert!(
                                 is_published,
                                 "private block: {:?} contains public line: {:?} after a local gc",
                                 self, line
                             );
-                        } else {
-                            assert!(
-                                !line.is_published(publish_state),
-                                "private line: {:?} is marked as public, block: {:?}, {:?}",
-                                line,
-                                self.owner(),
-                                is_published
+                            // public lines should not be marked as private objects are strictly evacuated
+                            debug_assert!(
+                                !line.is_marked(line_mark_state),
+                                "public line is marked in a local gc"
                             );
-                            assert!(
+                        } else {
+                            // line is not public, then it must be either marked and in a private block, or unmarked
+                            debug_assert!(
                                 !is_published || !line.is_marked(line_mark_state),
-                                "public block: {:?} contains private line: {:?} after a local gc",
+                                "public block: {:?} contains marked private line: {:?} after a local gc",
                                 self,
                                 line
                             );
                         }
                     }
-                    #[cfg(feature = "thread_local_gc_ibm_style")]
-                    {
-                        if !line.is_public_line() {
-                            assert!(
-                                !line.is_published(publish_state),
-                                "private line: {:?} is marked as public, block: {:?}, {:?}",
-                                line,
-                                self.owner(),
-                                self.is_block_published()
-                            );
-                        }
-                        if line.is_published(publish_state) {
-                            assert!(
-                                line.is_public_line(),
-                                "public line: {:?} is not marked, owner: {:?}, line mark state: {}",
-                                line,
-                                self.owner(),
-                                line.get_line_mark_state()
-                            );
-                        }
-                    }
                 }
-                if line.is_marked(line_mark_state) || line.is_published(publish_state) {
+
+                // public lines are implicitly marked, mark them explicitly so that
+                // in the future mutator/collector phase, free lines can always be
+                // correctly found by looking at line marks
+                if line.is_line_published() {
+                    line.mark(line_mark_state);
+                }
+                if line.is_marked(line_mark_state) {
                     marked_lines += 1;
                     prev_line_is_marked = true;
                 } else {
@@ -399,7 +379,6 @@ impl Block {
                     #[cfg(debug_assertions)]
                     {
                         crate::util::memory::set(line.start(), 0xCA, Line::BYTES);
-                        line.clear_line_mark_state();
                     }
 
                     #[cfg(feature = "immix_zero_on_release")]
@@ -498,77 +477,25 @@ impl Block {
             let mut holes = 0;
             let mut prev_line_is_marked = true;
             let line_mark_state = line_mark_state.unwrap();
-            #[cfg(feature = "thread_local_gc")]
-            let publish_state = Line::public_line_mark_state(line_mark_state);
             #[cfg(feature = "thread_local_gc_copying")]
             let mut is_block_pubic = false;
 
             for line in self.lines() {
-                #[cfg(all(feature = "thread_local_gc", debug_assertions))]
-                {
-                    #[cfg(feature = "thread_local_gc_copying")]
-                    {
-                        if line.is_public_line() {
-                            // public line bit is bulk set during page allocation, some lines may not have objects, so mark state can be 0
-                            assert!(
-                                line.is_published(publish_state) || line.is_marked(0),
-                                "public line: {:?} is not marked, owner: {:?}, line mark state: {}",
-                                line,
-                                self.owner(),
-                                line.get_line_mark_state()
-                            );
-                        } else {
-                            assert!(
-                                !line.is_published(publish_state),
-                                "private line: {:?} is marked as public, block: {:?}, {:?}",
-                                line,
-                                self.owner(),
-                                self.is_block_published()
-                            );
-                        }
-                    }
-                    #[cfg(feature = "thread_local_gc_ibm_style")]
-                    {
-                        if !line.is_public_line() {
-                            assert!(
-                                !line.is_published(publish_state),
-                                "private line: {:?} is marked as public, block: {:?}, {:?}",
-                                line,
-                                self.owner(),
-                                self.is_block_published()
-                            );
-                        }
-                        // In a non-moving setting, public line bit is not bulk reset during preparation
-                        // so it can be the case that a public line bit is set but the line in fact is reusable
-                        if line.is_published(publish_state) {
-                            assert!(
-                                line.is_public_line(),
-                                "public line: {:?} is not marked, owner: {:?}, line mark state: {}",
-                                line,
-                                self.owner(),
-                                line.get_line_mark_state()
-                            );
-                        }
-                    }
-                }
-
-                #[cfg(feature = "thread_local_gc")]
-                let is_line_published = line.is_published(publish_state);
-                #[cfg(not(feature = "thread_local_gc"))]
-                let is_line_published = false;
-
-                #[cfg(feature = "thread_local_gc")]
-                if is_line_published {
-                    is_block_pubic = true;
-                }
-
-                if line.is_marked(line_mark_state) || is_line_published {
+                if line.is_marked(line_mark_state) {
                     marked_lines += 1;
                     prev_line_is_marked = true;
+                    // a line is public iff it is marked and line level public bit is set
+                    if !is_block_pubic && line.is_line_published() {
+                        is_block_pubic = true;
+                    }
                 } else {
                     if prev_line_is_marked {
                         holes += 1;
                     }
+                    // line is not marked, so it is free, line level public bit
+                    // needs to be cleared
+                    #[cfg(feature = "thread_local_gc_ibm_style")]
+                    line.reset_publication();
 
                     #[cfg(feature = "immix_zero_on_release")]
                     crate::util::memory::zero(line.start(), Line::BYTES);
@@ -622,17 +549,17 @@ impl Block {
                     #[cfg(feature = "thread_local_gc_copying")]
                     {
                         if is_block_pubic {
-                            debug_assert!(self.owner() == u32::MAX);
+                            debug_assert!(
+                                self.owner() == u32::MAX,
+                                "block: {:?}, owner: {}, defrag source: {}",
+                                self,
+                                self.owner(),
+                                self.is_defrag_source()
+                            );
                             space.reusable_blocks.push(*self);
                             #[cfg(feature = "debug_thread_local_gc_copying")]
                             {
                                 (*gc_stats).number_of_global_reusable_blocks += 1;
-                                // println!(
-                                //     "Global GC {} | Found public reusable block: {:?} with {} lines marked",
-                                //     crate::util::GLOBAL_GC_ID.load(Ordering::SeqCst),
-                                //     self,
-                                //     marked_lines
-                                // );
                             }
                         } else {
                             debug_assert!(self.owner() != u32::MAX);

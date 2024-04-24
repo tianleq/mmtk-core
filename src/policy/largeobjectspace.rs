@@ -10,7 +10,6 @@ use crate::util::heap::{FreeListPageResource, PageResource};
 use crate::util::metadata;
 use crate::util::opaque_pointer::*;
 use crate::util::treadmill::TreadMill;
-use crate::util::GLOBAL_GC_STATISTICS;
 use crate::util::{Address, ObjectReference};
 use crate::vm::ObjectModel;
 use crate::vm::VMBinding;
@@ -350,10 +349,12 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                     );
                     crate::util::metadata::public_bit::unset_public_bit::<VM>(object);
                 }
-
-                *pages += self
-                    .pr
-                    .release_pages(get_super_page(object.to_object_start::<VM>()));
+                #[cfg(feature = "debug_thread_local_gc_copying")]
+                {
+                    *pages += self
+                        .pr
+                        .release_pages(get_super_page(object.to_object_start::<VM>()));
+                }
             };
         if sweep_nursery {
             for object in self.treadmill.collect_nursery() {
@@ -375,6 +376,8 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
 
         #[cfg(feature = "debug_thread_local_gc_copying")]
         {
+            use crate::util::GLOBAL_GC_STATISTICS;
+
             let mut guard = GLOBAL_GC_STATISTICS.lock().unwrap();
             assert!(pages >= 0);
             guard.number_of_los_pages -= pages as usize;

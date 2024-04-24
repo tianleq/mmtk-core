@@ -6,7 +6,7 @@ use super::allocator::AllocatorContext;
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::Space;
 use crate::util::alloc::{allocator, Allocator};
-use crate::util::{conversions, opaque_pointer::*, GLOBAL_GC_STATISTICS};
+use crate::util::{conversions, opaque_pointer::*};
 use crate::util::{Address, ObjectReference};
 use crate::vm::VMBinding;
 
@@ -88,6 +88,7 @@ impl<VM: VMBinding> Allocator<VM> for LargeObjectAllocator<VM> {
         let pages = crate::util::conversions::bytes_to_pages_up(maxbytes);
         #[cfg(feature = "debug_thread_local_gc_copying")]
         {
+            use crate::util::GLOBAL_GC_STATISTICS;
             use crate::vm::ActivePlan;
 
             let mutator = VM::VMActivePlan::mutator(VMMutatorThread(self.tls));
@@ -170,6 +171,7 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
                 self.space.thread_local_sweep_large_object(object);
                 #[cfg(feature = "debug_thread_local_gc_copying")]
                 {
+                    use crate::util::GLOBAL_GC_STATISTICS;
                     use crate::vm::ActivePlan;
                     use crate::vm::ObjectModel;
 
@@ -212,6 +214,7 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
                 self.space.thread_local_sweep_large_object(object);
                 #[cfg(feature = "debug_thread_local_gc_copying")]
                 {
+                    use crate::util::GLOBAL_GC_STATISTICS;
                     use crate::vm::ActivePlan;
                     use crate::vm::ObjectModel;
 

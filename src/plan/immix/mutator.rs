@@ -135,7 +135,9 @@ fn immix_mutator_thread_local_post_copy<VM: VMBinding>(
     }
     .downcast_mut::<ImmixAllocator<VM>>()
     .unwrap();
-    immix_allocator.immix_space().post_copy(obj, bytes)
+    immix_allocator
+        .immix_space()
+        .thread_local_post_copy(mutator, obj, bytes)
 }
 
 pub(in crate::plan) const RESERVED_ALLOCATORS: ReservedAllocators = ReservedAllocators {

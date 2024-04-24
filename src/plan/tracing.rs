@@ -3,8 +3,11 @@
 
 use crate::scheduler::gc_work::{EdgeOf, ProcessEdgesWork};
 use crate::scheduler::{GCWorker, WorkBucketStage};
-use crate::util::{ObjectReference, VMMutatorThread};
+use crate::util::ObjectReference;
+#[cfg(feature = "debug_thread_local_gc_copying")]
+use crate::util::VMMutatorThread;
 use crate::vm::edge_shape::Edge;
+#[cfg(feature = "debug_thread_local_gc_copying")]
 use crate::vm::ActivePlan;
 use crate::vm::EdgeVisitor;
 use crate::vm::Scanning;
@@ -235,7 +238,11 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
                 #[cfg(not(feature = "debug_publish_object"))]
                 crate::util::metadata::public_bit::set_public_bit::<VM>(object);
                 #[cfg(feature = "thread_local_gc")]
-                self._mmtk.get_plan().publish_object(object, self.tls);
+                self._mmtk.get_plan().publish_object(
+                    object,
+                    #[cfg(feature = "debug_thread_local_gc_copying")]
+                    self.tls,
+                );
                 VM::VMScanning::scan_object(
                     crate::util::VMWorkerThread(crate::util::VMThread::UNINITIALIZED),
                     object,

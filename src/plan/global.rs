@@ -362,6 +362,10 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
     fn is_object_published(&self, _object: ObjectReference) -> bool {
         false
     }
+
+    fn get_number_of_movable_bytes_published(&self) -> usize {
+        0
+    }
 }
 
 impl_downcast!(Plan assoc VM);

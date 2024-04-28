@@ -94,20 +94,6 @@ impl<VM: VMBinding> GCTrigger<VM> {
                 plan.get_total_pages(),
             );
 
-            println!(
-                "[POLL] {}{} ({}/{} pages) | ({}/{} pages)",
-                if let Some(space) = space {
-                    format!("{}: ", space.get_name())
-                } else {
-                    "".to_string()
-                },
-                "Triggering collection",
-                plan.get_reserved_pages(),
-                plan.get_total_pages(),
-                plan.get_used_pages(),
-                plan.get_collection_reserved_pages()
-            );
-
             self.gc_requester.request();
             return Some(GCKind::GLOBAL);
         }

@@ -460,16 +460,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         let new_cursor = result + size;
 
         if new_cursor > self.bump_pointer.limit {
-            #[cfg(feature = "debug_thread_local_gc_copying")]
-            {
-                use crate::util::GLOBAL_GC_STATISTICS;
-
-                if self.copy && self.mutator_id == u32::MAX {
-                    // allocation occurs in gc phase
-                    let mut guard = GLOBAL_GC_STATISTICS.lock().unwrap();
-                    guard.number_of_blocks_acquired_for_evacuation += 1;
-                }
-            }
             trace!(
                 "{:?}: Thread local buffer used up, go to alloc slow path",
                 self.tls
@@ -638,6 +628,19 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
     /// Acquire a clean block from ImmixSpace for allocation.
     fn alloc_slow_once(&mut self, size: usize, align: usize, offset: usize) -> Address {
         trace!("{:?}: alloc_slow_once", self.tls);
+        #[cfg(feature = "debug_thread_local_gc_copying")]
+        {
+            use crate::util::GLOBAL_GC_STATISTICS;
+
+            if self.copy && self.mutator_id == u32::MAX {
+                // allocation occurs in gc phase
+                let mut guard = GLOBAL_GC_STATISTICS.lock().unwrap();
+                guard.number_of_blocks_acquired_for_evacuation += 1;
+            }
+            let mutator = VM::VMActivePlan::mutator(VMMutatorThread(self.tls));
+            mutator.stats.number_of_clean_blocks_acquired += 1;
+        }
+
         self.acquire_clean_block(size, align, offset)
     }
 

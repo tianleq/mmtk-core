@@ -412,13 +412,14 @@ impl<VM: VMBinding> Mutator<VM> {
             .unwrap();
 
         writeln!(file,
-            "Before Local {}->{} | bytes allocated: {}, bytes_published: {}, bytes_copied: {}, number_of_published_blocks: {}, number_of_blocks_acquired_for_evacuation: {}, number_of_blocks_freed: {}, number_of_global_reusable_blocks: {}, number_of_local_reusable_blocks: {}, number_of_live_blocks: {}, number_of_live_public_blocks: {}, number_of_los_pages: {}, total_allocation: {}",
+            "Before Local {}->{} | bytes allocated: {}, bytes_published: {}, bytes_copied: {}, number_of_published_blocks: {}, number_of_clean_blocks_acquired: {}, number_of_blocks_acquired_for_evacuation: {}, number_of_blocks_freed: {}, number_of_global_reusable_blocks: {}, number_of_local_reusable_blocks: {}, number_of_live_blocks: {}, number_of_live_public_blocks: {}, number_of_los_pages: {}, total_allocation: {}",
             self.mutator_id,
             self.request_id,
             self.stats.bytes_allocated,
             self.stats.bytes_published,
             self.stats.bytes_copied,
             self.stats.number_of_published_blocks,
+            self.stats.number_of_clean_blocks_acquired,
             self.stats.number_of_blocks_acquired_for_evacuation,
             self.stats.number_of_blocks_freed,
             self.stats.number_of_global_reusable_blocks,
@@ -459,13 +460,14 @@ impl<VM: VMBinding> Mutator<VM> {
             .unwrap();
 
             writeln!(file, 
-                "After Local {}->{} | bytes allocated: {}, bytes_published: {}, bytes_copied: {}, number_of_published_blocks: {}, number_of_blocks_acquired_for_evacuation: {}, number_of_blocks_freed: {}, number_of_global_reusable_blocks: {}, number_of_local_reusable_blocks: {}, number_of_live_blocks: {}, number_of_live_public_blocks: {}, number_of_los_pages: {}, total_allocation: {}",
+                "After Local {}->{} | bytes allocated: {}, bytes_published: {}, bytes_copied: {}, number_of_published_blocks: {}, number_of_clean_blocks_acquired: {}, number_of_blocks_acquired_for_evacuation: {}, number_of_blocks_freed: {}, number_of_global_reusable_blocks: {}, number_of_local_reusable_blocks: {}, number_of_live_blocks: {}, number_of_live_public_blocks: {}, number_of_los_pages: {}, total_allocation: {}",
                 self.mutator_id,
                 self.request_id,
                 self.stats.bytes_allocated,
                 self.stats.bytes_published,
                 self.stats.bytes_copied,
                 self.stats.number_of_published_blocks,
+                self.stats.number_of_clean_blocks_acquired,
                 self.stats.number_of_blocks_acquired_for_evacuation,
                 self.stats.number_of_blocks_freed,
                 self.stats.number_of_global_reusable_blocks,
@@ -501,6 +503,7 @@ impl<VM: VMBinding> Mutator<VM> {
         self.stats.bytes_copied = 0;
         self.stats.bytes_published = 0;
         self.stats.number_of_blocks_acquired_for_evacuation = 0;
+        self.stats.number_of_clean_blocks_acquired = 0;
         self.stats.number_of_blocks_freed = 0;
         self.stats.number_of_published_blocks = 0;
     }

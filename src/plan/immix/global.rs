@@ -225,6 +225,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             crate::util::metadata::public_bit::is_public::<VM>(object)
         }
     }
+
+    fn get_number_of_movable_bytes_published(&self) -> usize {
+        self.immix_space.bytes_published.load(Ordering::SeqCst)
+    }
 }
 
 impl<VM: VMBinding> Immix<VM> {

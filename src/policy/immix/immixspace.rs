@@ -64,7 +64,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     /// Some settings for this space
     space_args: ImmixSpaceArgs,
     #[cfg(feature = "thread_local_gc_copying")]
-    pub(super) bytes_published: AtomicUsize,
+    pub(crate) bytes_published: AtomicUsize,
     #[cfg(feature = "debug_thread_local_gc_copying")]
     pub(super) bytes_copied: AtomicUsize,
 }
@@ -435,7 +435,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     #[cfg(feature = "thread_local_gc_copying")]
     pub fn public_object_reserved_pages(&self) -> usize {
-        120 * (self.bytes_published.load(Ordering::SeqCst) / crate::util::constants::BYTES_IN_PAGE)
+        110 * (self.bytes_published.load(Ordering::SeqCst) / crate::util::constants::BYTES_IN_PAGE)
             / 100
     }
 
@@ -673,6 +673,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 }
             } else {
                 block.set_state(BlockState::Marked);
+            }
+
+            #[cfg(feature = "thread_local_gc_copying")]
+            if crate::util::metadata::public_bit::is_public::<VM>(object) {
+                self.bytes_published.fetch_add(
+                    VM::VMObjectModel::get_current_size(object),
+                    Ordering::SeqCst,
+                );
             }
             // Visit node
             queue.enqueue(object);

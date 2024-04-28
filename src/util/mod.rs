@@ -112,6 +112,7 @@ pub(crate) struct GCStatistics {
     pub number_of_published_blocks: usize,
     pub number_of_live_blocks: usize,
     pub number_of_live_public_blocks: usize,
+    pub number_of_clean_blocks_acquired: usize,
     // The following are local gc related
     pub bytes_copied: usize,
     pub number_of_blocks_freed: usize,
@@ -133,6 +134,7 @@ pub(crate) static GLOBAL_GC_STATISTICS: std::sync::Mutex<GCStatistics> =
         number_of_published_blocks: 0,
         number_of_live_blocks: 0,
         number_of_live_public_blocks: 0,
+        number_of_clean_blocks_acquired: 0,
         bytes_copied: 0,
         number_of_blocks_freed: 0,
         number_of_blocks_acquired_for_evacuation: 0,

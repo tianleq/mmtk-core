@@ -30,3 +30,11 @@ pub mod markcompactspace;
 pub mod marksweepspace;
 #[cfg(feature = "vm_space")]
 pub mod vmspace;
+
+// type Mutator = u32;
+
+// #[cfg(feature = "thread_local_gc_copying")]
+// lazy_static! {
+//     pub(crate) static ref THREAD_LOCAL_HEAP_IN_PAGES: std::sync::Mutex<std::collections::HashMap<Mutator, usize>> =
+//         std::sync::Mutex::new(std::collections::HashMap::new());
+// }

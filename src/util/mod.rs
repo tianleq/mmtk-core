@@ -109,17 +109,45 @@ lazy_static! {
 pub(crate) struct GCStatistics {
     pub bytes_allocated: usize,
     pub bytes_published: usize,
-    pub number_of_published_blocks: usize,
+    pub blocks_published: usize,
     pub number_of_live_blocks: usize,
     pub number_of_live_public_blocks: usize,
     pub number_of_clean_blocks_acquired: usize,
     // The following are local gc related
+    pub bytes_copied: usize,
+    pub live_public_bytes: usize,
+    pub number_of_blocks_freed: usize,
+    pub number_of_blocks_acquired_for_evacuation: usize,
+    pub number_of_local_reusable_blocks: usize,
+    pub number_of_global_reusable_blocks: usize,
+    pub number_of_los_pages: usize,
+    pub number_of_free_lines_in_global_reusable_blocks: usize,
+    pub number_of_free_lines_in_local_reusable_blocks: usize,
+}
+
+#[cfg(feature = "debug_thread_local_gc_copying")]
+#[derive(Default)]
+pub(crate) struct LocalGCStatistics {
+    pub bytes_allocated: usize,
+    pub bytes_published: usize,
+    pub blocks_published: usize,
+    pub los_bytes_allocated: usize,
+    pub los_bytes_published: usize,
+
+    pub number_of_live_blocks: usize,
+    pub number_of_live_public_blocks: usize,
+    pub number_of_clean_blocks_acquired: usize,
+
     pub bytes_copied: usize,
     pub number_of_blocks_freed: usize,
     pub number_of_blocks_acquired_for_evacuation: usize,
     pub number_of_local_reusable_blocks: usize,
     pub number_of_global_reusable_blocks: usize,
     pub number_of_los_pages: usize,
+
+    pub number_of_los_pages_freed: usize,
+    pub number_of_free_lines_in_global_reusable_blocks: usize,
+    pub number_of_free_lines_in_local_reusable_blocks: usize,
 }
 
 #[cfg(feature = "debug_thread_local_gc_copying")]
@@ -131,16 +159,20 @@ pub(crate) static GLOBAL_GC_STATISTICS: std::sync::Mutex<GCStatistics> =
     std::sync::Mutex::new(GCStatistics {
         bytes_allocated: 0,
         bytes_published: 0,
-        number_of_published_blocks: 0,
+        blocks_published: 0,
+
         number_of_live_blocks: 0,
         number_of_live_public_blocks: 0,
         number_of_clean_blocks_acquired: 0,
         bytes_copied: 0,
+        live_public_bytes: 0,
         number_of_blocks_freed: 0,
         number_of_blocks_acquired_for_evacuation: 0,
         number_of_local_reusable_blocks: 0,
         number_of_global_reusable_blocks: 0,
         number_of_los_pages: 0,
+        number_of_free_lines_in_global_reusable_blocks: 0,
+        number_of_free_lines_in_local_reusable_blocks: 0,
     });
 
 #[cfg(feature = "debug_thread_local_gc_copying")]

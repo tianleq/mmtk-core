@@ -230,11 +230,11 @@ impl Stats {
 
     #[cfg(feature = "thread_local_gc")]
     pub fn start_local_gc(&self) {
-        self.thread_local_gc_count.fetch_add(1, Ordering::SeqCst);
         if !self.get_gathering_stats() {
             return;
         }
         self.thread_local_gc_total_time.lock().unwrap().start();
+        self.thread_local_gc_count.fetch_add(1, Ordering::SeqCst);
     }
 
     #[cfg(feature = "thread_local_gc")]
@@ -277,30 +277,7 @@ impl Stats {
         for value in scheduler_stat.values() {
             print!("{}\t", value);
         }
-        #[cfg(feature = "public_object_analysis")]
-        {
-            let stats = crate::util::ALL_SCOPE_OBJECTS_STATS.lock().unwrap();
-            print!(
-                "{}\t{}\t{}\t",
-                stats.allocation_bytes,
-                stats.public_bytes,
-                (stats.public_bytes as f64 / stats.allocation_bytes as f64) * 100 as f64
-            );
-            let stats = crate::util::HARNESS_SCOPE_OBJECTS_STATS.lock().unwrap();
-            print!(
-                "{}\t{}\t{}\t",
-                stats.allocation_bytes,
-                stats.public_bytes,
-                (stats.public_bytes as f64 / stats.allocation_bytes as f64) * 100 as f64
-            );
-            let stats = crate::util::REQUEST_SCOPE_OBJECTS_STATS.lock().unwrap();
-            print!(
-                "{}\t{}\t{}\t",
-                stats.allocation_bytes,
-                stats.public_bytes,
-                (stats.public_bytes as f64 / stats.allocation_bytes as f64) * 100 as f64
-            );
-        }
+
         println!();
         print!("Total time: ");
         self.total_time.lock().unwrap().print_total(None);
@@ -311,7 +288,7 @@ impl Stats {
 
     pub fn print_column_names(&self, scheduler_stat: &HashMap<String, String>) {
         print!("GC\t");
-        print!("LOCAL GC\t");
+        print!("LOCAL_GC\t");
         print!("time.threadlocal\t");
         let counter = self.counters.lock().unwrap();
         for iter in &(*counter) {

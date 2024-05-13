@@ -11,6 +11,7 @@ use std::sync::atomic::AtomicBool;
 
 pub const THREAD_LOCAL_GC_ACTIVE: u32 = 1;
 pub const THREAD_LOCAL_GC_INACTIVE: u32 = 0;
+pub const THREAD_LOCAL_GC_PENDING: u32 = 2;
 
 pub struct ExecuteThreadlocalCollection<VM: VMBinding> {
     pub mmtk: &'static MMTK<VM>,
@@ -47,7 +48,10 @@ impl<VM: VMBinding> ExecuteThreadlocalCollection<VM> {
             .policy
             .on_thread_local_gc_end(self.mmtk, mutator);
         #[cfg(feature = "debug_thread_local_gc_copying")]
-        mutator.reset_stats();
+        {
+            mutator.reset_stats();
+        }
+        mutator.local_allocation_size = 0;
         // local gc has finished,
         match LOCAL_GC_ACTIVE.compare_exchange(
             true,
@@ -62,8 +66,7 @@ impl<VM: VMBinding> ExecuteThreadlocalCollection<VM> {
 }
 
 /// The thread-local GC Preparation Work
-/// This work packet invokes prepare() for the plan (which will invoke prepare() for each space), and
-/// pushes work packets for preparing mutators and collectors.
+
 /// We should only have one such work packet per GC, before any actual GC work starts.
 /// We assume this work packet is the only running work packet that accesses plan, and there should
 /// be no other concurrent work packet that accesses plan (read or write). Otherwise, there may
@@ -89,8 +92,7 @@ impl<VM: VMBinding> ThreadlocalPrepare<VM> {
 }
 
 /// The thread local GC release Work
-/// This work packet invokes release() for the plan (which will invoke release() for each space), and
-/// pushes work packets for releasing mutators and collectors.
+
 /// We should only have one such work packet per GC, after all actual GC work ends.
 /// We assume this work packet is the only running work packet that accesses plan, and there should
 /// be no other concurrent work packet that accesses plan (read or write). Otherwise, there may

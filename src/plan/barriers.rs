@@ -552,6 +552,10 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
                 let mutator = VM::VMActivePlan::mutator(self.tls);
                 mutator.stats.bytes_published += VM::VMObjectModel::get_current_size(value);
             }
+
+            let mut guard = GLOBAL_GC_STATISTICS.lock().unwrap();
+            guard.bytes_published += VM::VMObjectModel::get_current_size(value);
+            guard.live_public_bytes += VM::VMObjectModel::get_current_size(value);
         }
     }
 }

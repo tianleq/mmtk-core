@@ -1021,14 +1021,37 @@ pub fn mmtk_request_thread_local_gc<VM: VMBinding>(
         .get_plan()
         .thread_local_collection_required(false, None, tls);
     if required {
-        // Local gc is required, continue if there is ongoing local gc
+        // #[cfg(not(feature = "debug_thread_local_gc_copying"))]
+        // if VM::VMActivePlan::mutator(tls).is_thread_local_gc_pending() {
+        //     match LOCAL_GC_ACTIVE.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        //     {
+        //         Ok(_) => true,
+        //         Err(_) => false,
+        //     }
+        // } else {
+        //     false
+        // }
+
         match LOCAL_GC_ACTIVE.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst) {
             Ok(_) => true,
             Err(_) => false,
         }
     } else {
-        required
+        false
     }
+
+    // let required = mmtk
+    //     .get_plan()
+    //     .thread_local_collection_required(false, None, tls);
+    // if required {
+    //     // Local gc is required, continue if there is ongoing local gc
+    //     match LOCAL_GC_ACTIVE.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst) {
+    //         Ok(_) => true,
+    //         Err(_) => false,
+    //     }
+    // } else {
+    //     required
+    // }
 }
 
 #[cfg(feature = "thread_local_gc")]

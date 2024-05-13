@@ -509,6 +509,13 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         #[cfg(feature = "debug_thread_local_gc_copying")] _tls: VMMutatorThread,
     ) {
         self.treadmill.add_to_treadmill(_object, false);
+        #[cfg(feature = "debug_thread_local_gc_copying")]
+        {
+            use crate::vm::ActivePlan;
+
+            let mutator = VM::VMActivePlan::mutator(_tls);
+            mutator.stats.los_bytes_published += VM::VMObjectModel::get_current_size(_object);
+        }
     }
 
     #[cfg(feature = "thread_local_gc")]

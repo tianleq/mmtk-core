@@ -72,25 +72,23 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         _space: Option<SpaceStats<VM>>,
         _tls: VMMutatorThread,
     ) -> bool {
-        let total_pages = self.get_total_pages();
+        // #[cfg(not(feature = "debug_thread_local_gc_copying"))]
+        // {
+        //     let total_pages = self.get_total_pages();
 
-        let thread_local_copy_reserve_pages = self.get_thread_local_collection_reserved_pages();
-        let red_zone_pages = thread_local_copy_reserve_pages;
+        //     let thread_local_copy_reserve_pages = self.get_thread_local_collection_reserved_pages();
+        //     let red_zone_pages = thread_local_copy_reserve_pages;
 
-        let required =
-            self.get_used_pages() + thread_local_copy_reserve_pages + red_zone_pages >= total_pages;
-        #[cfg(feature = "debug_thread_local_gc_copying")]
-        {
-            // if required {
-            //     println!(
-            //         "used pages: {}, local copy reserve pages: {}, red zone pages: {}",
-            //         self.get_used_pages(),
-            //         thread_local_copy_reserve_pages,
-            //         red_zone_pages
-            //     );
-            // }
-        }
-        required
+        //     let required = self.get_used_pages() + thread_local_copy_reserve_pages + red_zone_pages
+        //         >= total_pages;
+
+        //     required
+        // }
+
+        use crate::vm::ActivePlan;
+
+        let mutator = VM::VMActivePlan::mutator(_tls);
+        mutator.local_allocation_size >= self.options().get_thread_local_heap_size()
     }
 
     fn last_collection_was_exhaustive(&self) -> bool {
@@ -129,8 +127,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     ) {
         use crate::policy::immix::{TRACE_THREAD_LOCAL_DEFRAG, TRACE_THREAD_LOCAL_FAST};
 
-        // self.base().set_collection_kind::<Self>(self);
-        // self.base().set_gc_status(GcStatus::GcPrepare);
         Self::schedule_and_do_immix_thread_local_collection::<
             Immix<VM>,
             ImmixGCWorkContext<VM, TRACE_THREAD_LOCAL_FAST>,
@@ -228,6 +224,65 @@ impl<VM: VMBinding> Plan for Immix<VM> {
 
     fn get_number_of_movable_bytes_published(&self) -> usize {
         self.immix_space.bytes_published.load(Ordering::SeqCst)
+    }
+
+    #[cfg(feature = "debug_thread_local_gc_copying")]
+    fn collect_gc_stats(&self) {
+        use crate::util::GLOBAL_GC_STATISTICS;
+        use crate::vm::ActivePlan;
+
+        let mut number_of_live_public_blocks = 0;
+        let mut number_of_live_blocks = 0;
+        let mut number_of_local_reusable_blocks = 0;
+
+        for chunk in self.immix_space.chunk_map.all_chunks().filter(|c| {
+            self.immix_space.chunk_map.get(*c)
+                == crate::util::heap::chunk_map::ChunkState::Allocated
+        }) {
+            for block in chunk.iter_region::<crate::policy::immix::block::Block>() {
+                let state = block.get_state();
+                // Skip unallocated blocks.
+                if state == crate::policy::immix::block::BlockState::Unallocated {
+                    continue;
+                }
+                let is_public = block.is_block_published();
+                if is_public {
+                    number_of_live_public_blocks += 1;
+                }
+                number_of_live_blocks += 1;
+            }
+        }
+        // mutators have been stopped, so it is safe/sound to iterate through all mutators
+        for mutator in VM::VMActivePlan::mutators() {
+            let allocator = unsafe {
+                mutator
+                    .allocators
+                    .get_allocator(mutator.config.allocator_mapping[AllocationSemantics::Default])
+                    .downcast_ref::<crate::util::alloc::ImmixAllocator<VM>>()
+                    .unwrap()
+            };
+            number_of_local_reusable_blocks += allocator.local_reusable_blocks_size();
+        }
+        let mut guard = GLOBAL_GC_STATISTICS.lock().unwrap();
+        guard.number_of_global_reusable_blocks = self.immix_space.reusable_blocks.len();
+        guard.number_of_live_blocks = number_of_live_blocks;
+        guard.number_of_live_public_blocks = number_of_live_public_blocks;
+        guard.number_of_local_reusable_blocks = number_of_local_reusable_blocks;
+    }
+
+    #[cfg(feature = "debug_thread_local_gc_copying")]
+    fn collect_local_gc_stats(&self, _tls: VMMutatorThread) {
+        use crate::vm::ActivePlan;
+
+        let mutator = VM::VMActivePlan::mutator(_tls);
+        let immix_allocator = unsafe {
+            mutator
+                .allocators
+                .get_allocator(mutator.config.allocator_mapping[AllocationSemantics::Default])
+                .downcast_ref::<crate::util::alloc::ImmixAllocator<VM>>()
+                .unwrap()
+        };
+        immix_allocator.collect_thread_local_heap_stats();
     }
 }
 

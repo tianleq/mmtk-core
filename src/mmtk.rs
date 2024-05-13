@@ -229,24 +229,12 @@ impl<VM: VMBinding> MMTK<VM> {
         self.inside_harness.store(true, Ordering::SeqCst);
         self.stats.start_all();
         self.scheduler.enable_stat();
-        #[cfg(feature = "public_object_analysis")]
-        {
-            let mut stats = crate::util::HARNESS_SCOPE_OBJECTS_STATS.lock().unwrap();
-            stats.allocation_count = 0;
-            stats.allocation_bytes = 0;
-            stats.public_bytes = 0;
-            stats.public_count = 0;
-        }
+
         #[cfg(feature = "debug_thread_local_gc_copying")]
         {
-            use std::fs::OpenOptions;
-
-            let file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/home/tianleq/misc/global-gc-stats.log")
-                .unwrap();
-            file.set_len(0).unwrap();
+            for entry in std::fs::read_dir("/home/tianleq/misc/local-gc-debug-logs").unwrap() {
+                std::fs::remove_file(entry.unwrap().path()).unwrap();
+            }
         }
     }
 
@@ -257,6 +245,11 @@ impl<VM: VMBinding> MMTK<VM> {
         self.stats.stop_all(self);
         self.inside_harness.store(false, Ordering::SeqCst);
         probe!(mmtk, harness_end);
+    }
+
+    #[cfg(feature = "debug_thread_local_gc_copying")]
+    pub fn is_inside_harness(&self) -> bool {
+        self.inside_harness.load(Ordering::SeqCst)
     }
 
     #[cfg(feature = "sanity")]

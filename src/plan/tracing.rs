@@ -271,6 +271,7 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
 
             let mut guard = GLOBAL_GC_STATISTICS.lock().unwrap();
             guard.bytes_published += number_of_bytes_published;
+            guard.live_public_bytes += number_of_bytes_published;
         }
     }
 

@@ -78,7 +78,9 @@ pub fn create_markcompact_mutator<VM: VMBinding>(
         ))]
         request_id: 0,
         #[cfg(feature = "debug_thread_local_gc_copying")]
-        stats: Box::new(crate::util::GCStatistics::default()),
+        stats: Box::new(crate::util::LocalGCStatistics::default()),
+        #[cfg(feature = "thread_local_gc_copying")]
+        local_allocation_size: 0,
     }
 }
 

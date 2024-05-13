@@ -23,6 +23,8 @@ pub struct Defrag {
     pub defrag_spill_threshold: AtomicUsize,
     /// The number of remaining clean pages in defrag space.
     available_clean_pages_for_defrag: AtomicUsize,
+    #[cfg(feature = "debug_thread_local_gc_copying")]
+    pub total_clean_pages_for_defrag: AtomicUsize,
 }
 
 pub struct StatsForDefrag {
@@ -140,6 +142,13 @@ impl Defrag {
             available_clean_pages_for_defrag as usize + plan_stats.collection_reserved_pages,
             Ordering::Release,
         );
+        #[cfg(feature = "debug_thread_local_gc_copying")]
+        {
+            self.total_clean_pages_for_defrag.store(
+                available_clean_pages_for_defrag as usize + plan_stats.collection_reserved_pages,
+                Ordering::Release,
+            );
+        }
     }
 
     /// Get the numebr of all the recyclable lines in all the reusable blocks.

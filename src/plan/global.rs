@@ -366,6 +366,12 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
     fn get_number_of_movable_bytes_published(&self) -> usize {
         0
     }
+
+    #[cfg(feature = "debug_thread_local_gc_copying")]
+    fn collect_gc_stats(&self) {}
+
+    #[cfg(feature = "debug_thread_local_gc_copying")]
+    fn collect_local_gc_stats(&self, _tls: VMMutatorThread) {}
 }
 
 impl_downcast!(Plan assoc VM);

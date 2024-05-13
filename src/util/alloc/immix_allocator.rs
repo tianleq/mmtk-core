@@ -54,12 +54,7 @@ pub struct ImmixAllocator<VM: VMBinding> {
     local_free_blocks: Box<Vec<Block>>,
     #[cfg(feature = "thread_local_gc")]
     local_reusable_blocks: Box<Vec<Block>>,
-    #[cfg(feature = "thread_local_gc")]
-    /// locally cached current line mark state
-    pub local_line_mark_state: u8,
-    /// locally cached line mark state in previous GC
-    #[cfg(feature = "thread_local_gc")]
-    pub local_unavailable_line_mark_state: u8,
+
     #[cfg(feature = "thread_local_gc")]
     semantic: Option<ImmixAllocSemantics>,
 }
@@ -113,8 +108,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         use crate::policy::immix::LOCAL_GC_COPY_RESERVE_PAGES;
 
         // Reset local line mark state
-        self.local_line_mark_state = self.space.line_mark_state.load(atomic::Ordering::Acquire);
-        self.local_unavailable_line_mark_state = self.local_line_mark_state;
+        // self.local_line_mark_state = self.space.line_mark_state.load(atomic::Ordering::Acquire);
+        // self.local_unavailable_line_mark_state = self.local_line_mark_state;
 
         // clear local reusable block list so that it can be rebuilt
         self.local_blocks
@@ -180,10 +175,23 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
         // update the local gc copy reserve
         #[cfg(feature = "thread_local_gc_copying")]
-        LOCAL_GC_COPY_RESERVE_PAGES.fetch_max(
-            Block::PAGES * (self.local_blocks.len() + self.local_reusable_blocks.len()),
-            atomic::Ordering::SeqCst,
-        );
+        {
+            LOCAL_GC_COPY_RESERVE_PAGES.fetch_max(
+                Block::PAGES * (self.local_blocks.len() + self.local_reusable_blocks.len()),
+                atomic::Ordering::SeqCst,
+            );
+
+            // // update the local heap info
+            // let mut local_heap_info = crate::policy::THREAD_LOCAL_HEAP_IN_PAGES.lock().unwrap();
+            // if let Some(info) = local_heap_info.get_mut(&self.mutator_id) {
+            //     *info = Block::PAGES * (self.local_blocks.len() + self.local_reusable_blocks.len());
+            // } else {
+            //     local_heap_info.insert(
+            //         self.mutator_id,
+            //         Block::PAGES * (self.local_blocks.len() + self.local_reusable_blocks.len()),
+            //     );
+            // }
+        }
 
         // verify thread local block list
         #[cfg(debug_assertions)]
@@ -218,17 +226,37 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         }
     }
 
+    #[cfg(feature = "debug_thread_local_gc_copying")]
+    pub fn collect_thread_local_heap_stats(&self) {
+        let mutator = VM::VMActivePlan::mutator(VMMutatorThread(self.tls));
+        mutator.stats.number_of_live_blocks = self.local_blocks.len();
+        for b in &*self.local_blocks {
+            if b.is_block_published() {
+                mutator.stats.number_of_live_public_blocks += 1;
+            }
+        }
+        mutator.stats.number_of_local_reusable_blocks = self.local_reusable_blocks.len();
+    }
+
+    #[cfg(feature = "debug_thread_local_gc_copying")]
+    pub fn local_reusable_blocks_size(&self) -> usize {
+        self.local_reusable_blocks.len()
+    }
+
     #[cfg(feature = "thread_local_gc")]
     pub fn thread_local_prepare(&mut self) {
-        #[cfg(debug_assertions)]
-        {
-            let global_line_state = self.space.line_mark_state.load(atomic::Ordering::Acquire);
-            debug_assert_eq!(global_line_state, self.local_line_mark_state);
-        }
+        // #[cfg(debug_assertions)]
+        // {
+        //     let global_line_state = self.space.line_mark_state.load(atomic::Ordering::Acquire);
+        //     debug_assert_eq!(global_line_state, self.local_line_mark_state);
+        // }
 
         #[cfg(feature = "thread_local_gc_copying")]
         {
             self.copy = true;
+            // reset local heap info
+            // let mut local_heap_info = crate::policy::THREAD_LOCAL_HEAP_IN_PAGES.lock().unwrap();
+            // *local_heap_info.get_mut(&self.mutator_id).unwrap() = 0;
         }
 
         // move local reusable blocks to local blocks
@@ -288,32 +316,34 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             block.set_state(BlockState::Unmarked);
         }
         // pre-allocate copy reserve pages
-        #[cfg(feature = "thread_local_gc_copying")]
-        self.thread_local_gc_reserve_pages();
+        // #[cfg(feature = "thread_local_gc_copying")]
+        // self.thread_local_gc_reserve_pages();
     }
 
     #[cfg(feature = "thread_local_gc")]
     /// This is the sweeping blocks work
     pub fn thread_local_release(&mut self) {
         // Update local line_unavail_state for hole searching after this GC.
-        self.local_unavailable_line_mark_state = self.local_line_mark_state;
+        // self.local_unavailable_line_mark_state = self.local_line_mark_state;
+
+        // use crate::policy::immix::LOCAL_GC_COPY_RESERVE_PAGES;
         #[cfg(feature = "thread_local_gc_copying")]
         {
             self.copy = false;
         }
         #[cfg(feature = "debug_thread_local_gc_copying")]
         let mutator = VM::VMActivePlan::mutator(VMMutatorThread(self.tls));
-        #[cfg(feature = "debug_thread_local_gc_copying")]
-        {
-            mutator.stats.number_of_blocks_acquired_for_evacuation -= self.local_free_blocks.len();
-        }
+        // #[cfg(feature = "debug_thread_local_gc_copying")]
+        // {
+        //     mutator.stats.number_of_blocks_acquired_for_evacuation -= self.local_free_blocks.len();
+        // }
 
         // TODO defrag in local gc is different, needs to be revisited
         let mut histogram = self.space.defrag.new_histogram();
         let line_mark_state = if crate::policy::immix::BLOCK_ONLY {
             None
         } else {
-            Some(self.local_line_mark_state)
+            Some(self.space.line_mark_state.load(atomic::Ordering::Relaxed))
         };
         debug_assert!(self.local_reusable_blocks.is_empty());
         let mark_hisogram = &mut histogram;
@@ -364,7 +394,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             }
             #[cfg(debug_assertions)]
             {
-                block.all_public_lines_marked_and_free_lines_unmarked(self.local_line_mark_state);
+                block.all_public_lines_marked_and_free_lines_unmarked(
+                    self.space.line_mark_state.load(atomic::Ordering::Relaxed),
+                );
             }
         }
 
@@ -378,6 +410,24 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 if b.is_block_published() {
                     mutator.stats.number_of_live_public_blocks += 1;
                 }
+            }
+            for b in &*self.local_reusable_blocks {
+                let lines_delta = match b.get_state() {
+                    BlockState::Reusable { unavailable_lines } => {
+                        Block::LINES - unavailable_lines as usize
+                    }
+                    _ => unreachable!("{:?} {:?}", b, b.get_state()),
+                };
+                mutator.stats.number_of_free_lines_in_local_reusable_blocks += lines_delta;
+            }
+            for b in &global_reusable_blocks {
+                let lines_delta = match b.get_state() {
+                    BlockState::Reusable { unavailable_lines } => {
+                        Block::LINES - unavailable_lines as usize
+                    }
+                    _ => unreachable!("{:?} {:?}", b, b.get_state()),
+                };
+                mutator.stats.number_of_free_lines_in_global_reusable_blocks += lines_delta;
             }
         }
 
@@ -394,10 +444,22 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 block
             }));
         #[cfg(feature = "thread_local_gc_copying")]
-        // Give back public reusable blocks
-        self.space
-            .reusable_blocks
-            .thread_local_flush_blocks(global_reusable_blocks.drain(..));
+        {
+            // Give back public reusable blocks
+            self.space
+                .reusable_blocks
+                .thread_local_flush_blocks(global_reusable_blocks.drain(..));
+
+            // // update the local heap info
+            // let mut local_heap_info = crate::policy::THREAD_LOCAL_HEAP_IN_PAGES.lock().unwrap();
+            // *local_heap_info.get_mut(&self.mutator_id).unwrap() =
+            //     Block::PAGES * (self.local_blocks.len() + self.local_reusable_blocks.len());
+            // let mut local_heap_size_max = 0;
+            // for heap_size in local_heap_info.values() {
+            //     local_heap_size_max = std::cmp::max(local_heap_size_max, *heap_size);
+            // }
+            // LOCAL_GC_COPY_RESERVE_PAGES.store(local_heap_size_max, atomic::Ordering::SeqCst);
+        }
 
         // verify thread local block list
         #[cfg(debug_assertions)]
@@ -464,6 +526,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 "{:?}: Thread local buffer used up, go to alloc slow path",
                 self.tls
             );
+
             if get_maximum_aligned_size::<VM>(size, align) > Line::BYTES {
                 // Size larger than a line: do large allocation
                 let rtn = self.overflow_alloc(size, align, offset); // overflow_allow will never use reusable blocks
@@ -538,34 +601,38 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         }
     }
 
-    #[cfg(feature = "thread_local_gc_copying")]
-    pub fn thread_local_gc_reserve_pages(&mut self) {
-        use crate::policy::immix::LOCAL_GC_COPY_RESERVE_PAGES;
-        use atomic::Ordering;
+    // #[cfg(feature = "thread_local_gc_copying")]
+    // pub fn thread_local_gc_reserve_pages(&mut self) {
+    //     use crate::policy::immix::LOCAL_GC_COPY_RESERVE_PAGES;
+    //     use atomic::Ordering;
 
-        let number_of_clean_blocks =
-            LOCAL_GC_COPY_RESERVE_PAGES.load(Ordering::SeqCst) / Block::PAGES;
-        debug_assert!(
-            VM::VMActivePlan::is_mutator(self.tls),
-            "only mutator doing local gc should call thread_local_gc_reserve_pages"
-        );
-        debug_assert!(
-            LOCAL_GC_COPY_RESERVE_PAGES.load(Ordering::SeqCst) % Block::PAGES == 0,
-            "number of copy reserve pages is not a multiply of blocks"
-        );
-        #[cfg(feature = "debug_thread_local_gc_copying")]
-        {
-            let mutator = VM::VMActivePlan::mutator(VMMutatorThread(self.tls));
-            mutator.stats.number_of_blocks_acquired_for_evacuation += number_of_clean_blocks;
-        }
-        // pre-allocate copy reserve pages into local cache to make sure
-        // local gc can always evacuate
-        for _ in 0..number_of_clean_blocks {
-            let block = self.immix_space().get_clean_block(self.tls, false).unwrap();
-            debug_assert!(block.is_block_published() == false);
-            self.local_free_blocks.push(block);
-        }
-    }
+    //     let number_of_clean_blocks =
+    //         LOCAL_GC_COPY_RESERVE_PAGES.load(Ordering::SeqCst) / Block::PAGES;
+    //     debug_assert!(
+    //         VM::VMActivePlan::is_mutator(self.tls),
+    //         "only mutator doing local gc should call thread_local_gc_reserve_pages"
+    //     );
+    //     debug_assert!(
+    //         LOCAL_GC_COPY_RESERVE_PAGES.load(Ordering::SeqCst) % Block::PAGES == 0,
+    //         "number of copy reserve pages is not a multiply of blocks"
+    //     );
+    //     #[cfg(feature = "debug_thread_local_gc_copying")]
+    //     {
+    //         let mutator = VM::VMActivePlan::mutator(VMMutatorThread(self.tls));
+    //         mutator.stats.number_of_blocks_acquired_for_evacuation += number_of_clean_blocks;
+    //     }
+    //     // pre-allocate copy reserve pages into local cache to make sure
+    //     // local gc can always evacuate
+    //     for _ in 0..number_of_clean_blocks {
+    //         match self.immix_space().get_clean_block(self.tls, false) {
+    //             Some(block) => {
+    //                 debug_assert!(block.is_block_published() == false);
+    //                 self.local_free_blocks.push(block);
+    //             }
+    //             None => panic!("does not have enough space to do evacuation during local gc"),
+    //         }
+    //     }
+    // }
 }
 
 impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
@@ -587,31 +654,21 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
 
     #[cfg(not(feature = "extra_header"))]
     fn alloc(&mut self, size: usize, align: usize, offset: usize) -> Address {
-        #[cfg(feature = "thread_local_gc_copying")]
-        use crate::policy::immix::LOCAL_GC_COPY_RESERVE_PAGES;
-
-        let result = self.alloc_impl(size, align, offset, false);
-        #[cfg(feature = "thread_local_gc_copying")]
-        LOCAL_GC_COPY_RESERVE_PAGES.fetch_max(
-            Block::PAGES * (self.local_blocks.len() + self.local_reusable_blocks.len()),
-            atomic::Ordering::SeqCst,
-        );
-
-        result
+        self.alloc_impl(size, align, offset, false)
     }
 
     #[cfg(feature = "extra_header")]
     fn alloc(&mut self, size: usize, align: usize, offset: usize) -> Address {
-        #[cfg(feature = "thread_local_gc_copying")]
-        use crate::policy::immix::LOCAL_GC_COPY_RESERVE_PAGES;
+        // #[cfg(feature = "thread_local_gc_copying")]
+        // use crate::policy::immix::LOCAL_GC_COPY_RESERVE_PAGES;
 
         let rtn = self.alloc_impl(size + VM::EXTRA_HEADER_BYTES, align, offset, false);
 
-        #[cfg(feature = "thread_local_gc_copying")]
-        LOCAL_GC_COPY_RESERVE_PAGES.fetch_max(
-            Block::PAGES * (self.local_blocks.len() + self.local_reusable_blocks.len()),
-            atomic::Ordering::SeqCst,
-        );
+        // #[cfg(feature = "thread_local_gc_copying")]
+        // LOCAL_GC_COPY_RESERVE_PAGES.fetch_max(
+        //     Block::PAGES * (self.local_blocks.len() + self.local_reusable_blocks.len()),
+        //     atomic::Ordering::SeqCst,
+        // );
         // Check if the result is valid and return the actual object start address
         // Note that `rtn` can be null in the case of OOM
         if !rtn.is_zero() {
@@ -636,9 +693,14 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
                 // allocation occurs in gc phase
                 let mut guard = GLOBAL_GC_STATISTICS.lock().unwrap();
                 guard.number_of_blocks_acquired_for_evacuation += 1;
+            } else {
+                debug_assert!(VM::VMActivePlan::is_mutator(self.tls));
+                let mutator = VM::VMActivePlan::mutator(VMMutatorThread(self.tls));
+                if self.copy {
+                    mutator.stats.number_of_blocks_acquired_for_evacuation += 1;
+                }
+                mutator.stats.number_of_clean_blocks_acquired += 1;
             }
-            let mutator = VM::VMActivePlan::mutator(VMMutatorThread(self.tls));
-            mutator.stats.number_of_clean_blocks_acquired += 1;
         }
 
         self.acquire_clean_block(size, align, offset)
@@ -701,6 +763,11 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
     fn get_tls(&self) -> VMThread {
         self.tls
     }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    fn local_heap_in_pages(&self) -> usize {
+        Block::PAGES * (self.local_blocks.len() + self.local_reusable_blocks.len())
+    }
 }
 
 impl<VM: VMBinding> ImmixAllocator<VM> {
@@ -715,7 +782,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         let _space = space.unwrap().downcast_ref::<ImmixSpace<VM>>().unwrap();
         // Local line mark state has to be in line with global line mark state, cannot use the default
         // value GLOBAL_RESET_MARK_STATE as mutator threads can be spawned at any time
-        let _global_line_mark_state = _space.line_mark_state.load(atomic::Ordering::Acquire);
+        // let _global_line_mark_state = _space.line_mark_state.load(atomic::Ordering::Acquire);
         return ImmixAllocator {
             tls,
             #[cfg(feature = "thread_local_gc")]
@@ -736,10 +803,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             local_free_blocks: Box::new(Vec::new()),
             #[cfg(feature = "thread_local_gc")]
             local_reusable_blocks: Box::new(Vec::new()),
-            #[cfg(feature = "thread_local_gc")]
-            local_line_mark_state: _global_line_mark_state,
-            #[cfg(feature = "thread_local_gc")]
-            local_unavailable_line_mark_state: _global_line_mark_state,
+            // #[cfg(feature = "thread_local_gc")]
+            // local_line_mark_state: _global_line_mark_state,
+            // #[cfg(feature = "thread_local_gc")]
+            // local_unavailable_line_mark_state: _global_line_mark_state,
         };
     }
 
@@ -1039,6 +1106,48 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         );
                         // Only add freshly allocated block into the local block list
                         self.local_blocks.push(block);
+                        // update the local heap size
+                        #[cfg(feature = "thread_local_gc_copying")]
+                        {
+                            // mutator phase only
+                            if !self.copy {
+                                let local_heap_in_pages = Block::PAGES
+                                    * (self.local_blocks.len() + self.local_reusable_blocks.len());
+                                // {
+                                //     let mut local_heap_info =
+                                //         crate::policy::THREAD_LOCAL_HEAP_IN_PAGES.lock().unwrap();
+
+                                //     if let Some(v) = local_heap_info.get_mut(&self.mutator_id) {
+                                //         *v = local_heap_in_pages;
+                                //     } else {
+                                //         local_heap_info
+                                //             .insert(self.mutator_id, local_heap_in_pages);
+                                //     }
+                                // }
+
+                                let _pre_val = crate::policy::immix::LOCAL_GC_COPY_RESERVE_PAGES
+                                    .fetch_max(local_heap_in_pages, atomic::Ordering::SeqCst);
+
+                                // if pre_val < local_heap_in_pages {
+                                //     let mutator =
+                                //         VM::VMActivePlan::mutator(VMMutatorThread(self.tls));
+                                //     mutator.thread_local_gc_status = crate::scheduler::thread_local_gc_work::THREAD_LOCAL_GC_PENDING;
+                                // }
+                                let mutator = VM::VMActivePlan::mutator(
+                                    crate::util::VMMutatorThread(self.tls),
+                                );
+                                mutator.local_allocation_size += Block::BYTES;
+                                #[cfg(feature = "debug_thread_local_gc_copying")]
+                                {
+                                    crate::util::TOTAL_ALLOCATION_BYTES
+                                        .fetch_add(Block::BYTES, atomic::Ordering::SeqCst);
+                                    mutator.stats.bytes_allocated += Block::BYTES;
+                                    let mut guard =
+                                        crate::util::GLOBAL_GC_STATISTICS.lock().unwrap();
+                                    guard.bytes_allocated += Block::BYTES;
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -1078,8 +1187,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
             return Some(block);
         }
-        #[cfg(feature = "thread_local_gc_copying")]
-        debug_assert!(!self.copy || !VM::VMActivePlan::is_mutator(self.tls));
+        // #[cfg(feature = "thread_local_gc_copying")]
+        // debug_assert!(!self.copy || !VM::VMActivePlan::is_mutator(self.tls));
         let block = self.immix_space().get_clean_block(self.tls, self.copy);
         debug_assert!(
             block.is_none() || block.unwrap().owner() == 0,

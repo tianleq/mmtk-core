@@ -86,17 +86,40 @@ impl<VM: VMBinding> Allocator<VM> for LargeObjectAllocator<VM> {
 
         let maxbytes = allocator::get_maximum_aligned_size::<VM>(size, align);
         let pages = crate::util::conversions::bytes_to_pages_up(maxbytes);
+
+        #[cfg(feature = "thread_local_gc_copying")]
+        {
+            use crate::vm::ActivePlan;
+
+            debug_assert!(VM::VMActivePlan::is_mutator(self.tls));
+            let mutator = VM::VMActivePlan::mutator(VMMutatorThread(self.tls));
+            mutator.local_allocation_size += crate::util::constants::BYTES_IN_PAGE * pages;
+        }
+
         #[cfg(feature = "debug_thread_local_gc_copying")]
         {
             use crate::util::GLOBAL_GC_STATISTICS;
             use crate::vm::ActivePlan;
 
-            let mutator = VM::VMActivePlan::mutator(VMMutatorThread(self.tls));
-            mutator.stats.number_of_los_pages += pages;
             let mut guard = GLOBAL_GC_STATISTICS.lock().unwrap();
             guard.number_of_los_pages += pages;
+
+            let mutator = VM::VMActivePlan::mutator(VMMutatorThread(self.tls));
+            mutator.stats.number_of_los_pages += pages;
+
+            crate::util::TOTAL_ALLOCATION_BYTES.fetch_add(
+                crate::util::constants::BYTES_IN_PAGE * pages,
+                atomic::Ordering::SeqCst,
+            );
+            mutator.stats.bytes_allocated += crate::util::constants::BYTES_IN_PAGE * pages;
+            guard.bytes_allocated += crate::util::constants::BYTES_IN_PAGE * pages;
         }
         self.space.allocate_pages(self.tls, pages)
+    }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    fn local_heap_in_pages(&self) -> usize {
+        0
     }
 }
 
@@ -172,10 +195,8 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
                 #[cfg(feature = "debug_thread_local_gc_copying")]
                 {
                     use crate::util::GLOBAL_GC_STATISTICS;
-                    use crate::vm::ActivePlan;
                     use crate::vm::ObjectModel;
 
-                    let mutator = VM::VMActivePlan::mutator(VMMutatorThread(self.tls));
                     let size = VM::VMObjectModel::get_current_size(object);
                     let maxbytes = allocator::get_maximum_aligned_size::<VM>(
                         size,
@@ -183,7 +204,6 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
                     );
                     let pages = crate::util::conversions::bytes_to_pages_up(maxbytes);
 
-                    mutator.stats.number_of_los_pages -= pages;
                     let mut guard = GLOBAL_GC_STATISTICS.lock().unwrap();
                     guard.number_of_los_pages -= pages;
                 }
@@ -226,6 +246,7 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
                     );
                     let pages = crate::util::conversions::bytes_to_pages_up(maxbytes);
 
+                    mutator.stats.number_of_los_pages_freed += pages;
                     mutator.stats.number_of_los_pages -= pages;
                     let mut guard = GLOBAL_GC_STATISTICS.lock().unwrap();
                     guard.number_of_los_pages -= pages;

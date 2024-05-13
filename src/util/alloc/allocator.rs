@@ -430,6 +430,11 @@ pub trait Allocator<VM: VMBinding>: Downcast {
     fn on_mutator_destroy(&mut self) {
         // By default, do nothing
     }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    fn local_heap_in_pages(&self) -> usize {
+        unreachable!();
+    }
 }
 
 impl_downcast!(Allocator<VM> where VM: VMBinding);

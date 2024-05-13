@@ -456,6 +456,31 @@ impl FromStr for NurserySize {
     }
 }
 
+#[cfg(feature = "thread_local_gc")]
+#[derive(Copy, Clone, Debug)]
+pub struct ThreadlocalHeapSize {
+    size: usize,
+}
+
+#[cfg(feature = "thread_local_gc")]
+impl ThreadlocalHeapSize {
+    pub fn parse(s: &str) -> Result<ThreadlocalHeapSize, String> {
+        match GCTriggerSelector::parse_size(s) {
+            Ok(val) => Ok(ThreadlocalHeapSize { size: val }),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+#[cfg(feature = "thread_local_gc")]
+impl FromStr for ThreadlocalHeapSize {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        ThreadlocalHeapSize::parse(s)
+    }
+}
+
 impl Options {
     /// Return upper bound of the nursery size (in number of bytes)
     pub fn get_max_nursery_bytes(&self) -> usize {
@@ -488,6 +513,11 @@ impl Options {
     pub fn is_stress_test_gc_enabled(&self) -> bool {
         *self.stress_factor != DEFAULT_STRESS_FACTOR
             || *self.analysis_factor != DEFAULT_STRESS_FACTOR
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn get_thread_local_heap_size(&self) -> usize {
+        self.max_local_heap.size
     }
 }
 
@@ -782,7 +812,9 @@ options! {
     /// Default to a fixed heap size of 0.5x physical memory.
     gc_trigger:             GCTriggerSelector    [env_var: true, command_line: true] [|v: &GCTriggerSelector| v.validate()] = GCTriggerSelector::FixedHeapSize((crate::util::memory::get_system_total_memory() as f64 * 0.5f64) as usize),
     /// Enable transparent hugepage support via madvise (only Linux is supported)
-    transparent_hugepages: bool                  [env_var: true, command_line: true]  [|v: &bool| !v || cfg!(target_os = "linux")] = false
+    transparent_hugepages: bool                  [env_var: true, command_line: true]  [|v: &bool| !v || cfg!(target_os = "linux")] = false,
+    /// max local heap
+    max_local_heap:        ThreadlocalHeapSize   [env_var: true, command_line: true] [|v: &ThreadlocalHeapSize| v.size > 0] = ThreadlocalHeapSize {size: 1 << 20}
 }
 
 #[cfg(test)]

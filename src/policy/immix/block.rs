@@ -560,6 +560,8 @@ impl Block {
                             #[cfg(feature = "debug_thread_local_gc_copying")]
                             {
                                 (*gc_stats).number_of_global_reusable_blocks += 1;
+                                (*gc_stats).number_of_free_lines_in_global_reusable_blocks +=
+                                    Block::LINES - marked_lines;
                             }
                         } else {
                             debug_assert!(self.owner() != u32::MAX);
@@ -567,6 +569,8 @@ impl Block {
                             #[cfg(feature = "debug_thread_local_gc_copying")]
                             {
                                 (*gc_stats).number_of_local_reusable_blocks += 1;
+                                (*gc_stats).number_of_free_lines_in_local_reusable_blocks +=
+                                    Block::LINES - marked_lines;
                             }
                         }
                     }

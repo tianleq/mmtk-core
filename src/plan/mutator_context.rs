@@ -142,14 +142,6 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         offset: usize,
         semantics: AllocationSemantics,
     ) -> Address {
-        // #[cfg(feature = "debug_thread_local_gc_copying")]
-        // {
-        //     crate::util::TOTAL_ALLOCATION_BYTES.fetch_add(size, atomic::Ordering::SeqCst);
-        //     self.stats.bytes_allocated += size;
-        //     let mut guard = crate::util::GLOBAL_GC_STATISTICS.lock().unwrap();
-        //     guard.bytes_allocated += size;
-            
-        // }
         unsafe {
             self.allocators
                 .get_allocator_mut(self.config.allocator_mapping[semantics])
@@ -313,10 +305,6 @@ impl<VM: VMBinding> Mutator<VM> {
         for selector in self.get_all_allocator_selectors() {
             unsafe { self.allocators.get_allocator_mut(selector) }.on_mutator_destroy();
         }
-        // #[cfg(feature = "thread_local_gc_copying")]
-        // {
-        //     crate::policy::THREAD_LOCAL_HEAP_IN_PAGES.lock().unwrap().remove(&self.mutator_id);
-        // }
     }
 
     /// Get the allocator for the selector.
@@ -482,20 +470,6 @@ impl<VM: VMBinding> Mutator<VM> {
         self.stats.number_of_los_pages_freed = 0;
     }
 
-    #[cfg(feature = "thread_local_gc_copying")]
-    pub fn is_thread_local_gc_pending(&self) -> bool {
-        use crate::{policy::immix::LOCAL_GC_COPY_RESERVE_PAGES, scheduler::thread_local_gc_work::THREAD_LOCAL_GC_PENDING};
-
-        
-        let mut pages = 0;
-        for selector in self.get_all_allocator_selectors() {
-            let allocator = unsafe { self.allocators.get_allocator(selector) };
-            pages += allocator.local_heap_in_pages();
-        }
-        
-        self.thread_local_gc_status == THREAD_LOCAL_GC_PENDING && pages >= LOCAL_GC_COPY_RESERVE_PAGES.load(atomic::Ordering::SeqCst)
-
-    }
 }
 
 /// Each GC plan should provide their implementation of a MutatorContext. *Note that this trait is no longer needed as we removed

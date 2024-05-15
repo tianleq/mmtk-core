@@ -406,9 +406,21 @@ impl<VM: VMBinding> MMTK<VM> {
 
     pub fn request_starting(&self) {
         self.stats.request_starting();
+        self.handle_user_collection_request(VMMutatorThread(VMThread::UNINITIALIZED), true, true);
     }
 
     pub fn request_finished(&self) {
+        #[cfg(feature = "debug_thread_local_gc_copying")]
+        use crate::util::{TOTAL_ALLOCATION_BYTES, TOTAL_PU8LISHED_BYTES, TOTAL_PU8LISHED_LINES};
         self.stats.request_finished();
+        #[cfg(feature = "debug_thread_local_gc_copying")]
+        info!(
+            "{} lines published,  {} bytes published, {} bytes allocated, ratio: {}",
+            TOTAL_PU8LISHED_LINES.load(Ordering::Relaxed),
+            TOTAL_PU8LISHED_BYTES.load(Ordering::Relaxed),
+            TOTAL_ALLOCATION_BYTES.load(Ordering::Relaxed),
+            TOTAL_PU8LISHED_BYTES.load(Ordering::Relaxed) as f64
+                / TOTAL_ALLOCATION_BYTES.load(Ordering::Relaxed) as f64
+        );
     }
 }

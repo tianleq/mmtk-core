@@ -954,7 +954,7 @@ pub fn mmtk_set_public_bit<VM: VMBinding>(
     object: ObjectReference,
     _tls: VMMutatorThread,
 ) {
-    use crate::util::GLOBAL_GC_STATISTICS;
+    use crate::util::{GLOBAL_GC_STATISTICS, TOTAL_PU8LISHED_BYTES};
     use crate::vm::ObjectModel;
 
     debug_assert!(!object.is_null(), "object is null!");
@@ -970,6 +970,10 @@ pub fn mmtk_set_public_bit<VM: VMBinding>(
     }
     let mut guard = GLOBAL_GC_STATISTICS.lock().unwrap();
     guard.bytes_published += VM::VMObjectModel::get_current_size(object);
+    TOTAL_PU8LISHED_BYTES.fetch_add(
+        VM::VMObjectModel::get_current_size(object),
+        Ordering::SeqCst,
+    );
 }
 
 #[cfg(all(feature = "public_bit", feature = "debug_thread_local_gc_copying"))]
@@ -1021,17 +1025,6 @@ pub fn mmtk_request_thread_local_gc<VM: VMBinding>(
         .get_plan()
         .thread_local_collection_required(false, None, tls);
     if required {
-        // #[cfg(not(feature = "debug_thread_local_gc_copying"))]
-        // if VM::VMActivePlan::mutator(tls).is_thread_local_gc_pending() {
-        //     match LOCAL_GC_ACTIVE.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        //     {
-        //         Ok(_) => true,
-        //         Err(_) => false,
-        //     }
-        // } else {
-        //     false
-        // }
-
         match LOCAL_GC_ACTIVE.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst) {
             Ok(_) => true,
             Err(_) => false,
@@ -1086,14 +1079,6 @@ pub fn compute_mutator_mem_layout_checksum<VM: VMBinding>() -> usize {
 /// * `tls`: The thread that calls the function (and triggers a collection).
 pub fn request_starting<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
     mmtk.request_starting();
-    #[cfg(feature = "public_object_analysis")]
-    {
-        let mut stats = crate::util::REQUEST_SCOPE_OBJECTS_STATS.lock().unwrap();
-        stats.allocation_count = 0;
-        stats.allocation_bytes = 0;
-        stats.public_bytes = 0;
-        stats.public_count = 0;
-    }
 }
 
 /// Generic hook to allow benchmarks to be harnessed. We stop collecting

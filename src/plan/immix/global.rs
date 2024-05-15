@@ -72,7 +72,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         _space: Option<SpaceStats<VM>>,
         _tls: VMMutatorThread,
     ) -> bool {
-        // #[cfg(not(feature = "debug_thread_local_gc_copying"))]
         // {
         //     let total_pages = self.get_total_pages();
 
@@ -220,10 +219,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             // so simply check if the object has been published or not
             crate::util::metadata::public_bit::is_public::<VM>(object)
         }
-    }
-
-    fn get_number_of_movable_bytes_published(&self) -> usize {
-        self.immix_space.bytes_published.load(Ordering::SeqCst)
     }
 
     #[cfg(feature = "debug_thread_local_gc_copying")]
@@ -440,13 +435,13 @@ impl<VM: VMBinding> Immix<VM> {
         }
     }
 
-    #[cfg(feature = "thread_local_gc")]
-    fn get_thread_local_collection_reserved_pages(&self) -> usize {
-        #[cfg(feature = "thread_local_gc_copying")]
-        return self.immix_space.thread_local_gc_copy_reserve_pages();
-        #[cfg(not(feature = "thread_local_gc_copying"))]
-        return 0;
-    }
+    // #[cfg(feature = "thread_local_gc")]
+    // fn get_thread_local_collection_reserved_pages(&self) -> usize {
+    //     #[cfg(feature = "thread_local_gc_copying")]
+    //     return self.immix_space.thread_local_gc_copy_reserve_pages();
+    //     #[cfg(not(feature = "thread_local_gc_copying"))]
+    //     return 0;
+    // }
 }
 
 #[cfg(feature = "thread_local_gc")]

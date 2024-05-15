@@ -11,7 +11,6 @@ use std::sync::atomic::AtomicBool;
 
 pub const THREAD_LOCAL_GC_ACTIVE: u32 = 1;
 pub const THREAD_LOCAL_GC_INACTIVE: u32 = 0;
-pub const THREAD_LOCAL_GC_PENDING: u32 = 2;
 
 pub struct ExecuteThreadlocalCollection<VM: VMBinding> {
     pub mmtk: &'static MMTK<VM>,

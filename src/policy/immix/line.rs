@@ -95,7 +95,7 @@ impl Line {
         Self::mark_lines_for_object_impl::<VM>(object, state, None);
     }
 
-    #[cfg(all(feature = "thread_local_gc", debug_assertions))]
+    #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
     pub fn verify_line_mark_state_of_object<VM: VMBinding>(
         object: ObjectReference,
         state: u8,
@@ -133,6 +133,7 @@ impl Line {
     #[cfg(feature = "thread_local_gc")]
     pub fn publish_lines_of_object<VM: VMBinding>(object: ObjectReference, state: u8) {
         // mark line as public
+
         let (start_line, end_line) =
             Self::mark_lines_for_object_impl::<VM>(object, state, Some(true));
         #[cfg(debug_assertions)]
@@ -147,6 +148,17 @@ impl Line {
                 );
                 debug_assert!(line.is_line_published());
             }
+        }
+        #[cfg(feature = "debug_thread_local_gc_copying")]
+        {
+            use crate::util::TOTAL_PU8LISHED_LINES;
+
+            let iter = RegionIterator::<Line>::new(start_line, end_line);
+            let mut lines = 0;
+            for _ in iter {
+                lines += 1;
+            }
+            TOTAL_PU8LISHED_LINES.fetch_add(lines, atomic::Ordering::SeqCst);
         }
     }
 

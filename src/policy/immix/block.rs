@@ -138,7 +138,7 @@ impl Block {
 
     /// Publish block
     #[cfg(feature = "thread_local_gc")]
-    pub fn publish(&self, #[cfg(feature = "debug_publish_object")] _mutator: Option<u32>) -> bool {
+    pub fn publish(&self) -> bool {
         let prev_value =
             Self::BLOCK_PUBLICATION_TABLE.fetch_or_atomic::<u8>(self.start(), 1, Ordering::SeqCst);
 

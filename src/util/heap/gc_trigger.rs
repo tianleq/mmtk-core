@@ -84,7 +84,7 @@ impl<VM: VMBinding> GCTrigger<VM> {
             .is_gc_required(space_full, space.map(|s| SpaceStats::new(s)), plan)
         {
             info!(
-                "[POLL] {}{} ({}/{} pages)",
+                "[POLL] {}{} ({}/{} pages {} pages reserved for collection)",
                 if let Some(space) = space {
                     format!("{}: ", space.get_name())
                 } else {
@@ -93,6 +93,7 @@ impl<VM: VMBinding> GCTrigger<VM> {
                 "Triggering collection",
                 plan.get_reserved_pages(),
                 plan.get_total_pages(),
+                plan.get_collection_reserved_pages()
             );
 
             self.gc_requester.request();

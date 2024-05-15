@@ -267,11 +267,12 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
         }
         #[cfg(feature = "debug_thread_local_gc_copying")]
         {
-            use crate::util::GLOBAL_GC_STATISTICS;
+            use crate::util::{GLOBAL_GC_STATISTICS, TOTAL_PU8LISHED_BYTES};
 
             let mut guard = GLOBAL_GC_STATISTICS.lock().unwrap();
             guard.bytes_published += number_of_bytes_published;
             guard.live_public_bytes += number_of_bytes_published;
+            TOTAL_PU8LISHED_BYTES.fetch_add(number_of_bytes_published, atomic::Ordering::SeqCst);
         }
     }
 

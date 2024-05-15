@@ -155,6 +155,14 @@ pub(crate) static TOTAL_ALLOCATION_BYTES: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
 #[cfg(feature = "debug_thread_local_gc_copying")]
+pub(crate) static TOTAL_PU8LISHED_BYTES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(feature = "debug_thread_local_gc_copying")]
+pub(crate) static TOTAL_PU8LISHED_LINES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(feature = "debug_thread_local_gc_copying")]
 pub(crate) static GLOBAL_GC_STATISTICS: std::sync::Mutex<GCStatistics> =
     std::sync::Mutex::new(GCStatistics {
         bytes_allocated: 0,

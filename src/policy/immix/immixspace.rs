@@ -11,7 +11,7 @@ use crate::policy::sft_map::SFTMap;
 use crate::policy::space::{CommonSpace, Space};
 use crate::util::alloc::allocator::AllocatorContext;
 use crate::util::alloc::immix_allocator::ImmixAllocSemantics;
-use crate::util::constants::LOG_BYTES_IN_PAGE;
+use crate::util::constants::{BYTES_IN_PAGE, LOG_BYTES_IN_PAGE};
 use crate::util::copy::*;
 use crate::util::heap::chunk_map::*;
 use crate::util::heap::BlockPageResource;
@@ -63,13 +63,10 @@ pub struct ImmixSpace<VM: VMBinding> {
     space_args: ImmixSpaceArgs,
     #[cfg(feature = "thread_local_gc_copying")]
     pub(crate) bytes_published: AtomicUsize,
-    /// How many bytes are available
     #[cfg(feature = "thread_local_gc_copying")]
-    pub(crate) available_bytes: AtomicUsize,
-    #[cfg(feature = "debug_thread_local_gc_copying")]
     pub(super) bytes_copied: AtomicUsize,
-    #[cfg(feature = "debug_thread_local_gc_copying")]
-    pub(super) live_public_bytes: AtomicUsize,
+    #[cfg(feature = "thread_local_gc_copying")]
+    blocks_acquired_for_evacuation: AtomicUsize,
 }
 
 /// Some arguments for Immix Space.
@@ -263,9 +260,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     const UNMARKED_STATE: u8 = 0;
     const MARKED_STATE: u8 = 1;
 
-    #[cfg(feature = "thread_local_gc_copying")]
-    const LOCAL_GC_COPY_RESERVE_MULTIPLIER: usize = 2;
-
     /// Get side metadata specs
     fn side_metadata_specs() -> Vec<SideMetadataSpec> {
         metadata::extract_side_metadata(&if super::BLOCK_ONLY {
@@ -389,11 +383,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             #[cfg(feature = "thread_local_gc_copying")]
             bytes_published: AtomicUsize::new(0),
             #[cfg(feature = "thread_local_gc_copying")]
-            available_bytes: AtomicUsize::new(0),
-            #[cfg(feature = "debug_thread_local_gc_copying")]
             bytes_copied: AtomicUsize::new(0),
-            #[cfg(feature = "debug_thread_local_gc_copying")]
-            live_public_bytes: AtomicUsize::new(0),
+            #[cfg(feature = "thread_local_gc_copying")]
+            blocks_acquired_for_evacuation: AtomicUsize::new(0),
         }
     }
 
@@ -437,22 +429,19 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[cfg(feature = "thread_local_gc_copying")]
     pub fn thread_local_gc_copy_reserve_pages(&self) -> usize {
         use super::LOCAL_GC_COPY_RESERVE_PAGES;
-        Self::LOCAL_GC_COPY_RESERVE_MULTIPLIER * LOCAL_GC_COPY_RESERVE_PAGES.load(Ordering::SeqCst)
+        LOCAL_GC_COPY_RESERVE_PAGES.load(Ordering::SeqCst)
     }
 
     #[cfg(feature = "thread_local_gc_copying")]
     pub fn public_object_reserved_pages(&self) -> usize {
-        self.bytes_published.load(Ordering::SeqCst) / crate::util::constants::BYTES_IN_PAGE
+        let bytes_copied = self.bytes_copied.load(Ordering::Relaxed);
+        let bytes_published = self.bytes_published.load(Ordering::SeqCst);
+        if bytes_copied != 0 {
+            bytes_copied / crate::util::constants::BYTES_IN_PAGE
+        } else {
+            bytes_published / crate::util::constants::BYTES_IN_PAGE
+        }
     }
-
-    // #[cfg(feature = "thread_local_gc_copying")]
-    // pub fn collect_public_object_required(&self) -> bool {
-    //     let available_bytes = self.available_bytes.load(Ordering::SeqCst);
-    //     if available_bytes == 0 {
-    //         return false;
-    //     }
-    //     (105 * self.bytes_published.load(Ordering::SeqCst) / 100) >= available_bytes
-    // }
 
     /// Get work packet scheduler
     fn scheduler(&self) -> &GCWorkScheduler<VM> {
@@ -503,15 +492,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         #[cfg(feature = "thread_local_gc_copying")]
         {
             self.bytes_published.store(0, Ordering::SeqCst);
-            self.available_bytes.store(0, Ordering::SeqCst);
+            self.blocks_acquired_for_evacuation
+                .store(0, Ordering::Relaxed);
             // reset local copy reserve, it will be recalculated at the end of the gc
             crate::policy::immix::LOCAL_GC_COPY_RESERVE_PAGES.store(0, Ordering::Relaxed);
         }
 
-        #[cfg(feature = "debug_thread_local_gc_copying")]
+        #[cfg(feature = "thread_local_gc_copying")]
         self.bytes_copied.store(0, Ordering::SeqCst);
-        #[cfg(feature = "debug_thread_local_gc_copying")]
-        self.live_public_bytes.store(0, Ordering::SeqCst);
 
         #[cfg(feature = "vo_bit")]
         if vo_bit::helper::need_to_clear_vo_bits_before_tracing::<VM>() {
@@ -582,9 +570,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
             let mut guard = GLOBAL_GC_STATISTICS.lock().unwrap();
             guard.bytes_copied += self.bytes_copied.load(Ordering::SeqCst);
-            guard.live_public_bytes = self.live_public_bytes.load(Ordering::SeqCst);
         }
-
+        info!(
+            "{} bytes copied, that is roughly {} pages | {} clean pages acquired",
+            self.bytes_copied.load(Ordering::Relaxed),
+            1 + self.bytes_copied.load(Ordering::Relaxed) / BYTES_IN_PAGE,
+            self.blocks_acquired_for_evacuation.load(Ordering::Relaxed) << Block::LOG_PAGES
+        );
         did_defrag
     }
 
@@ -628,16 +620,19 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if block_address.is_zero() {
             return None;
         }
+        #[cfg(feature = "thread_local_gc_copying")]
+        {
+            if copy {
+                self.blocks_acquired_for_evacuation
+                    .fetch_add(1, Ordering::SeqCst);
+            }
+        }
         self.defrag.notify_new_clean_block(copy);
         let block = Block::from_aligned_address(block_address);
         block.init(copy);
         self.chunk_map.set(block.chunk(), ChunkState::Allocated);
         self.lines_consumed
             .fetch_add(Block::LINES, Ordering::SeqCst);
-
-        #[cfg(feature = "thread_local_gc_copying")]
-        self.available_bytes
-            .fetch_sub(Block::BYTES, Ordering::SeqCst);
 
         Some(block)
     }
@@ -663,10 +658,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     _ => unreachable!("{:?} {:?}", block, block.get_state()),
                 };
                 self.lines_consumed.fetch_add(lines_delta, Ordering::SeqCst);
-
-                #[cfg(feature = "thread_local_gc_copying")]
-                self.available_bytes
-                    .fetch_sub(lines_delta << Line::LOG_BYTES, Ordering::SeqCst);
 
                 block.init(copy);
                 return Some(block);
@@ -710,12 +701,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             #[cfg(feature = "thread_local_gc_copying")]
             if crate::util::metadata::public_bit::is_public::<VM>(object) {
                 self.bytes_published.fetch_add(
-                    VM::VMObjectModel::get_current_size(object),
-                    Ordering::SeqCst,
-                );
-
-                #[cfg(feature = "debug_thread_local_gc_copying")]
-                self.live_public_bytes.fetch_add(
                     VM::VMObjectModel::get_current_size(object),
                     Ordering::SeqCst,
                 );
@@ -906,14 +891,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     VM::VMObjectModel::get_current_size(object),
                     Ordering::SeqCst,
                 );
-                #[cfg(feature = "debug_thread_local_gc_copying")]
+                #[cfg(feature = "thread_local_gc_copying")]
                 self.bytes_copied.fetch_add(
-                    VM::VMObjectModel::get_current_size(object),
-                    Ordering::SeqCst,
-                );
-
-                #[cfg(feature = "debug_thread_local_gc_copying")]
-                self.live_public_bytes.fetch_add(
                     VM::VMObjectModel::get_current_size(object),
                     Ordering::SeqCst,
                 );
@@ -1414,14 +1393,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 && !line.is_marked(current_state)
                 && !line.is_line_published()));
 
-        // #[cfg(all(feature = "thread_local_gc", debug_assertions))]
-        // {
-        //     info!(
-        //         "find available lines from: {:?} to {:?} | current_state: {}, prev_state: {}",
-        //         start, end, current_state, unavail_state
-        //     );
-        // }
-
         Some((start, end))
     }
 
@@ -1481,16 +1452,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         debug_assert!(crate::util::metadata::public_bit::is_public::<VM>(object));
         // Mark block and lines
         if !super::BLOCK_ONLY {
-            // let state = Line::public_line_mark_state(self.line_mark_state.load(Ordering::Acquire));
             let state = self.line_mark_state.load(Ordering::Acquire);
 
             Line::publish_lines_of_object::<VM>(object, state);
         }
         let block = Block::containing::<VM>(object);
-        if block.publish(
-            #[cfg(feature = "debug_publish_object")]
-            None,
-        ) {
+        if block.publish() {
             #[cfg(feature = "debug_thread_local_gc_copying")]
             {
                 use crate::util::GLOBAL_GC_STATISTICS;
@@ -1542,19 +1509,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             is_published
         }
     }
-
-    // #[cfg(feature = "thread_local_gc")]
-    // fn local_line_mark_state(&self, mutator: &Mutator<VM>) -> u8 {
-    //     let immix_allocator = unsafe {
-    //         mutator
-    //             .allocators
-    //             .get_allocator(mutator.config.allocator_mapping[AllocationSemantics::Default])
-    //     }
-    //     .downcast_ref::<ImmixAllocator<VM>>()
-    //     .unwrap();
-    //     let local_state: u8 = immix_allocator.local_line_mark_state;
-    //     local_state
-    // }
 }
 
 #[cfg(feature = "thread_local_gc")]
@@ -1831,24 +1785,6 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
                 ) {
                     // Block is live. Increment the allocated block count.
                     allocated_blocks += 1;
-                    #[cfg(feature = "thread_local_gc_copying")]
-                    {
-                        let lines_delta = match block.get_state() {
-                            BlockState::Reusable { unavailable_lines } => {
-                                Block::LINES - unavailable_lines as usize
-                            }
-                            BlockState::Unmarked => 0,
-                            _ => unreachable!("{:?} {:?}", block, block.get_state()),
-                        };
-                        self.space
-                            .available_bytes
-                            .fetch_add(lines_delta << Line::LOG_BYTES, Ordering::SeqCst);
-                    }
-                } else {
-                    #[cfg(feature = "thread_local_gc_copying")]
-                    self.space
-                        .available_bytes
-                        .fetch_add(Block::BYTES, Ordering::SeqCst);
                 }
                 #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
                 {
@@ -1869,27 +1805,11 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
                     }
                 }
             }
-            #[cfg(feature = "thread_local_gc_copying")]
-            {
-                let free_blocks_count = self
-                    .chunk
-                    .iter_region::<Block>()
-                    .filter(|block| block.get_state() == BlockState::Unallocated)
-                    .count();
-                self.space
-                    .available_bytes
-                    .fetch_add(free_blocks_count << Block::LOG_BYTES, Ordering::SeqCst);
-            }
 
             // Set this chunk as free if there is not live blocks.
             if allocated_blocks == 0 {
                 self.space.chunk_map.set(self.chunk, ChunkState::Free)
             }
-        } else {
-            #[cfg(feature = "thread_local_gc_copying")]
-            self.space
-                .available_bytes
-                .fetch_add(Chunk::BYTES, Ordering::SeqCst);
         }
         #[cfg(feature = "debug_thread_local_gc_copying")]
         {

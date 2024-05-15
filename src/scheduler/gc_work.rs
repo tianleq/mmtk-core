@@ -296,11 +296,6 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
                 live_bytes as f64 * 100.0 / used_bytes as f64,
                 mmtk.get_plan().get_used_pages()
             );
-            info!(
-                "reserved pages: {:?}, bytes published in immix space: {:?}",
-                mmtk.get_plan().get_collection_reserved_pages(),
-                mmtk.get_plan().get_number_of_movable_bytes_published()
-            );
         }
 
         // We assume this is the only running work packet that accesses plan at the point of execution

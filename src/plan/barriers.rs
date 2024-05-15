@@ -556,6 +556,8 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
             let mut guard = GLOBAL_GC_STATISTICS.lock().unwrap();
             guard.bytes_published += VM::VMObjectModel::get_current_size(value);
             guard.live_public_bytes += VM::VMObjectModel::get_current_size(value);
+            TOTAL_PU8LISHED_BYTES
+                .fetch_add(VM::VMObjectModel::get_current_size(value), Ordering::SeqCst);
         }
     }
 }

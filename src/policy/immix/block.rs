@@ -479,14 +479,23 @@ impl Block {
             let line_mark_state = line_mark_state.unwrap();
             #[cfg(feature = "thread_local_gc_copying")]
             let mut is_block_pubic = false;
+            #[cfg(feature = "thread_local_gc_copying")]
+            let mut is_block_global = true;
 
             for line in self.lines() {
                 if line.is_marked(line_mark_state) {
                     marked_lines += 1;
                     prev_line_is_marked = true;
+                    let is_line_published = line.is_line_published();
                     // a line is public iff it is marked and line level public bit is set
-                    if !is_block_pubic && line.is_line_published() {
+                    if !is_block_pubic && is_line_published {
                         is_block_pubic = true;
+                    }
+                    // if a block is public and it has a private line marked
+                    // then it cannot be added to the global reusable block list
+                    // it needs to stay at its owner's local block list
+                    if is_block_pubic && !is_line_published {
+                        is_block_global = false;
                     }
                 } else {
                     if prev_line_is_marked {
@@ -549,19 +558,33 @@ impl Block {
                     #[cfg(feature = "thread_local_gc_copying")]
                     {
                         if is_block_pubic {
-                            debug_assert!(
-                                self.owner() == u32::MAX,
-                                "block: {:?}, owner: {}, defrag source: {}",
-                                self,
-                                self.owner(),
-                                self.is_defrag_source()
-                            );
-                            space.reusable_blocks.push(*self);
-                            #[cfg(feature = "debug_thread_local_gc_copying")]
-                            {
-                                (*gc_stats).number_of_global_reusable_blocks += 1;
-                                (*gc_stats).number_of_free_lines_in_global_reusable_blocks +=
-                                    Block::LINES - marked_lines;
+                            // The following assertion no longer holds
+                            // since now private objects and public
+                            // objects may co-exist in the same block
+
+                            // debug_assert!(
+                            //     self.owner() == u32::MAX,
+                            //     "block: {:?}, owner: {}, defrag source: {}",
+                            //     self,
+                            //     self.owner(),
+                            //     self.is_defrag_source()
+                            // );
+                            if is_block_global {
+                                self.set_owner(u32::MAX);
+                                space.reusable_blocks.push(*self);
+                                #[cfg(feature = "debug_thread_local_gc_copying")]
+                                {
+                                    (*gc_stats).number_of_global_reusable_blocks += 1;
+                                    (*gc_stats).number_of_free_lines_in_global_reusable_blocks +=
+                                        Block::LINES - marked_lines;
+                                }
+                            } else {
+                                // This is a hacky way of carrying over info
+                                // 0 is not a valid owner, so when a mutator
+                                // sees a block with 0 as its owner, it knows
+                                // that this block is public and also contains
+                                // live private object
+                                self.set_owner(0);
                             }
                         } else {
                             debug_assert!(self.owner() != u32::MAX);
@@ -575,6 +598,10 @@ impl Block {
                         }
                     }
                 } else {
+                    // when block is full, it does not matter whether it
+                    // coantains a mix of private and public objects
+                    // since it cannot be reused, nothing will be overwritten
+
                     // Clear mark state.
                     self.set_state(BlockState::Unmarked);
                 }

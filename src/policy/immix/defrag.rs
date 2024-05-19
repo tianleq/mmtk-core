@@ -148,6 +148,10 @@ impl Defrag {
                 available_clean_pages_for_defrag as usize + plan_stats.collection_reserved_pages,
                 Ordering::Release,
             );
+            info!(
+                "total clean pages for defrag: {}",
+                self.total_clean_pages_for_defrag.load(Ordering::Relaxed)
+            );
         }
     }
 

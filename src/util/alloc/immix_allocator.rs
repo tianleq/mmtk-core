@@ -132,17 +132,27 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 #[cfg(feature = "thread_local_gc_copying")]
                 if block.get_state().is_reusable() {
                     if block.is_block_published() {
-                        debug_assert_eq!(block.owner(), u32::MAX);
-                        #[cfg(debug_assertions)]
-                        {
-                            // public reusable blocks should have been added to the global list
-                            let mut exist = false;
-                            self.space.reusable_blocks.iterate_blocks(|b| {
-                                if b == block {
-                                    exist = true;
-                                }
-                            });
-                            debug_assert!(exist, "public reusable block: {:?} does not exist in global reusable list", block);
+                        debug_assert!(
+                            block.owner() == u32::MAX || block.owner() == 0,
+                            "owner: {:?}",
+                            block.owner()
+                        );
+                        if block.owner() == 0 {
+                            // block containts live private objects, so it cannot be reused by other mutator
+                            block.set_owner(self.mutator_id);
+                            self.local_reusable_blocks.push(block);
+                        } else {
+                            #[cfg(debug_assertions)]
+                            {
+                                // public reusable blocks should have been added to the global list
+                                let mut exist = false;
+                                self.space.reusable_blocks.iterate_blocks(|b| {
+                                    if b == block {
+                                        exist = true;
+                                    }
+                                });
+                                debug_assert!(exist, "public reusable block: {:?} does not exist in global reusable list", block);
+                            }
                         }
                     } else {
                         debug_assert!(block.owner() == self.mutator_id);
@@ -179,17 +189,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 Block::PAGES * (self.local_blocks.len() + self.local_reusable_blocks.len()),
                 atomic::Ordering::SeqCst,
             );
-
-            // // update the local heap info
-            // let mut local_heap_info = crate::policy::THREAD_LOCAL_HEAP_IN_PAGES.lock().unwrap();
-            // if let Some(info) = local_heap_info.get_mut(&self.mutator_id) {
-            //     *info = Block::PAGES * (self.local_blocks.len() + self.local_reusable_blocks.len());
-            // } else {
-            //     local_heap_info.insert(
-            //         self.mutator_id,
-            //         Block::PAGES * (self.local_blocks.len() + self.local_reusable_blocks.len()),
-            //     );
-            // }
         }
 
         // verify thread local block list
@@ -435,16 +434,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             self.space
                 .reusable_blocks
                 .thread_local_flush_blocks(global_reusable_blocks.drain(..));
-
-            // // update the local heap info
-            // let mut local_heap_info = crate::policy::THREAD_LOCAL_HEAP_IN_PAGES.lock().unwrap();
-            // *local_heap_info.get_mut(&self.mutator_id).unwrap() =
-            //     Block::PAGES * (self.local_blocks.len() + self.local_reusable_blocks.len());
-            // let mut local_heap_size_max = 0;
-            // for heap_size in local_heap_info.values() {
-            //     local_heap_size_max = std::cmp::max(local_heap_size_max, *heap_size);
-            // }
-            // LOCAL_GC_COPY_RESERVE_PAGES.store(local_heap_size_max, atomic::Ordering::SeqCst);
         }
 
         // verify thread local block list
@@ -587,38 +576,45 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         }
     }
 
-    // #[cfg(feature = "thread_local_gc_copying")]
-    // pub fn thread_local_gc_reserve_pages(&mut self) {
-    //     use crate::policy::immix::LOCAL_GC_COPY_RESERVE_PAGES;
-    //     use atomic::Ordering;
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub fn thread_local_gc_reserve_pages(&mut self) {
+        use crate::policy::immix::LOCAL_GC_COPY_RESERVE_PAGES;
+        use atomic::Ordering;
 
-    //     let number_of_clean_blocks =
-    //         LOCAL_GC_COPY_RESERVE_PAGES.load(Ordering::SeqCst) / Block::PAGES;
-    //     debug_assert!(
-    //         VM::VMActivePlan::is_mutator(self.tls),
-    //         "only mutator doing local gc should call thread_local_gc_reserve_pages"
-    //     );
-    //     debug_assert!(
-    //         LOCAL_GC_COPY_RESERVE_PAGES.load(Ordering::SeqCst) % Block::PAGES == 0,
-    //         "number of copy reserve pages is not a multiply of blocks"
-    //     );
-    //     #[cfg(feature = "debug_thread_local_gc_copying")]
-    //     {
-    //         let mutator = VM::VMActivePlan::mutator(VMMutatorThread(self.tls));
-    //         mutator.stats.number_of_blocks_acquired_for_evacuation += number_of_clean_blocks;
-    //     }
-    //     // pre-allocate copy reserve pages into local cache to make sure
-    //     // local gc can always evacuate
-    //     for _ in 0..number_of_clean_blocks {
-    //         match self.immix_space().get_clean_block(self.tls, false) {
-    //             Some(block) => {
-    //                 debug_assert!(block.is_block_published() == false);
-    //                 self.local_free_blocks.push(block);
-    //             }
-    //             None => panic!("does not have enough space to do evacuation during local gc"),
-    //         }
-    //     }
-    // }
+        let number_of_clean_blocks =
+            LOCAL_GC_COPY_RESERVE_PAGES.load(Ordering::SeqCst) / Block::PAGES;
+        debug_assert!(
+            VM::VMActivePlan::is_mutator(self.tls),
+            "only mutator doing local gc should call thread_local_gc_reserve_pages"
+        );
+        debug_assert!(
+            LOCAL_GC_COPY_RESERVE_PAGES.load(Ordering::SeqCst) % Block::PAGES == 0,
+            "number of copy reserve pages is not a multiply of blocks"
+        );
+        #[cfg(feature = "debug_thread_local_gc_copying")]
+        {
+            let mutator = VM::VMActivePlan::mutator(VMMutatorThread(self.tls));
+            mutator.stats.number_of_blocks_acquired_for_evacuation += number_of_clean_blocks;
+        }
+        // pre-allocate copy reserve pages into local cache to make sure
+        // local gc can always evacuate
+        match self
+            .immix_space()
+            .get_clean_blocks(self.tls, false, number_of_clean_blocks)
+        {
+            Some(blocks) => {
+                #[cfg(feature = "debug_thread_local_gc_copying")]
+                {
+                    for b in &blocks {
+                        debug_assert!(b.is_block_published() == false);
+                    }
+                }
+
+                self.local_free_blocks.extend(blocks);
+            }
+            None => panic!("does not have enough space to do evacuation during local gc"),
+        }
+    }
 }
 
 impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {

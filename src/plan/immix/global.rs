@@ -153,11 +153,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn get_collection_reserved_pages(&self) -> usize {
-        #[cfg(feature = "thread_local_gc_copying")]
-        {
-            return self.immix_space.public_object_reserved_pages();
-        }
-        #[cfg(not(feature = "thread_local_gc_copying"))]
+        // #[cfg(feature = "thread_local_gc_copying")]
+        // {
+        //     return self.immix_space.public_object_reserved_pages();
+        // }
         return self.immix_space.defrag_headroom_pages();
     }
 

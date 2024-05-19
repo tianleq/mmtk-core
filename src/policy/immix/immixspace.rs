@@ -426,22 +426,22 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.defrag.in_defrag()
     }
 
-    #[cfg(feature = "thread_local_gc_copying")]
-    pub fn thread_local_gc_copy_reserve_pages(&self) -> usize {
-        use super::LOCAL_GC_COPY_RESERVE_PAGES;
-        LOCAL_GC_COPY_RESERVE_PAGES.load(Ordering::SeqCst)
-    }
+    // #[cfg(feature = "thread_local_gc_copying")]
+    // pub fn thread_local_gc_copy_reserve_pages(&self) -> usize {
+    //     use super::LOCAL_GC_COPY_RESERVE_PAGES;
+    //     LOCAL_GC_COPY_RESERVE_PAGES.load(Ordering::SeqCst)
+    // }
 
-    #[cfg(feature = "thread_local_gc_copying")]
-    pub fn public_object_reserved_pages(&self) -> usize {
-        let bytes_copied = self.bytes_copied.load(Ordering::Relaxed);
-        let bytes_published = self.bytes_published.load(Ordering::SeqCst);
-        if bytes_copied != 0 {
-            bytes_copied / crate::util::constants::BYTES_IN_PAGE
-        } else {
-            bytes_published / crate::util::constants::BYTES_IN_PAGE
-        }
-    }
+    // #[cfg(feature = "thread_local_gc_copying")]
+    // pub fn public_object_reserved_pages(&self) -> usize {
+    //     let bytes_copied = self.bytes_copied.load(Ordering::Relaxed);
+    //     let bytes_published = self.bytes_published.load(Ordering::SeqCst);
+    //     if bytes_copied != 0 {
+    //         bytes_copied / crate::util::constants::BYTES_IN_PAGE
+    //     } else {
+    //         bytes_published / crate::util::constants::BYTES_IN_PAGE
+    //     }
+    // }
 
     /// Get work packet scheduler
     fn scheduler(&self) -> &GCWorkScheduler<VM> {
@@ -637,6 +637,34 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         Some(block)
     }
 
+    #[cfg(feature = "thread_local_gc_copying")]
+    /// Allocate n clean blocks.
+    pub fn get_clean_blocks(&self, tls: VMThread, copy: bool, n: usize) -> Option<Vec<Block>> {
+        let address = self.acquire(tls, n * Block::PAGES);
+        if address.is_zero() {
+            return None;
+        }
+        #[cfg(feature = "thread_local_gc_copying")]
+        {
+            if copy {
+                self.blocks_acquired_for_evacuation
+                    .fetch_add(n, Ordering::SeqCst);
+            }
+        }
+        let mut blocks = Vec::with_capacity(n);
+        for i in 0..n {
+            self.defrag.notify_new_clean_block(copy);
+            let block = Block::from_aligned_address(address + i * Block::BYTES);
+            block.init(copy);
+            self.chunk_map.set(block.chunk(), ChunkState::Allocated);
+            self.lines_consumed
+                .fetch_add(Block::LINES, Ordering::SeqCst);
+            blocks.push(block);
+        }
+
+        Some(blocks)
+    }
+
     #[cfg(not(feature = "thread_local_gc_ibm_style"))]
     pub fn get_reusable_block(&self, copy: bool) -> Option<Block> {
         if super::BLOCK_ONLY {
@@ -794,8 +822,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             }
             new_object
         } else if self.is_marked(object) {
-            #[cfg(feature = "thread_local_gc")]
-            assert!(is_private_object, "public object cannot be left in-place");
+            // Public object now can be left in-place
+
+            // #[cfg(feature = "thread_local_gc")]
+            // assert!(is_private_object, "public object cannot be left in-place");
+
             // We won the forwarding race but the object is already marked so we clear the
             // forwarding status and return the unmoved object
             debug_assert!(
@@ -832,23 +863,25 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 || (!nursery_collection && self.defrag.space_exhausted())
                 || is_private_object
             {
-                #[cfg(not(feature = "debug_thread_local_gc_copying"))]
-                {
-                    debug_assert!(
-                        is_private_object,
-                        "public object cannot be left in-place, defrag space exhausted: {}",
-                        self.defrag.space_exhausted(),
-                    );
-                }
-                #[cfg(feature = "debug_thread_local_gc_copying")]
-                {
-                    debug_assert!(
-                        is_private_object,
-                        "public object cannot be left in-place, defrag space exhausted: {}, total defrag pages: {}",
-                        self.defrag.space_exhausted(),
-                        self.defrag.total_clean_pages_for_defrag.load(Ordering::Acquire)
-                    );
-                }
+                // Now public object may be left in-place
+
+                // #[cfg(not(feature = "debug_thread_local_gc_copying"))]
+                // {
+                //     debug_assert!(
+                //         is_private_object,
+                //         "public object cannot be left in-place, defrag space exhausted: {}",
+                //         self.defrag.space_exhausted(),
+                //     );
+                // }
+                // #[cfg(feature = "debug_thread_local_gc_copying")]
+                // {
+                //     debug_assert!(
+                //         is_private_object,
+                //         "public object cannot be left in-place, defrag space exhausted: {}, total defrag pages: {}",
+                //         self.defrag.space_exhausted(),
+                //         self.defrag.total_clean_pages_for_defrag.load(Ordering::Acquire)
+                //     );
+                // }
 
                 #[cfg(all(feature = "debug_publish_object", feature = "thread_local_gc"))]
                 {
@@ -1689,9 +1722,6 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
                 debug_assert_ne!(block.owner(), u32::MAX);
                 false
             } else if state.is_reusable() {
-                // public reusable blocks will be used during defrag, so
-                // do not defrag them
-
                 // A corner case is that some local reusable block
                 // might get published during mutator phase. However,
                 // those blocks' owner are not u32::MAX

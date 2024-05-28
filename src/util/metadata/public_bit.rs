@@ -17,7 +17,6 @@ pub fn set_public_bit<VM: VMBinding>(object: ObjectReference) {
         "{:x}: public bit already set",
         object,
     );
-    info!("publish object: {:?}", object);
     PUBLIC_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_address::<VM>(), 1, Ordering::SeqCst);
 }
 

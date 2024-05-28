@@ -103,6 +103,10 @@ code_space  = []
 # Native MarkSweep only ensures this in eager sweeping mode.
 vo_bit = ["eager_sweeping"]
 
+public_bit = []
+
+debug_publish_object = []
+
 # conservative garbage collection support
 is_mmtk_object = ["vo_bit"]
 

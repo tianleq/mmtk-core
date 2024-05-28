@@ -8,12 +8,9 @@ use crate::plan::mutator_context::ReservedAllocators;
 use crate::plan::AllocationSemantics;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
 use crate::util::alloc::ImmixAllocator;
+use crate::util::opaque_pointer::{VMMutatorThread, VMWorkerThread};
 use crate::vm::VMBinding;
 use crate::MMTK;
-use crate::{
-    plan::barriers::NoBarrier,
-    util::opaque_pointer::{VMMutatorThread, VMWorkerThread},
-};
 use enum_map::EnumMap;
 
 pub fn immix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {
@@ -56,9 +53,15 @@ pub fn create_immix_mutator<VM: VMBinding>(
         release_func: &immix_mutator_release,
     };
 
+    #[cfg(feature = "public_bit")]
+    let barrier = Box::new(crate::plan::barriers::PublicObjectMarkingBarrier::new(
+        crate::plan::barriers::PublicObjectMarkingBarrierSemantics::new(mmtk),
+    ));
+    #[cfg(not(feature = "public_bit"))]
+    let barrier = Box::new(plan::barriers::NoBarrier);
     Mutator {
         allocators: Allocators::<VM>::new(mutator_tls, mmtk, &config.space_mapping),
-        barrier: Box::new(NoBarrier),
+        barrier,
         mutator_tls,
         config,
         plan: immix,

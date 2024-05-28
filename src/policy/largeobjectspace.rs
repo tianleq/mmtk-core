@@ -228,6 +228,8 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         let sweep = |object: ObjectReference| {
             #[cfg(feature = "vo_bit")]
             crate::util::metadata::vo_bit::unset_vo_bit::<VM>(object);
+            #[cfg(feature = "public_bit")]
+            crate::util::metadata::public_bit::unset_public_bit::<VM>(object);
             self.pr
                 .release_pages(get_super_page(object.to_object_start::<VM>()));
         };

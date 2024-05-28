@@ -1046,6 +1046,8 @@ impl SideMetadataContext {
 
         #[cfg(feature = "vo_bit")]
         ret.push(VO_BIT_SIDE_METADATA_SPEC);
+        #[cfg(feature = "public_bit")]
+        ret.push(crate::util::metadata::public_bit::PUBLIC_SIDE_METADATA_SPEC);
 
         if let Some(spec) = crate::mmtk::SFT_MAP.get_side_metadata() {
             if spec.is_global {

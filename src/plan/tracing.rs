@@ -4,7 +4,9 @@
 use crate::scheduler::gc_work::{EdgeOf, ProcessEdgesWork};
 use crate::scheduler::{GCWorker, WorkBucketStage};
 use crate::util::ObjectReference;
+use crate::vm::edge_shape::Edge;
 use crate::vm::EdgeVisitor;
+use crate::vm::Scanning;
 
 /// This trait represents an object queue to enqueue objects during tracing.
 pub trait ObjectQueue {
@@ -115,7 +117,6 @@ impl<'a, E: ProcessEdgesWork> EdgeVisitor<EdgeOf<E>> for ObjectsClosure<'a, E> {
     fn visit_edge(&mut self, slot: EdgeOf<E>) {
         #[cfg(debug_assertions)]
         {
-            use crate::vm::edge_shape::Edge;
             trace!(
                 "(ObjectsClosure) Visit edge {:?} (pointing to {})",
                 slot,
@@ -132,5 +133,66 @@ impl<'a, E: ProcessEdgesWork> EdgeVisitor<EdgeOf<E>> for ObjectsClosure<'a, E> {
 impl<'a, E: ProcessEdgesWork> Drop for ObjectsClosure<'a, E> {
     fn drop(&mut self) {
         self.flush();
+    }
+}
+
+pub struct PublishObjectClosure<VM: crate::vm::VMBinding> {
+    _mmtk: &'static crate::MMTK<VM>,
+    edge_buffer: std::collections::VecDeque<VM::VMEdge>,
+}
+
+impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
+    pub fn new(mmtk: &'static crate::MMTK<VM>) -> Self {
+        PublishObjectClosure {
+            _mmtk: mmtk,
+            edge_buffer: std::collections::VecDeque::new(),
+        }
+    }
+
+    pub fn do_closure(&mut self) {
+        while !self.edge_buffer.is_empty() {
+            let slot = self.edge_buffer.pop_front().unwrap();
+            let object = slot.load();
+            if object.is_null() {
+                continue;
+            }
+            if !crate::util::metadata::public_bit::is_public::<VM>(object) {
+                // set public bit on the object
+                #[cfg(feature = "debug_publish_object")]
+                crate::util::metadata::public_bit::set_public_bit::<VM>(
+                    object,
+                    Some(self.mutator_id),
+                );
+                #[cfg(not(feature = "debug_publish_object"))]
+                crate::util::metadata::public_bit::set_public_bit::<VM>(object);
+                #[cfg(feature = "thread_local_gc")]
+                self._mmtk.get_plan().publish_object(
+                    object,
+                    #[cfg(feature = "debug_thread_local_gc_copying")]
+                    self.tls,
+                );
+                VM::VMScanning::scan_object(
+                    crate::util::VMWorkerThread(crate::util::VMThread::UNINITIALIZED),
+                    object,
+                    self,
+                );
+            }
+        }
+    }
+}
+
+impl<VM: crate::vm::VMBinding> EdgeVisitor<VM::VMEdge> for PublishObjectClosure<VM> {
+    fn visit_edge(&mut self, edge: VM::VMEdge) {
+        self.edge_buffer.push_back(edge);
+    }
+}
+
+impl<VM: crate::vm::VMBinding> Drop for PublishObjectClosure<VM> {
+    #[inline(always)]
+    fn drop(&mut self) {
+        assert!(
+            self.edge_buffer.is_empty(),
+            "There are edges left over. Closure is not done correctly."
+        );
     }
 }

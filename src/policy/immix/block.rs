@@ -169,6 +169,8 @@ impl Block {
     /// Deinitalize a block before releasing.
     pub fn deinit(&self) {
         self.set_state(BlockState::Unallocated);
+        #[cfg(feature = "public_bit")]
+        crate::util::metadata::public_bit::bzero_public_bit(self.start(), Self::BYTES);
     }
 
     pub fn start_line(&self) -> Line {

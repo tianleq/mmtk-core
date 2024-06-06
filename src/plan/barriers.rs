@@ -141,22 +141,6 @@ pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
     ///
     // TODO: Review any potential use cases for other VM bindings.
     fn object_probable_write(&mut self, _obj: ObjectReference) {}
-
-    #[cfg(feature = "public_object_analysis")]
-    fn get_number_of_objects_published(&self) -> usize {
-        0
-    }
-
-    #[cfg(feature = "public_object_analysis")]
-    fn clear_number_of_objects_published(&mut self) {}
-
-    #[cfg(feature = "public_object_analysis")]
-    fn get_number_of_bytes_published(&self) -> usize {
-        0
-    }
-
-    #[cfg(feature = "public_object_analysis")]
-    fn clear_number_of_bytes_published(&mut self) {}
 }
 
 impl_downcast!(Barrier<VM> where VM: VMBinding);
@@ -211,22 +195,6 @@ pub trait BarrierSemantics: 'static + Send {
 
     /// Object will probably be modified
     fn object_probable_write_slow(&mut self, _obj: ObjectReference) {}
-
-    #[cfg(feature = "public_object_analysis")]
-    fn get_number_of_objects_published(&self) -> usize {
-        0
-    }
-
-    #[cfg(feature = "public_object_analysis")]
-    fn clear_number_of_objects_published(&mut self) {}
-
-    #[cfg(feature = "public_object_analysis")]
-    fn get_number_of_bytes_published(&self) -> usize {
-        0
-    }
-
-    #[cfg(feature = "public_object_analysis")]
-    fn clear_number_of_bytes_published(&mut self) {}
 
     #[cfg(all(feature = "debug_publish_object", debug_assertions))]
     fn get_object_owner(&self, _object: ObjectReference) -> u32 {
@@ -457,26 +425,6 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
         self.semantics
             .object_array_copy_slow(src_base, dst_base, src, dst);
     }
-
-    #[cfg(feature = "public_object_analysis")]
-    fn get_number_of_objects_published(&self) -> usize {
-        self.semantics.get_number_of_objects_published()
-    }
-
-    #[cfg(feature = "public_object_analysis")]
-    fn clear_number_of_objects_published(&mut self) {
-        self.semantics.clear_number_of_objects_published();
-    }
-
-    #[cfg(feature = "public_object_analysis")]
-    fn get_number_of_bytes_published(&self) -> usize {
-        self.semantics.get_number_of_bytes_published()
-    }
-
-    #[cfg(feature = "public_object_analysis")]
-    fn clear_number_of_bytes_published(&mut self) {
-        self.semantics.clear_number_of_bytes_published();
-    }
 }
 
 pub struct PublicObjectMarkingBarrierSemantics<VM: VMBinding> {
@@ -522,28 +470,7 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
         );
         VM::VMScanning::scan_object(VMWorkerThread(VMThread::UNINITIALIZED), value, &mut closure);
         closure.do_closure();
-        #[cfg(feature = "public_object_analysis")]
-        {
-            let newly_published_count = closure.get_number_of_objects_published() + 1;
-            let newly_published_bytes = closure.get_number_of_bytes_published()
-                + VM::VMObjectModel::get_current_size(value);
 
-            {
-                let mut stats = crate::util::REQUEST_SCOPE_OBJECTS_STATS.lock().unwrap();
-                stats.public_count += newly_published_count;
-                stats.public_bytes += newly_published_bytes;
-            }
-            {
-                let mut stats = crate::util::HARNESS_SCOPE_OBJECTS_STATS.lock().unwrap();
-                stats.public_count += newly_published_count;
-                stats.public_bytes += newly_published_bytes;
-            }
-            {
-                let mut stats = crate::util::ALL_SCOPE_OBJECTS_STATS.lock().unwrap();
-                stats.public_count += newly_published_count;
-                stats.public_bytes += newly_published_bytes;
-            }
-        }
         #[cfg(feature = "debug_thread_local_gc_copying")]
         {
             use crate::vm::ActivePlan;

@@ -87,6 +87,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         use crate::vm::ActivePlan;
 
         let mutator = VM::VMActivePlan::mutator(_tls);
+
         mutator.local_allocation_size >= self.options().get_thread_local_heap_size()
     }
 
@@ -277,6 +278,78 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 .unwrap()
         };
         immix_allocator.collect_thread_local_heap_stats();
+    }
+
+    #[cfg(feature = "thread_local_gc_copying_stats")]
+    fn print_heap_stats(&self, mutator: &mut crate::Mutator<VM>) {
+        use std::{fs::OpenOptions, io::Write};
+
+        use crate::{
+            policy::immix::TOTAL_IMMIX_ALLOCATION_BYTES,
+            util::{alloc::ImmixAllocator, GLOBAL_REQUEST_ID},
+        };
+
+        let result = self.immix_space.print_immixspace_stats();
+        let live_los_pages = self.common().print_heap_stats();
+        let allocator = unsafe {
+            mutator
+                .allocators
+                .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
+                .downcast_mut::<ImmixAllocator<VM>>()
+                .unwrap()
+        };
+        let local_blocks_count = allocator.local_blocks.len()
+            + allocator.local_free_blocks.len()
+            + allocator.local_reusable_blocks.len();
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/home/tianleq/misc/local-gc-heap-stats.log")
+            .unwrap();
+        writeln!(
+            file,
+            "{}, {}, {}, {}, {}, {}, {}, {}, {}, {}",
+            TOTAL_IMMIX_ALLOCATION_BYTES.load(Ordering::SeqCst),
+            GLOBAL_REQUEST_ID.load(Ordering::SeqCst),
+            mutator.mutator_id,
+            result.0,
+            result.1,
+            result.2,
+            result.3,
+            result.4,
+            live_los_pages,
+            local_blocks_count
+        )
+        .unwrap();
+    }
+
+    #[cfg(feature = "thread_local_gc_copying_stats")]
+    fn print_global_heap_stats(&self) {
+        use std::{fs::OpenOptions, io::Write};
+
+        use crate::{policy::immix::TOTAL_IMMIX_ALLOCATION_BYTES, util::GLOBAL_REQUEST_ID};
+
+        let result = self.immix_space.print_immixspace_stats();
+        let live_los_pages = self.common().print_heap_stats();
+
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/home/tianleq/misc/global-gc-heap-stats.log")
+            .unwrap();
+        writeln!(
+            file,
+            "{}, {}, {}, {}, {}, {}, {}, {}",
+            TOTAL_IMMIX_ALLOCATION_BYTES.load(Ordering::SeqCst),
+            GLOBAL_REQUEST_ID.load(Ordering::SeqCst),
+            result.0,
+            result.1,
+            result.2,
+            result.3,
+            result.4,
+            live_los_pages,
+        )
+        .unwrap();
     }
 }
 

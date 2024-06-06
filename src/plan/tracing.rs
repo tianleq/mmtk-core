@@ -182,10 +182,6 @@ impl<'a, E: ProcessEdgesWork> Drop for ObjectsClosure<'a, E> {
 pub struct PublishObjectClosure<VM: crate::vm::VMBinding> {
     _mmtk: &'static MMTK<VM>,
     edge_buffer: std::collections::VecDeque<VM::VMEdge>,
-    #[cfg(feature = "public_object_analysis")]
-    number_of_objects_published: usize,
-    #[cfg(feature = "public_object_analysis")]
-    number_of_bytes_published: usize,
     #[cfg(feature = "debug_publish_object")]
     mutator_id: u32,
     #[cfg(feature = "debug_thread_local_gc_copying")]
@@ -201,10 +197,6 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
         PublishObjectClosure {
             _mmtk: mmtk,
             edge_buffer: std::collections::VecDeque::new(),
-            #[cfg(feature = "public_object_analysis")]
-            number_of_objects_published: 0,
-            #[cfg(feature = "public_object_analysis")]
-            number_of_bytes_published: 0,
             #[cfg(feature = "debug_publish_object")]
             mutator_id,
             #[cfg(feature = "debug_thread_local_gc_copying")]
@@ -248,12 +240,7 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
                     object,
                     self,
                 );
-                #[cfg(feature = "public_object_analysis")]
-                {
-                    use crate::vm::ObjectModel;
-                    self.number_of_objects_published += 1;
-                    self.number_of_bytes_published += VM::VMObjectModel::get_current_size(object);
-                }
+
                 #[cfg(feature = "debug_thread_local_gc_copying")]
                 {
                     use crate::vm::ObjectModel;
@@ -274,16 +261,6 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
             guard.live_public_bytes += number_of_bytes_published;
             TOTAL_PU8LISHED_BYTES.fetch_add(number_of_bytes_published, atomic::Ordering::SeqCst);
         }
-    }
-
-    #[cfg(feature = "public_object_analysis")]
-    pub fn get_number_of_objects_published(&self) -> usize {
-        self.number_of_objects_published
-    }
-
-    #[cfg(feature = "public_object_analysis")]
-    pub fn get_number_of_bytes_published(&self) -> usize {
-        self.number_of_bytes_published
     }
 }
 

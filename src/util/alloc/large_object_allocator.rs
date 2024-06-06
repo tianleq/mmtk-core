@@ -114,6 +114,12 @@ impl<VM: VMBinding> Allocator<VM> for LargeObjectAllocator<VM> {
             mutator.stats.bytes_allocated += crate::util::constants::BYTES_IN_PAGE * pages;
             guard.bytes_allocated += crate::util::constants::BYTES_IN_PAGE * pages;
         }
+        #[cfg(feature = "thread_local_gc_copying_stats")]
+        {
+            self.space
+                .live_pages
+                .fetch_add(pages, std::sync::atomic::Ordering::SeqCst);
+        }
         self.space.allocate_pages(self.tls, pages)
     }
 

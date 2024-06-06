@@ -85,24 +85,6 @@ pub use self::address::ObjectReference;
 pub use self::opaque_pointer::*;
 
 pub(crate) static MUTATOR_ID_GENERATOR: AtomicU32 = AtomicU32::new(1);
-#[cfg(feature = "public_object_analysis")]
-#[derive(Default)]
-pub(crate) struct Statistics {
-    pub allocation_count: usize,
-    pub allocation_bytes: usize,
-    pub public_count: usize,
-    pub public_bytes: usize,
-}
-
-#[cfg(feature = "public_object_analysis")]
-lazy_static! {
-    pub(crate) static ref REQUEST_SCOPE_OBJECTS_STATS: std::sync::Mutex<Statistics> =
-        std::sync::Mutex::new(Statistics::default());
-    pub(crate) static ref HARNESS_SCOPE_OBJECTS_STATS: std::sync::Mutex<Statistics> =
-        std::sync::Mutex::new(Statistics::default());
-    pub(crate) static ref ALL_SCOPE_OBJECTS_STATS: std::sync::Mutex<Statistics> =
-        std::sync::Mutex::new(Statistics::default());
-}
 
 #[cfg(feature = "debug_thread_local_gc_copying")]
 #[derive(Default)]
@@ -150,7 +132,7 @@ pub(crate) struct LocalGCStatistics {
     pub number_of_free_lines_in_local_reusable_blocks: usize,
 }
 
-#[cfg(feature = "debug_thread_local_gc_copying")]
+#[cfg(any(feature = "debug_thread_local_gc_copying",))]
 pub(crate) static TOTAL_ALLOCATION_BYTES: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
@@ -185,3 +167,6 @@ pub(crate) static GLOBAL_GC_STATISTICS: std::sync::Mutex<GCStatistics> =
 
 #[cfg(feature = "debug_thread_local_gc_copying")]
 pub(crate) static GLOBAL_GC_ID: AtomicU32 = AtomicU32::new(1);
+
+#[cfg(feature = "thread_local_gc_copying_stats")]
+pub(crate) static GLOBAL_REQUEST_ID: AtomicU32 = AtomicU32::new(0);

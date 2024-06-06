@@ -102,15 +102,25 @@ impl Block {
     pub const MARK_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_MARK;
 
+    pub const ANONYMOUS_OWNER: u32 = u32::MAX;
+
+    //       public bit
+    //       |
+    // 00000000
+    //        |
+    //        dirty bit
+    pub const PUBLIC_BIT: u8 = 0b10;
+    pub const DIRTY_BIT: u8 = 0b01;
+
     /// Block owner table (side)
-    #[cfg(feature = "thread_local_gc")]
+    #[cfg(all(feature = "thread_local_gc", debug_assertions))]
     pub const OWNER_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_OWNER;
 
     /// Block level public table (side)
     #[cfg(feature = "thread_local_gc")]
-    pub const BLOCK_PUBLICATION_TABLE: SideMetadataSpec =
-        crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_PUBLICATION;
+    pub const BLOCK_PUBLICATION_AND_OWNER_TABLE: SideMetadataSpec =
+        crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_PUBLICATION_AND_OWNER;
 
     /// Get the chunk containing the block.
     pub fn chunk(&self) -> Chunk {
@@ -138,16 +148,65 @@ impl Block {
 
     /// Publish block
     #[cfg(feature = "thread_local_gc")]
-    pub fn publish(&self) -> bool {
-        let prev_value =
-            Self::BLOCK_PUBLICATION_TABLE.fetch_or_atomic::<u8>(self.start(), 1, Ordering::SeqCst);
+    pub fn publish(&self, dirty: bool) -> bool {
+        let val = if dirty {
+            debug_assert!(
+                (Self::BLOCK_PUBLICATION_AND_OWNER_TABLE
+                    .load_atomic::<u8>(self.start(), Ordering::Acquire)
+                    & Self::DIRTY_BIT)
+                    == 1,
+                "block: {:?} dirty bit is not set",
+                self
+            );
+            Self::DIRTY_BIT | Self::PUBLIC_BIT
+        } else {
+            debug_assert!(
+                (Self::BLOCK_PUBLICATION_AND_OWNER_TABLE
+                    .load_atomic::<u8>(self.start(), Ordering::Acquire)
+                    & Self::DIRTY_BIT)
+                    == 0,
+                "block: {:?} dirty bit is set",
+                self
+            );
+            Self::PUBLIC_BIT
+        };
 
-        prev_value == 0
+        let prev_value = Self::BLOCK_PUBLICATION_AND_OWNER_TABLE.fetch_or_atomic::<u8>(
+            self.start(),
+            val,
+            Ordering::SeqCst,
+        );
+
+        (prev_value & Self::PUBLIC_BIT) == 0
     }
 
     #[cfg(feature = "thread_local_gc")]
     pub fn reset_publication(&self) {
-        Self::BLOCK_PUBLICATION_TABLE.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
+        Self::BLOCK_PUBLICATION_AND_OWNER_TABLE.fetch_and_atomic::<u8>(
+            self.start(),
+            Self::DIRTY_BIT,
+            Ordering::SeqCst,
+        );
+        // Also rest all lines within the block
+        Line::LINE_PUBLICATION_TABLE.bzero_metadata(self.start(), Self::BYTES);
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn reset_dirty(&self) {
+        Self::BLOCK_PUBLICATION_AND_OWNER_TABLE.fetch_and_atomic::<u8>(
+            self.start(),
+            Self::PUBLIC_BIT,
+            Ordering::SeqCst,
+        );
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn reset_publication_and_dirty(&self) {
+        Self::BLOCK_PUBLICATION_AND_OWNER_TABLE.store_atomic::<u8>(
+            self.start(),
+            0,
+            Ordering::SeqCst,
+        );
         // Also rest all lines within the block
         Line::LINE_PUBLICATION_TABLE.bzero_metadata(self.start(), Self::BYTES);
     }
@@ -160,10 +219,30 @@ impl Block {
 
     #[cfg(feature = "thread_local_gc")]
     pub fn is_block_published(&self) -> bool {
-        Self::BLOCK_PUBLICATION_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst) == 1
+        (Self::BLOCK_PUBLICATION_AND_OWNER_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst)
+            & Self::PUBLIC_BIT)
+            == Self::PUBLIC_BIT
     }
 
-    #[cfg(feature = "thread_local_gc_copying")]
+    // dirty the block
+    #[cfg(feature = "thread_local_gc")]
+    pub fn is_block_dirty(&self) -> bool {
+        (Self::BLOCK_PUBLICATION_AND_OWNER_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst)
+            & Self::DIRTY_BIT)
+            == Self::DIRTY_BIT
+    }
+
+    // dirty the block
+    #[cfg(feature = "thread_local_gc")]
+    pub fn taint(&self) {
+        Self::BLOCK_PUBLICATION_AND_OWNER_TABLE.fetch_or_atomic::<u8>(
+            self.start(),
+            Self::DIRTY_BIT,
+            Ordering::SeqCst,
+        );
+    }
+
+    #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
     pub fn are_lines_private(&self) -> bool {
         for line in self.lines() {
             if line.is_line_published() {
@@ -191,14 +270,29 @@ impl Block {
                 // free lines should not be marked
                 if line.is_marked(state) {
                     panic!(
-                        "public block: {:?} -> free line: {:?} is marked",
-                        self, line
+                        "public block: {:?}|owner: {:?} -> free line: {:?} is marked",
+                        self,
+                        self.owner(),
+                        line
                     );
                 }
             }
         }
     }
 
+    #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
+    pub fn all_lines_unmarked(&self, state: u8) {
+        for line in self.lines() {
+            if line.is_marked(state) {
+                panic!(
+                    "public block: {:?}|owner: {:?} -> free line: {:?} is marked",
+                    self,
+                    self.owner(),
+                    line
+                );
+            }
+        }
+    }
     // Defrag byte
 
     const DEFRAG_SOURCE_STATE: u8 = u8::MAX;
@@ -376,10 +470,11 @@ impl Block {
                     if prev_line_is_marked {
                         holes += 1;
                     }
-                    #[cfg(debug_assertions)]
-                    {
-                        crate::util::memory::set(line.start(), 0xCA, Line::BYTES);
-                    }
+                    // // #[cfg(debug_assertions)]
+                    // {
+                    //     crate::util::memory::set(line.start(), 0xCA, Line::BYTES);
+                    // }
+                    crate::util::memory::zero(line.start(), Line::BYTES);
 
                     #[cfg(feature = "immix_zero_on_release")]
                     crate::util::memory::zero(line.start(), Line::BYTES);
@@ -455,8 +550,9 @@ impl Block {
                     // Release the block if it is allocated but not marked by the current GC.
                     #[cfg(feature = "thread_local_gc")]
                     {
+                        #[cfg(debug_assertions)]
                         self.clear_owner();
-                        self.reset_publication();
+                        self.reset_publication_and_dirty();
                     }
                     // release_block will set the block state to BlockState::Unallocated
                     space.release_block(*self);
@@ -478,9 +574,7 @@ impl Block {
             let mut prev_line_is_marked = true;
             let line_mark_state = line_mark_state.unwrap();
             #[cfg(feature = "thread_local_gc_copying")]
-            let mut is_block_pubic = false;
-            #[cfg(feature = "thread_local_gc_copying")]
-            let mut is_block_global = true;
+            let mut is_block_public = false;
 
             for line in self.lines() {
                 if line.is_marked(line_mark_state) {
@@ -488,14 +582,8 @@ impl Block {
                     prev_line_is_marked = true;
                     let is_line_published = line.is_line_published();
                     // a line is public iff it is marked and line level public bit is set
-                    if !is_block_pubic && is_line_published {
-                        is_block_pubic = true;
-                    }
-                    // if a block is public and it has a private line marked
-                    // then it cannot be added to the global reusable block list
-                    // it needs to stay at its owner's local block list
-                    if is_block_pubic && !is_line_published {
-                        is_block_global = false;
+                    if !is_block_public && is_line_published {
+                        is_block_public = true;
                     }
                 } else {
                     if prev_line_is_marked {
@@ -506,18 +594,16 @@ impl Block {
                     #[cfg(feature = "thread_local_gc_ibm_style")]
                     line.reset_publication();
 
+                    // #[cfg(debug_assertions)]
+                    // {
+                    //     crate::util::memory::set(line.start(), 0xCA, Line::BYTES);
+                    // }
+
                     #[cfg(feature = "immix_zero_on_release")]
                     crate::util::memory::zero(line.start(), Line::BYTES);
 
                     prev_line_is_marked = false;
                 }
-            }
-
-            #[cfg(feature = "thread_local_gc")]
-            if !is_block_pubic {
-                self.reset_publication();
-            } else {
-                debug_assert!(self.is_block_published());
             }
 
             if marked_lines == 0 {
@@ -526,7 +612,9 @@ impl Block {
                 // Release the block if non of its lines are marked.
                 #[cfg(feature = "thread_local_gc")]
                 {
+                    #[cfg(debug_assertions)]
                     self.clear_owner();
+                    self.reset_publication_and_dirty();
                     debug_assert!(self.is_block_published() == false);
                 }
                 space.release_block(*self);
@@ -540,9 +628,16 @@ impl Block {
                 #[cfg(feature = "debug_thread_local_gc_copying")]
                 {
                     (*gc_stats).number_of_live_blocks += 1;
-                    if is_block_pubic {
+                    if is_block_public {
                         (*gc_stats).number_of_live_public_blocks += 1;
                     }
+                }
+
+                #[cfg(feature = "thread_local_gc")]
+                if !is_block_public {
+                    self.reset_publication();
+                } else {
+                    debug_assert!(self.is_block_published());
                 }
                 // There are some marked lines. Keep the block live.
                 if marked_lines != Block::LINES {
@@ -557,20 +652,10 @@ impl Block {
                     // can be reused
                     #[cfg(feature = "thread_local_gc_copying")]
                     {
-                        if is_block_pubic {
-                            // The following assertion no longer holds
-                            // since now private objects and public
-                            // objects may co-exist in the same block
-
-                            // debug_assert!(
-                            //     self.owner() == u32::MAX,
-                            //     "block: {:?}, owner: {}, defrag source: {}",
-                            //     self,
-                            //     self.owner(),
-                            //     self.is_defrag_source()
-                            // );
-                            if is_block_global {
-                                self.set_owner(u32::MAX);
+                        if is_block_public {
+                            // now private objects and public objects may co-exist
+                            // in the same block
+                            if !self.is_block_dirty() {
                                 space.reusable_blocks.push(*self);
                                 #[cfg(feature = "debug_thread_local_gc_copying")]
                                 {
@@ -578,16 +663,8 @@ impl Block {
                                     (*gc_stats).number_of_free_lines_in_global_reusable_blocks +=
                                         Block::LINES - marked_lines;
                                 }
-                            } else {
-                                // This is a hacky way of carrying over info
-                                // 0 is not a valid owner, so when a mutator
-                                // sees a block with 0 as its owner, it knows
-                                // that this block is public and also contains
-                                // live private object
-                                self.set_owner(0);
                             }
                         } else {
-                            debug_assert!(self.owner() != u32::MAX);
                             debug_assert!(!self.is_block_published());
                             #[cfg(feature = "debug_thread_local_gc_copying")]
                             {
@@ -601,6 +678,10 @@ impl Block {
                     // when block is full, it does not matter whether it
                     // coantains a mix of private and public objects
                     // since it cannot be reused, nothing will be overwritten
+
+                    // two cases:
+                    // 1. block is allocated by collector and contains public object only (block will not be visible until next global gc)
+                    // 2. block is dirty, which means it contains a mix of public and private object (block is visible during local and global gc)
 
                     // Clear mark state.
                     self.set_state(BlockState::Unmarked);
@@ -618,17 +699,17 @@ impl Block {
         }
     }
 
-    #[cfg(feature = "thread_local_gc")]
+    #[cfg(all(feature = "thread_local_gc", debug_assertions))]
     pub fn owner(&self) -> u32 {
         Self::OWNER_TABLE.load_atomic::<u32>(self.start(), Ordering::SeqCst)
     }
 
-    #[cfg(feature = "thread_local_gc")]
+    #[cfg(all(feature = "thread_local_gc", debug_assertions))]
     pub fn clear_owner(&self) {
         self.set_owner(0);
     }
 
-    #[cfg(feature = "thread_local_gc")]
+    #[cfg(all(feature = "thread_local_gc", debug_assertions))]
     pub fn set_owner(&self, owner: u32) {
         Self::OWNER_TABLE.store_atomic::<u32>(self.start(), owner, Ordering::SeqCst)
     }

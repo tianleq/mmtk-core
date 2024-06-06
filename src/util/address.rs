@@ -342,6 +342,25 @@ impl Address {
     pub fn range_intersection(r1: &Range<Address>, r2: &Range<Address>) -> Range<Address> {
         r1.start.max(r2.start)..r1.end.min(r2.end)
     }
+
+    pub fn class_pointer<VM: VMBinding>(self) -> Address {
+        unsafe { Address::from_usize(self.add(8).load::<usize>()) }
+    }
+
+    pub fn class_is_valid<VM: VMBinding>(self) -> bool {
+        let klass = self.class_pointer::<VM>();
+        // let v = klass.as_usize();
+        // if -1 == unsafe { libc::msync((v >> 12 << 12) as *mut libc::c_void, 4096, 0) } {
+        //     println!("Unmapped klass {:?} object {:?}", klass, self);
+        //     return false;
+        // }
+        let valid =
+            ((klass.as_usize() & 0xff000_00000000) == 0x7000_00000000) && klass.is_aligned_to(8);
+        if !valid {
+            println!("invalid klass {:?} for object {:?}", klass, self);
+        }
+        valid
+    }
 }
 
 /// allows print Address as upper-case hex value

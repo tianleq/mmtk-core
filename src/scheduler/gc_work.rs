@@ -762,7 +762,26 @@ pub trait ProcessEdgesWork:
         if object.is_null() {
             return;
         }
+        assert!(
+            object.to_address::<Self::VM>().class_is_valid::<Self::VM>()
+                && <Self::VM as VMBinding>::VMObjectModel::is_object_sane(object),
+            "slot: {:?}, object: {:?}, klass: {:?}",
+            slot,
+            object,
+            object.to_address::<Self::VM>().class_pointer::<Self::VM>()
+        );
         let new_object = self.trace_object(object);
+        assert!(
+            new_object
+                .to_address::<Self::VM>()
+                .class_is_valid::<Self::VM>(),
+            "slot: {:?}, object: {:?}, klass: {:?}",
+            slot,
+            new_object,
+            new_object
+                .to_address::<Self::VM>()
+                .class_pointer::<Self::VM>()
+        );
         debug_assert!(!new_object.is_null());
         if Self::OVERWRITE_REFERENCE && new_object != object {
             slot.store(new_object);
@@ -1047,7 +1066,7 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
         let objects_to_scan = buffer;
 
         // Then scan those objects for edges.
-        let mut scan_later = vec![];
+        // let mut scan_later = vec![];
         {
             let mut closure = ObjectsClosure::<Self::E>::new(worker, self.get_bucket());
             for object in objects_to_scan.iter().copied() {
@@ -1058,43 +1077,47 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
                     .shared
                     .increase_live_bytes(VM::VMObjectModel::get_current_size(object));
 
-                if <VM as VMBinding>::VMScanning::support_edge_enqueuing(tls, object) {
-                    trace!("Scan object (edge) {}", object);
-                    // If an object supports edge-enqueuing, we enqueue its edges.
-                    <VM as VMBinding>::VMScanning::scan_object(tls, object, &mut closure);
-                    self.post_scan_object(object);
-                } else {
-                    // If an object does not support edge-enqueuing, we have to use
-                    // `Scanning::scan_object_and_trace_edges` and offload the job of updating the
-                    // reference field to the VM.
-                    //
-                    // However, at this point, `closure` is borrowing `worker`.
-                    // So we postpone the processing of objects that needs object enqueuing
-                    scan_later.push(object);
-                }
+                <VM as VMBinding>::VMScanning::scan_object(tls, object, &mut closure);
+                self.post_scan_object(object);
+
+                // If an object supports edge-enqueuing, we enqueue its edges.
+                // if <VM as VMBinding>::VMScanning::support_edge_enqueuing(tls, object) {
+                //     trace!("Scan object (edge) {}", object);
+                //     // If an object supports edge-enqueuing, we enqueue its edges.
+                //     <VM as VMBinding>::VMScanning::scan_object(tls, object, &mut closure);
+                //     self.post_scan_object(object);
+                // } else {
+                //     // If an object does not support edge-enqueuing, we have to use
+                //     // `Scanning::scan_object_and_trace_edges` and offload the job of updating the
+                //     // reference field to the VM.
+                //     //
+                //     // However, at this point, `closure` is borrowing `worker`.
+                //     // So we postpone the processing of objects that needs object enqueuing
+                //     scan_later.push(object);
+                // }
             }
         }
 
         // If any object does not support edge-enqueuing, we process them now.
-        if !scan_later.is_empty() {
-            let object_tracer_context = ProcessEdgesWorkTracerContext::<Self::E> {
-                stage: self.get_bucket(),
-                phantom_data: PhantomData,
-            };
+        // if !scan_later.is_empty() {
+        //     let object_tracer_context = ProcessEdgesWorkTracerContext::<Self::E> {
+        //         stage: self.get_bucket(),
+        //         phantom_data: PhantomData,
+        //     };
 
-            object_tracer_context.with_tracer(worker, |object_tracer| {
-                // Scan objects and trace their edges at the same time.
-                for object in scan_later.iter().copied() {
-                    trace!("Scan object (node) {}", object);
-                    <VM as VMBinding>::VMScanning::scan_object_and_trace_edges(
-                        tls,
-                        object,
-                        object_tracer,
-                    );
-                    self.post_scan_object(object);
-                }
-            });
-        }
+        //     object_tracer_context.with_tracer(worker, |object_tracer| {
+        //         // Scan objects and trace their edges at the same time.
+        //         for object in scan_later.iter().copied() {
+        //             trace!("Scan object (node) {}", object);
+        //             <VM as VMBinding>::VMScanning::scan_object_and_trace_edges(
+        //                 tls,
+        //                 object,
+        //                 object_tracer,
+        //             );
+        //             self.post_scan_object(object);
+        //         }
+        //     });
+        // }
     }
 }
 

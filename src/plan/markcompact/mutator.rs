@@ -70,8 +70,6 @@ pub fn create_markcompact_mutator<VM: VMBinding>(
         thread_local_gc_status: 0,
         #[cfg(feature = "thread_local_gc")]
         finalizable_candidates: Box::new(Vec::new()),
-        #[cfg(feature = "public_object_analysis")]
-        allocation_count: 0,
         #[cfg(any(
             feature = "debug_thread_local_gc_copying",
             feature = "debug_publish_object"

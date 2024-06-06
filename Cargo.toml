@@ -64,7 +64,7 @@ name = "main"
 harness = false
 
 [features]
-default = ["count_live_bytes_in_gc"]
+default = []
 
 # This feature is only supported on x86-64 for now
 # It's manually added to CI scripts
@@ -127,10 +127,9 @@ thread_local_gc_ibm_style = ["thread_local_gc", "immix_non_moving"]
 #Enable ibm style thread local gc
 thread_local_gc_copying = ["thread_local_gc"]
 
-#Enable object publication analysis
-public_object_analysis = []
-
 debug_thread_local_gc_copying = ["thread_local_gc_copying"]
+
+thread_local_gc_copying_stats = ["thread_local_gc_copying"]
 
 # The following two features are useful for using Immix for VMs that do not support moving GC.
 

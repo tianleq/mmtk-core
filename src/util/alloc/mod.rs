@@ -1,6 +1,6 @@
 //! Various allocators implementation.
 
-/// The allocator trait and allocation-related functions.
+/// The allocator trait and allocation-related  pub(crate)  pub(crate) functions.
 pub(crate) mod allocator;
 pub use allocator::fill_alignment_gap;
 pub use allocator::AllocationError;
@@ -37,3 +37,8 @@ pub use markcompact_allocator::MarkCompactAllocator;
 
 /// Embedded metadata pages
 pub(crate) mod embedded_meta_data;
+
+#[cfg(feature = "thread_local_gc_copying_stats")]
+lazy_static! {
+    pub static ref GLOBAL_ALLOC_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+}

@@ -79,7 +79,19 @@ pub fn forward_object<VM: VMBinding>(
     semantics: CopySemantics,
     copy_context: &mut GCWorkerCopyContext<VM>,
 ) -> ObjectReference {
+    assert!(
+        object.to_address::<VM>().class_is_valid::<VM>(),
+        "object: {:?}, klass: {:?}",
+        object,
+        object.to_address::<VM>().class_pointer::<VM>()
+    );
     let new_object = VM::VMObjectModel::copy(object, semantics, copy_context);
+    assert!(
+        new_object.to_address::<VM>().class_is_valid::<VM>(),
+        "object: {:?}, klass: {:?}",
+        new_object,
+        new_object.to_address::<VM>().class_pointer::<VM>()
+    );
     if let Some(shift) = forwarding_bits_offset_in_forwarding_pointer::<VM>() {
         VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC.store_atomic::<VM, usize>(
             object,
@@ -106,8 +118,20 @@ pub fn forward_public_object<VM: VMBinding>(
     copy_context: &mut GCWorkerCopyContext<VM>,
     #[cfg(feature = "debug_publish_object")] mutator_id: u32,
 ) -> ObjectReference {
+    assert!(
+        object.to_address::<VM>().class_is_valid::<VM>(),
+        "object: {:?}, klass: {:?}",
+        object,
+        object.to_address::<VM>().class_pointer::<VM>()
+    );
     debug_assert!(crate::util::metadata::public_bit::is_public::<VM>(object));
     let new_object = VM::VMObjectModel::copy(object, semantics, copy_context);
+    assert!(
+        new_object.to_address::<VM>().class_is_valid::<VM>(),
+        "object: {:?}, klass: {:?}",
+        new_object,
+        new_object.to_address::<VM>().class_pointer::<VM>()
+    );
     // make sure the public bit is set before forwarding bit gets updated
     // otherwise, there will be a race in assertion (a gc thread may see forwarded object without public bit being set)
     #[cfg(feature = "debug_publish_object")]

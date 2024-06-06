@@ -302,12 +302,7 @@ impl Stats {
         for name in scheduler_stat.keys() {
             print!("{}\t", name);
         }
-        #[cfg(feature = "public_object_analysis")]
-        {
-            print!("all.all.bytes\tall.public.bytes\tall.publish.rate\t");
-            print!("harness.all.bytes\tharness.public.bytes\tharness.publish.rate\t");
-            print!("request.all.bytes\request.public.bytes\request.publish.rate\t");
-        }
+
         println!();
     }
 

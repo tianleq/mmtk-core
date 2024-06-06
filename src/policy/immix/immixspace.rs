@@ -67,6 +67,17 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub(super) bytes_copied: AtomicUsize,
     #[cfg(feature = "thread_local_gc_copying")]
     blocks_acquired_for_evacuation: AtomicUsize,
+    #[cfg(feature = "thread_local_gc_copying")]
+    blocks_freed: AtomicUsize,
+    // pub log_buffer: crossbeam::queue::SegQueue<(
+    //     usize,
+    //     ObjectReference,
+    //     Address,
+    //     bool,
+    //     ObjectReference,
+    //     Address,
+    //     bool,
+    // )>,
 }
 
 /// Some arguments for Immix Space.
@@ -199,7 +210,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
     ) -> ObjectReference {
         debug_assert!(!object.is_null());
         if KIND == TRACE_KIND_TRANSITIVE_PIN {
-            self.trace_object_without_moving(queue, object)
+            self.trace_object_without_moving(queue, object, worker)
         } else if KIND == TRACE_KIND_DEFRAG {
             if Block::containing::<VM>(object).is_defrag_source() {
                 #[cfg(feature = "thread_local_gc_copying")]
@@ -219,7 +230,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
                     false,
                 )
             } else {
-                self.trace_object_without_moving(queue, object)
+                self.trace_object_without_moving(queue, object, worker)
             }
         } else if KIND == TRACE_KIND_FAST {
             #[cfg(feature = "thread_local_gc")]
@@ -227,7 +238,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
                 crate::policy::immix::NEVER_MOVE_OBJECTS,
                 "Moving thread-local gc is incompatible with non-moving global gc"
             );
-            self.trace_object_without_moving(queue, object)
+            self.trace_object_without_moving(queue, object, worker)
         } else {
             unreachable!()
         }
@@ -265,7 +276,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         metadata::extract_side_metadata(&if super::BLOCK_ONLY {
             vec![
                 #[cfg(feature = "thread_local_gc")]
-                MetadataSpec::OnSide(Block::BLOCK_PUBLICATION_TABLE),
+                MetadataSpec::OnSide(Block::BLOCK_PUBLICATION_AND_OWNER_TABLE),
                 #[cfg(feature = "thread_local_gc")]
                 MetadataSpec::OnSide(Block::OWNER_TABLE),
                 MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
@@ -280,7 +291,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         } else {
             vec![
                 #[cfg(feature = "thread_local_gc")]
-                MetadataSpec::OnSide(Block::BLOCK_PUBLICATION_TABLE),
+                MetadataSpec::OnSide(Block::BLOCK_PUBLICATION_AND_OWNER_TABLE),
                 #[cfg(feature = "thread_local_gc")]
                 MetadataSpec::OnSide(Block::OWNER_TABLE),
                 #[cfg(feature = "thread_local_gc")]
@@ -386,6 +397,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             bytes_copied: AtomicUsize::new(0),
             #[cfg(feature = "thread_local_gc_copying")]
             blocks_acquired_for_evacuation: AtomicUsize::new(0),
+            #[cfg(feature = "thread_local_gc_copying")]
+            blocks_freed: AtomicUsize::new(0),
+            // log_buffer: crossbeam::queue::SegQueue::new(),
         }
     }
 
@@ -494,6 +508,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.bytes_published.store(0, Ordering::SeqCst);
             self.blocks_acquired_for_evacuation
                 .store(0, Ordering::Relaxed);
+            self.blocks_freed.store(0, Ordering::Relaxed);
             // reset local copy reserve, it will be recalculated at the end of the gc
             crate::policy::immix::LOCAL_GC_COPY_RESERVE_PAGES.store(0, Ordering::Relaxed);
         }
@@ -564,6 +579,31 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
         self.lines_consumed.store(0, Ordering::Relaxed);
 
+        // {
+        //     use std::{fs::OpenOptions, io::Write};
+        //     use std::time::UNIX_EPOCH;
+        //     let mut f = OpenOptions::new()
+        //         .create(true)
+        //         .append(true)
+        //         .open(format!(
+        //             "/home/tianleq/misc/global-gc-debug-logs/gc-log-{:?}",
+        //             std::time::SystemTime::now()
+        //                 .duration_since(UNIX_EPOCH)
+        //                 .unwrap()
+        //                 .as_millis()
+        //         ))
+        //         .unwrap();
+        //     while self.log_buffer.is_empty() == false {
+        //         let log = self.log_buffer.pop().unwrap();
+        //         writeln!(
+        //             f,
+        //             "w: {:?}, old: {:?}|{:?}|{}, new: {:?}|{:?}|{}",
+        //             log.0, log.1, log.2, log.3, log.4, log.5, log.6
+        //         )
+        //         .unwrap();
+        //     }
+        // }
+
         #[cfg(feature = "debug_thread_local_gc_copying")]
         {
             use crate::util::GLOBAL_GC_STATISTICS;
@@ -575,7 +615,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             "{} bytes copied, that is roughly {} pages | {} clean pages acquired",
             self.bytes_copied.load(Ordering::Relaxed),
             1 + self.bytes_copied.load(Ordering::Relaxed) / BYTES_IN_PAGE,
-            self.blocks_acquired_for_evacuation.load(Ordering::Relaxed) << Block::LOG_PAGES
+            self.blocks_acquired_for_evacuation.load(Ordering::Relaxed) << Block::LOG_PAGES,
         );
         did_defrag
     }
@@ -700,6 +740,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self,
         queue: &mut impl ObjectQueue,
         object: ObjectReference,
+        _worker: &mut crate::scheduler::GCWorker<VM>,
     ) -> ObjectReference {
         #[cfg(feature = "vo_bit")]
         vo_bit::helper::on_trace_object::<VM>(object);
@@ -712,6 +753,23 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     "public block is corrupted"
                 );
             }
+        }
+
+        if object.to_address::<VM>().class_is_valid::<VM>() == false {
+            println!(
+                "worker: {:?}, object: {:?}, klass: {:?}",
+                _worker.ordinal,
+                object,
+                object.to_address::<VM>().class_pointer::<VM>()
+            );
+            // while self.log_buffer.is_empty() == false {
+            //     let log = self.log_buffer.pop().unwrap();
+            //     println!(
+            //         "w: {:?}, old: {:?}|{:?}|{}, new: {:?}|{:?}|{}",
+            //         log.0, log.1, log.2, log.3, log.4, log.5, log.6
+            //     )
+            // }
+            panic!();
         }
 
         if self.attempt_mark(object, self.mark_state) {
@@ -733,6 +791,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     Ordering::SeqCst,
                 );
             }
+
             // Visit node
             queue.enqueue(object);
             self.unlog_object_if_needed(object);
@@ -793,12 +852,45 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 }
             }
         }
-
+        if object.to_address::<VM>().class_is_valid::<VM>() == false {
+            println!(
+                "worker: {:?}, object: {:?}, klass: {:?}, defrag: {}, public: {}",
+                worker.ordinal,
+                object,
+                object.to_address::<VM>().class_pointer::<VM>(),
+                Block::containing::<VM>(object).is_defrag_source(),
+                crate::util::metadata::public_bit::is_public::<VM>(object)
+            );
+            // while self.log_buffer.is_empty() == false {
+            //     let log = self.log_buffer.pop().unwrap();
+            //     println!(
+            //         "w: {:?}, old: {:?}|{:?}|{}, new: {:?}|{:?}|{}",
+            //         log.0, log.1, log.2, log.3, log.4, log.5, log.6
+            //     )
+            // }
+            panic!();
+        }
         let forwarding_status = object_forwarding::attempt_to_forward::<VM>(object);
         if object_forwarding::state_is_forwarded_or_being_forwarded(forwarding_status) {
             // We lost the forwarding race as some other thread has set the forwarding word; wait
             // until the object has been forwarded by the winner. Note that the object may not
             // necessarily get forwarded since Immix opportunistically moves objects.
+            if object.to_address::<VM>().class_is_valid::<VM>() == false {
+                println!(
+                    "worker: {:?}, object: {:?}, klass: {:?}",
+                    worker.ordinal,
+                    object,
+                    object.to_address::<VM>().class_pointer::<VM>()
+                );
+                // while self.log_buffer.is_empty() == false {
+                //     let log = self.log_buffer.pop().unwrap();
+                //     println!(
+                //         "w: {:?}, old: {:?}|{:?}|{}, new: {:?}|{:?}|{}",
+                //         log.0, log.1, log.2, log.3, log.4, log.5, log.6
+                //     )
+                // }
+                panic!();
+            }
             #[allow(clippy::let_and_return)]
             let new_object =
                 object_forwarding::spin_and_get_forwarded_object::<VM>(object, forwarding_status);
@@ -823,9 +915,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             new_object
         } else if self.is_marked(object) {
             // Public object now can be left in-place
-
-            // #[cfg(feature = "thread_local_gc")]
-            // assert!(is_private_object, "public object cannot be left in-place");
 
             // We won the forwarding race but the object is already marked so we clear the
             // forwarding status and return the unmoved object
@@ -865,24 +954,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             {
                 // Now public object may be left in-place
 
-                // #[cfg(not(feature = "debug_thread_local_gc_copying"))]
-                // {
-                //     debug_assert!(
-                //         is_private_object,
-                //         "public object cannot be left in-place, defrag space exhausted: {}",
-                //         self.defrag.space_exhausted(),
-                //     );
-                // }
-                // #[cfg(feature = "debug_thread_local_gc_copying")]
-                // {
-                //     debug_assert!(
-                //         is_private_object,
-                //         "public object cannot be left in-place, defrag space exhausted: {}, total defrag pages: {}",
-                //         self.defrag.space_exhausted(),
-                //         self.defrag.total_clean_pages_for_defrag.load(Ordering::Acquire)
-                //     );
-                // }
-
                 #[cfg(all(feature = "debug_publish_object", feature = "thread_local_gc"))]
                 {
                     debug_assert!(
@@ -904,7 +975,19 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
                 self.attempt_mark(object, self.mark_state);
                 object_forwarding::clear_forwarding_bits::<VM>(object);
-                Block::containing::<VM>(object).set_state(BlockState::Marked);
+                let block = Block::containing::<VM>(object);
+                block.set_state(BlockState::Marked);
+                if !is_private_object {
+                    // public object is left in place, public line mark bit will be set during line marking
+                    // The following assertion holds iff global reusable block is not defrag source
+                    // if anything changes when determining defrag source, it needs to be revisited
+                    debug_assert!(
+                        block.is_block_dirty() || block.owner() == Block::ANONYMOUS_OWNER,
+                        "block: {:?} is not dirty but it is defrag source",
+                        block
+                    );
+                    assert!(block.is_block_published());
+                }
 
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_object_marked::<VM>(object);
@@ -961,7 +1044,15 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 Block::containing::<VM>(new_object).get_state(),
                 BlockState::Marked
             );
-
+            // self.log_buffer.push((
+            //     worker.ordinal,
+            //     object,
+            //     object.to_address::<VM>().class_pointer::<VM>(),
+            //     Block::containing::<VM>(object).is_defrag_source(),
+            //     new_object,
+            //     new_object.to_address::<VM>().class_pointer::<VM>(),
+            //     Block::containing::<VM>(object).is_defrag_source(),
+            // ));
             queue.enqueue(new_object);
             debug_assert!(new_object.is_live());
             self.unlog_object_if_needed(new_object);
@@ -1164,7 +1255,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             // private objects living in public reusable blocks may have mark bit set
             // The object is already marked so we clear the
             // forwarding status and return the unmoved object
-            assert!(
+            debug_assert!(
                 false,
                 "should not reach here in local gc, mutator: {}, block: {:?}, published: {}, owner: {}, object: {:?}",
                 mutator.mutator_id,
@@ -1178,8 +1269,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 "Forwarded object is the same as original object {} even though it should have been copied",
                 object,
             );
-            object_forwarding::clear_forwarding_bits::<VM>(object);
-            ThreadlocalTracedObjectType::Scanned(object)
+            unreachable!("should not reach here in local gc")
+            // object_forwarding::clear_forwarding_bits::<VM>(object);
+            // ThreadlocalTracedObjectType::Scanned(object)
         } else {
             // actually forward and copy the object if it is not pinned
             // and we have sufficient space in our copy allocator
@@ -1189,8 +1281,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_object_marked::<VM>(object);
-                assert!(false, "should not reach here in local gc");
-                object
+                unreachable!("should not reach here in local gc")
             } else {
                 // We are forwarding objects.
 
@@ -1237,16 +1328,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                         VM,
                         usize,
                     >(new_object, metadata);
-
-                    #[cfg(feature = "public_object_analysis")]
-                    {
-                        let _req_id = (metadata
-                            & crate::util::object_extra_header_metadata::TOP_HALF_MASK)
-                            >> 32;
-
-                        mutator.copy_bytes +=
-                            u32::try_from(VM::VMObjectModel::get_current_size(object)).unwrap();
-                    }
                 }
                 // Now local gc is done by the mutator, it is now using mutator's allocator, which
                 // is not a copy allocator. So need to set the block state (not the case anymore,
@@ -1490,7 +1571,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             Line::publish_lines_of_object::<VM>(object, state);
         }
         let block = Block::containing::<VM>(object);
-        if block.publish() {
+        // This funciton is always called by a mutator, so alway set the dirty bit
+        if block.publish(true) {
             #[cfg(feature = "debug_thread_local_gc_copying")]
             {
                 use crate::util::GLOBAL_GC_STATISTICS;
@@ -1541,6 +1623,48 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             // object has not been forwarded yet, the public bit read before is still valid
             is_published
         }
+    }
+
+    #[cfg(feature = "thread_local_gc_copying_stats")]
+    pub fn print_immixspace_stats(&self) -> (usize, usize, usize, usize, usize) {
+        let mut free_blocks = 0;
+        let mut reusable_block = 0;
+        let mut allocated_block = 0;
+        let mut global_reusable_block = 0;
+        let mut published_block = 0;
+        for chunk in self.chunk_map.all_chunks() {
+            let blocks = chunk.iter_region::<Block>();
+            if self.chunk_map.get(chunk) == ChunkState::Free {
+                free_blocks += blocks.count();
+            } else {
+                for block in blocks {
+                    if block.get_state().is_reusable() {
+                        reusable_block += 1;
+                        if block.is_block_published() {
+                            global_reusable_block += 1;
+                        }
+                    } else if block.get_state() == BlockState::Unallocated {
+                        free_blocks += 1;
+                    } else {
+                        allocated_block += 1;
+                        if block.is_block_published() {
+                            published_block += 1;
+                        }
+                    }
+                }
+            }
+        }
+        // println!(
+        //     "{}, {}, {}, {}, {}",
+        //     free_blocks, reusable_block, global_reusable_block, allocated_block, published_block
+        // );
+        (
+            free_blocks,
+            reusable_block,
+            global_reusable_block,
+            allocated_block,
+            published_block,
+        )
     }
 }
 
@@ -1720,6 +1844,7 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
             } else if !is_public {
                 // do not defrag private blocks
                 debug_assert_ne!(block.owner(), u32::MAX);
+                debug_assert!(block.is_block_dirty());
                 false
             } else if state.is_reusable() {
                 // A corner case is that some local reusable block
@@ -1740,11 +1865,12 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
                     }
                 }
 
-                block.owner() != u32::MAX
+                // block.owner() != u32::MAX
+                block.is_block_dirty()
                 // false
             } else {
-                // public block that has private objects living in it
-                // those blocks have to be defrag (public objects have to be evacuated)
+                // fully occupied public blocks, they may not be dirty
+                // but always try defrag those blocks
                 debug_assert!(is_public);
                 debug_assert!(block.get_state() == BlockState::Unmarked);
                 true
@@ -1815,6 +1941,8 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
                 ) {
                     // Block is live. Increment the allocated block count.
                     allocated_blocks += 1;
+                } else {
+                    self.space.blocks_freed.fetch_add(1, Ordering::SeqCst);
                 }
                 #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
                 {
@@ -1884,6 +2012,13 @@ impl<VM: VMBinding> FlushPageResource<VM> {
                     crate::scheduler::gc_work::ReleaseMutator::<VM>::new(mutator),
                 );
             }
+            let mut set = std::collections::HashSet::new();
+            self.space.reusable_blocks.iterate_blocks(|block| {
+                let v = set.insert(block.start());
+                if !v {
+                    panic!("block: {:?} already exists", block);
+                }
+            });
         }
     }
 }
@@ -2076,3 +2211,7 @@ impl ClearVOBitsAfterPrepare {
         }
     }
 }
+
+#[cfg(feature = "thread_local_gc_copying_stats")]
+pub static TOTAL_IMMIX_ALLOCATION_BYTES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);

@@ -35,6 +35,8 @@ pub struct LargeObjectSpace<VM: VMBinding> {
     mark_state: u8,
     in_nursery_gc: bool,
     treadmill: TreadMill<VM>,
+    #[cfg(feature = "thread_local_gc_copying_stats")]
+    pub live_pages: std::sync::atomic::AtomicUsize,
 }
 
 impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
@@ -207,6 +209,8 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             mark_state: 0,
             in_nursery_gc: false,
             treadmill: TreadMill::new(),
+            #[cfg(feature = "thread_local_gc_copying_stats")]
+            live_pages: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -349,11 +353,16 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                     );
                     crate::util::metadata::public_bit::unset_public_bit::<VM>(object);
                 }
+                let _pages = self
+                    .pr
+                    .release_pages(get_super_page(object.to_object_start::<VM>()));
                 #[cfg(feature = "debug_thread_local_gc_copying")]
                 {
-                    *pages += self
-                        .pr
-                        .release_pages(get_super_page(object.to_object_start::<VM>()));
+                    *pages += _pages;
+                }
+                #[cfg(feature = "thread_local_gc_copying_stats")]
+                {
+                    self.live_pages.fetch_sub(_pages as usize, Ordering::SeqCst);
                 }
             };
         if sweep_nursery {
@@ -392,8 +401,13 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             !crate::util::metadata::public_bit::is_public::<VM>(object),
             "public object is reclaimed in thread local gc"
         );
-        self.pr
+        let _pages = self
+            .pr
             .release_pages(get_super_page(object.to_object_start::<VM>()));
+        #[cfg(feature = "thread_local_gc_copying_stats")]
+        {
+            self.live_pages.fetch_sub(_pages as usize, Ordering::SeqCst);
+        }
     }
 
     // /// Allocate an object
@@ -527,6 +541,12 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                     & BOTTOM_HALF_MASK;
             u32::try_from(mutator_id).unwrap()
         }
+    }
+
+    #[cfg(feature = "thread_local_gc_copying_stats")]
+    pub fn print_los_stats(&self) -> usize {
+        // println!("{:?}", self.live_pages.load(Ordering::SeqCst));
+        self.live_pages.load(Ordering::SeqCst)
     }
 }
 

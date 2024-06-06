@@ -164,7 +164,7 @@ impl Line {
 
     #[cfg(feature = "thread_local_gc")]
     pub fn is_line_published(&self) -> bool {
-        unsafe { Line::LINE_PUBLICATION_TABLE.load::<u8>(self.start()) != 0 }
+        Line::LINE_PUBLICATION_TABLE.load_atomic::<u8>(self.start(), atomic::Ordering::SeqCst) != 0
     }
 
     #[cfg(feature = "thread_local_gc")]
@@ -203,18 +203,22 @@ impl Line {
             line.mark(state);
             if publish_lines.is_some_and(|v| v) {
                 // benign race here, line is shared by multiple objects, set 1 can occur concurrently
-                unsafe {
-                    Line::LINE_PUBLICATION_TABLE.store::<u8>(line.start(), 1);
-                }
+                Line::LINE_PUBLICATION_TABLE.store_atomic::<u8>(
+                    line.start(),
+                    1,
+                    atomic::Ordering::SeqCst,
+                );
             } else if publish_lines.is_some_and(|v| !v) {
                 debug_assert!(crate::util::metadata::public_bit::is_public::<VM>(object) == false);
             } else {
                 // also publish lines if object is public
                 if crate::util::metadata::public_bit::is_public::<VM>(object) {
                     // benign race here, line is shared by multiple objects, set 1 can occur concurrently
-                    unsafe {
-                        Line::LINE_PUBLICATION_TABLE.store::<u8>(line.start(), 1);
-                    }
+                    Line::LINE_PUBLICATION_TABLE.store_atomic::<u8>(
+                        line.start(),
+                        1,
+                        atomic::Ordering::SeqCst,
+                    );
                 }
             }
         }

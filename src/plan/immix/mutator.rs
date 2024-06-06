@@ -62,6 +62,8 @@ pub fn immix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMW
         .downcast_mut::<LargeObjectAllocator<VM>>()
         .unwrap();
         los_allocator.release();
+        // Force a local gc in the next polling
+        mutator.local_allocation_size = u32::MAX as usize;
     }
 }
 
@@ -205,8 +207,6 @@ pub fn create_immix_mutator<VM: VMBinding>(
             feature = "debug_publish_object"
         ))]
         request_id: 0,
-        #[cfg(feature = "public_object_analysis")]
-        allocation_count: 0,
         #[cfg(feature = "debug_thread_local_gc_copying")]
         stats: Box::new(crate::util::LocalGCStatistics::default()),
         #[cfg(feature = "thread_local_gc_copying")]

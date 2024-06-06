@@ -3,6 +3,7 @@ use crate::global_state::{GcStatus, GlobalState};
 use crate::plan::gc_requester::GCRequester;
 use crate::plan::CreateGeneralPlanArgs;
 use crate::plan::Plan;
+
 use crate::policy::sft_map::{create_sft_map, SFTMap};
 use crate::scheduler::GCWorkScheduler;
 
@@ -236,6 +237,37 @@ impl<VM: VMBinding> MMTK<VM> {
                 std::fs::remove_file(entry.unwrap().path()).unwrap();
             }
         }
+
+        {
+            let path = "/home/tianleq/misc/global-gc-debug-logs";
+            std::fs::remove_dir_all(path).unwrap();
+            std::fs::create_dir(path).unwrap();
+        }
+
+        #[cfg(feature = "thread_local_gc_copying_stats")]
+        {
+            use crate::policy::immix::TOTAL_IMMIX_ALLOCATION_BYTES;
+            use crate::util::GLOBAL_REQUEST_ID;
+
+            let local = "/home/tianleq/misc/local-gc-heap-stats.log";
+            let global = "/home/tianleq/misc/global-gc-heap-stats.log";
+            if std::path::Path::new(local).exists() {
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .truncate(true)
+                    .open(local)
+                    .unwrap();
+            }
+            if std::path::Path::new(global).exists() {
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .truncate(true)
+                    .open(global)
+                    .unwrap();
+            }
+            TOTAL_IMMIX_ALLOCATION_BYTES.store(0, Ordering::SeqCst);
+            GLOBAL_REQUEST_ID.store(0, Ordering::SeqCst);
+        }
     }
 
     /// Generic hook to allow benchmarks to be harnessed. MMTk will stop collecting
@@ -422,5 +454,15 @@ impl<VM: VMBinding> MMTK<VM> {
             TOTAL_PU8LISHED_BYTES.load(Ordering::Relaxed) as f64
                 / TOTAL_ALLOCATION_BYTES.load(Ordering::Relaxed) as f64
         );
+    }
+
+    #[cfg(feature = "thread_local_gc_copying_stats")]
+    pub fn print_heap_stats(&self, _mutator: &mut crate::Mutator<VM>) {
+        self.get_plan().print_heap_stats(_mutator);
+    }
+
+    #[cfg(feature = "thread_local_gc_copying_stats")]
+    pub fn print_global_heap_stats(&self) {
+        self.get_plan().print_global_heap_stats();
     }
 }

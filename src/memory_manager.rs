@@ -1021,6 +1021,11 @@ pub fn mmtk_request_thread_local_gc<VM: VMBinding>(
 ) -> bool {
     use crate::scheduler::thread_local_gc_work::LOCAL_GC_ACTIVE;
 
+    #[cfg(feature = "thread_local_gc_copying_stats")]
+    {
+        crate::util::GLOBAL_REQUEST_ID.fetch_add(1, Ordering::SeqCst);
+    }
+
     let required = mmtk
         .get_plan()
         .thread_local_collection_required(false, None, tls);

@@ -74,8 +74,6 @@ pub fn create_gencopy_mutator<VM: VMBinding>(
             feature = "debug_publish_object"
         ))]
         request_id: 0,
-        #[cfg(feature = "public_object_analysis")]
-        allocation_count: 0,
         #[cfg(feature = "debug_thread_local_gc_copying")]
         stats: Box::new(crate::util::LocalGCStatistics::default()),
         #[cfg(feature = "thread_local_gc_copying")]

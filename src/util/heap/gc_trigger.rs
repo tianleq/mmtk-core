@@ -225,9 +225,18 @@ impl<VM: VMBinding> GCTriggerPolicy<VM> for FixedHeapSizeTrigger {
         false
     }
 
-    fn on_gc_start(&self, _mmtk: &'static MMTK<VM>) {}
+    fn on_gc_start(&self, _mmtk: &'static MMTK<VM>) {
+        #[cfg(feature = "thread_local_gc_copying_stats")]
+        {
+            _mmtk.print_global_heap_stats();
+        }
+    }
 
     fn on_gc_end(&self, _mmtk: &'static MMTK<VM>) {
+        #[cfg(feature = "thread_local_gc_copying_stats")]
+        {
+            _mmtk.print_global_heap_stats();
+        }
         #[cfg(feature = "debug_thread_local_gc_copying")]
         {
             // if _mmtk.is_inside_harness() {
@@ -288,6 +297,10 @@ impl<VM: VMBinding> GCTriggerPolicy<VM> for FixedHeapSizeTrigger {
         {
             _mutator.print_stats_before_thread_local_gc();
         }
+        #[cfg(feature = "thread_local_gc_copying_stats")]
+        {
+            _mmtk.print_heap_stats(_mutator);
+        }
     }
 
     #[cfg(feature = "thread_local_gc")]
@@ -295,6 +308,10 @@ impl<VM: VMBinding> GCTriggerPolicy<VM> for FixedHeapSizeTrigger {
         #[cfg(feature = "debug_thread_local_gc_copying")]
         {
             _mutator.print_stats_after_thread_local_gc();
+        }
+        #[cfg(feature = "thread_local_gc_copying_stats")]
+        {
+            _mmtk.print_heap_stats(_mutator);
         }
     }
 }

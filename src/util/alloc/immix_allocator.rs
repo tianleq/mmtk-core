@@ -49,11 +49,11 @@ pub struct ImmixAllocator<VM: VMBinding> {
     /// Hole-searching cursor
     line: Option<Line>,
     #[cfg(feature = "thread_local_gc")]
-    local_blocks: Box<Vec<Block>>,
+    pub local_blocks: Box<Vec<Block>>,
     #[cfg(feature = "thread_local_gc")]
-    local_free_blocks: Box<Vec<Block>>,
+    pub local_free_blocks: Box<Vec<Block>>,
     #[cfg(feature = "thread_local_gc")]
-    local_reusable_blocks: Box<Vec<Block>>,
+    pub local_reusable_blocks: Box<Vec<Block>>,
     #[cfg(feature = "thread_local_gc")]
     semantic: Option<ImmixAllocSemantics>,
 }
@@ -132,13 +132,21 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 #[cfg(feature = "thread_local_gc_copying")]
                 if block.get_state().is_reusable() {
                     if block.is_block_published() {
-                        debug_assert!(
-                            block.owner() == u32::MAX || block.owner() == 0,
-                            "owner: {:?}",
-                            block.owner()
-                        );
-                        if block.owner() == 0 {
-                            // block containts live private objects, so it cannot be reused by other mutator
+                        if block.is_block_dirty() {
+                            #[cfg(debug_assertions)]
+                            {
+                                // public reusable blocks should have been added to the global list
+                                let mut exist = false;
+                                self.space.reusable_blocks.iterate_blocks(|b| {
+                                    if b == block {
+                                        exist = true;
+                                    }
+                                });
+                                assert!(!exist, "conservative private reusable block: {:?} exist in global reusable list", block);
+                                debug_assert!(block.owner() != Block::ANONYMOUS_OWNER);
+                            }
+                            // block may contain live private objects, so it cannot be reused by other mutator
+                            #[cfg(debug_assertions)]
                             block.set_owner(self.mutator_id);
                             self.local_reusable_blocks.push(block);
                         } else {
@@ -151,7 +159,12 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                                         exist = true;
                                     }
                                 });
-                                debug_assert!(exist, "public reusable block: {:?} does not exist in global reusable list", block);
+                                assert!(exist, "public reusable block: {:?} does not exist in global reusable list", block);
+                                debug_assert!(
+                                    block.owner() == Block::ANONYMOUS_OWNER,
+                                    "block owner: {:?}",
+                                    block.owner(),
+                                );
                             }
                         }
                     } else {
@@ -163,6 +176,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     // always add non-reusable block back
                     debug_assert!(block.get_state() == BlockState::Unmarked);
                     debug_assert!(block.owner() == self.mutator_id);
+                    #[cfg(debug_assertions)]
+                    block.set_owner(self.mutator_id);
                     blocks.push(block);
                 }
 
@@ -271,6 +286,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 block.owner()
             );
 
+            debug_assert!(block.is_block_dirty());
+
             #[cfg(not(feature = "thread_local_gc_copying"))]
             let is_defrag_source = false;
             #[cfg(feature = "thread_local_gc_copying")]
@@ -358,15 +375,24 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 }
                 #[cfg(feature = "thread_local_gc_copying")]
                 {
-                    // public blocks will be removed from the local block list
+                    debug_assert!(block.is_block_dirty());
                     let published = block.is_block_published();
                     if block.get_state().is_reusable() {
                         if published {
+                            #[cfg(debug_assertions)]
                             // public reusable block
                             block.set_owner(u32::MAX);
+                            // block containing only public objects are no longer dirty
+                            block.reset_dirty();
                             global_reusable_blocks.push(block);
                         } else {
                             debug_assert!(block.owner() == self.mutator_id);
+                            debug_assert!(
+                                block.is_block_dirty(),
+                                "block: {:?} is not dirty",
+                                block
+                            );
+
                             // private reusable block
                             self.local_reusable_blocks.push(block);
                         }
@@ -424,7 +450,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         // gc will double free those blocks
         self.space
             .thread_local_release_blocks(self.local_free_blocks.drain(..).map(|block| {
+                #[cfg(debug_assertions)]
                 block.clear_owner();
+                block.reset_dirty();
                 block.deinit();
                 block
             }));
@@ -532,7 +560,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
     #[cfg(feature = "thread_local_gc")]
     pub fn alloc_copy(&mut self, size: usize, align: usize, offset: usize) -> Address {
-        let clean_page_only = self.mutator_id != u32::MAX;
+        let is_mutator = self.mutator_id != u32::MAX;
+        let clean_page_only = is_mutator;
         debug_assert!(self.copy, "calling alloc_copy with self.copy == false");
 
         #[cfg(not(feature = "extra_header"))]
@@ -544,6 +573,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 self.mutator_id,
                 Block::from_unaligned_address(rtn).owner()
             );
+
+            // if it is mutator, then the dirty bit must be set
+            debug_assert!(!is_mutator || Block::from_unaligned_address(rtn).is_block_dirty());
 
             rtn
         }
@@ -562,6 +594,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 self.mutator_id,
                 Block::from_unaligned_address(rtn).owner()
             );
+            // if it is mutator, then the dirty bit must be set
+            debug_assert!(!is_mutator || Block::from_unaligned_address(rtn).is_block_dirty());
             if !rtn.is_zero() {
                 debug_assert!(
                     !crate::util::metadata::public_bit::is_public_object(
@@ -636,6 +670,12 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
 
     #[cfg(not(feature = "extra_header"))]
     fn alloc(&mut self, size: usize, align: usize, offset: usize) -> Address {
+        #[cfg(feature = "thread_local_gc_copying_stats")]
+        {
+            use crate::policy::immix::TOTAL_IMMIX_ALLOCATION_BYTES;
+
+            TOTAL_IMMIX_ALLOCATION_BYTES.fetch_add(size, atomic::Ordering::SeqCst);
+        }
         self.alloc_impl(size, align, offset, false)
     }
 
@@ -878,6 +918,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         debug_assert!(!line.is_line_published());
                     }
                 }
+
                 crate::util::memory::zero(
                     self.bump_pointer.cursor,
                     self.bump_pointer.limit - self.bump_pointer.cursor,
@@ -970,16 +1011,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                             block.end()
                         );
 
-                        // the following may not be true, a local reusable block does not have public
-                        // line after a gc, but during mutator phase, some of its objet may get published
-                        // debug_assert!(
-                        //     block.are_lines_private(),
-                        //     "private local reusable block: {:?} has public lines",
-                        //     block
-                        // );
-
                         debug_assert!(!self.copy, "evacuation should always acquire a clean page");
                         block.init(false);
+                        block.taint();
                         // Set the hole-searching cursor to the start of this block.
                         self.line = Some(block.start_line());
                         debug_assert!(
@@ -996,9 +1030,12 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     match self.acquire_public_recyclable_block() {
                         Some(block) => {
                             debug_assert!(!block.are_lines_private());
+
+                            #[cfg(debug_assertions)]
                             // add reusable block to local block list, otherwise, those blocks
                             // leaked and local gc cannot reuse them
                             block.set_owner(self.mutator_id);
+                            block.taint();
                             self.local_blocks.push(block);
 
                             true
@@ -1016,11 +1053,13 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             Some(block) => {
                 trace!("{:?}: acquire_recyclable_block -> {:?}", self.tls, block);
 
-                // #[cfg(debug_assertions)]
-                // info!("{:?}: acquire_recyclable_block -> {:?}", self.tls, block);
-
                 debug_assert!(block.is_block_published());
                 debug_assert!(block.owner() == u32::MAX);
+                debug_assert!(
+                    block.is_block_dirty() == false,
+                    "global reusable block: {:?} has dirty bit set",
+                    block
+                );
                 debug_assert!(block.get_state().is_reusable() == false);
 
                 // Set the hole-searching cursor to the start of this block.
@@ -1054,6 +1093,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
                 #[cfg(feature = "thread_local_gc")]
                 {
+                    #[cfg(debug_assertions)]
                     block.set_owner(self.mutator_id);
 
                     if let Some(semantic) = self.semantic {
@@ -1071,7 +1111,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                                     block.owner()
                                 );
                                 // This only occurs during global gc, since only global gc evacuates public objects
-                                block.publish();
+                                block.publish(false);
                             }
                             ImmixAllocSemantics::Private => {
                                 panic!("local gc is now done by the mutator")
@@ -1088,6 +1128,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         // update the local heap size
                         #[cfg(feature = "thread_local_gc_copying")]
                         {
+                            block.taint();
                             // mutator phase only
                             if !self.copy {
                                 let local_heap_in_pages = Block::PAGES
@@ -1141,6 +1182,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             debug_assert!(self.copy && VM::VMActivePlan::is_mutator(self.tls));
 
             block.init(self.copy);
+            #[cfg(debug_assertions)]
             block.set_owner(self.mutator_id);
             // Not sure if the following is needed
             self.immix_space().chunk_map.set(

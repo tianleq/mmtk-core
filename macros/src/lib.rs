@@ -12,7 +12,7 @@ mod has_spaces_impl;
 mod plan_trace_object_impl;
 mod util;
 
-const DEBUG_MACRO_OUTPUT: bool = true;
+const DEBUG_MACRO_OUTPUT: bool = false;
 
 /// This macro will generate an implementation of `HasSpaces` for a plan or any structs that
 /// contain spaces, including `Gen`, `CommonPlan` and `BasePlan`.

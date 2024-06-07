@@ -122,6 +122,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         let mut blocks = vec![];
         for block in self.local_blocks.drain(..) {
             if block.get_state() == BlockState::Unallocated {
+                #[cfg(debug_assertions)]
                 debug_assert!(
                     block.owner() == 0,
                     "block: {:?} state is Unallocated but owner is {}",
@@ -168,16 +169,21 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                             }
                         }
                     } else {
-                        debug_assert!(block.owner() == self.mutator_id);
-                        debug_assert!(block.are_lines_private());
+                        #[cfg(debug_assertions)]
+                        {
+                            debug_assert!(block.owner() == self.mutator_id);
+                            debug_assert!(block.are_lines_private());
+                        }
                         self.local_reusable_blocks.push(block);
                     }
                 } else {
                     // always add non-reusable block back
                     debug_assert!(block.get_state() == BlockState::Unmarked);
-                    debug_assert!(block.owner() == self.mutator_id);
                     #[cfg(debug_assertions)]
-                    block.set_owner(self.mutator_id);
+                    {
+                        debug_assert!(block.owner() == self.mutator_id);
+                        block.set_owner(self.mutator_id);
+                    }
                     blocks.push(block);
                 }
 
@@ -279,6 +285,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 block,
                 block.get_state()
             );
+            #[cfg(debug_assertions)]
             debug_assert!(
                 self.mutator_id == block.owner(),
                 "local block list is corrupted, mutator: {}, owner: {}",
@@ -353,6 +360,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         #[cfg(feature = "thread_local_gc_copying")]
         let mut global_reusable_blocks = vec![];
         for block in self.local_blocks.drain(..) {
+            #[cfg(debug_assertions)]
             debug_assert!(self.mutator_id == block.owner());
 
             if block.thread_local_can_sweep(self.space, mark_hisogram, line_mark_state) {
@@ -386,6 +394,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                             block.reset_dirty();
                             global_reusable_blocks.push(block);
                         } else {
+                            #[cfg(debug_assertions)]
                             debug_assert!(block.owner() == self.mutator_id);
                             debug_assert!(
                                 block.is_block_dirty(),
@@ -398,6 +407,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         }
                     } else {
                         // block is not reusable, add to local block list
+                        #[cfg(debug_assertions)]
                         debug_assert!(block.owner() == self.mutator_id);
                         blocks.push(block);
                     }
@@ -567,6 +577,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         #[cfg(not(feature = "extra_header"))]
         {
             let rtn = self.alloc_impl(size, align, offset, clean_page_only);
+            #[cfg(debug_assertions)]
             debug_assert!(
                 self.mutator_id == Block::from_unaligned_address(rtn).owner(),
                 "mutator_id: {} != block owner: {}",
@@ -588,6 +599,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 offset,
                 clean_page_only,
             );
+            #[cfg(debug_assertions)]
             debug_assert!(
                 self.mutator_id == Block::from_unaligned_address(rtn).owner(),
                 "mutator_id: {} != block owner: {}",
@@ -1016,6 +1028,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         block.taint();
                         // Set the hole-searching cursor to the start of this block.
                         self.line = Some(block.start_line());
+                        #[cfg(debug_assertions)]
                         debug_assert!(
                             block.owner() == self.mutator_id,
                             "block owner: {} | mutator: {}",
@@ -1029,6 +1042,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
                     match self.acquire_public_recyclable_block() {
                         Some(block) => {
+                            #[cfg(debug_assertions)]
                             debug_assert!(!block.are_lines_private());
 
                             #[cfg(debug_assertions)]
@@ -1054,6 +1068,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 trace!("{:?}: acquire_recyclable_block -> {:?}", self.tls, block);
 
                 debug_assert!(block.is_block_published());
+                #[cfg(debug_assertions)]
                 debug_assert!(block.owner() == u32::MAX);
                 debug_assert!(
                     block.is_block_dirty() == false,
@@ -1104,6 +1119,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         );
                         match semantic {
                             ImmixAllocSemantics::Public => {
+                                #[cfg(debug_assertions)]
                                 debug_assert!(
                                     block.owner() == u32::MAX,
                                     "block: {:?}, owner: {:?} ",
@@ -1195,6 +1211,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         // #[cfg(feature = "thread_local_gc_copying")]
         // debug_assert!(!self.copy || !VM::VMActivePlan::is_mutator(self.tls));
         let block = self.immix_space().get_clean_block(self.tls, self.copy);
+        #[cfg(debug_assertions)]
         debug_assert!(
             block.is_none() || block.unwrap().owner() == 0,
             "block: {:?}, existing owner: {:?}, mutator: {:?}",

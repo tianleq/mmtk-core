@@ -277,7 +277,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             vec![
                 #[cfg(feature = "thread_local_gc")]
                 MetadataSpec::OnSide(Block::BLOCK_PUBLICATION_AND_OWNER_TABLE),
-                #[cfg(feature = "thread_local_gc")]
+                #[cfg(all(feature = "thread_local_gc", debug_assertions))]
                 MetadataSpec::OnSide(Block::OWNER_TABLE),
                 MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
                 MetadataSpec::OnSide(Block::MARK_TABLE),
@@ -292,7 +292,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             vec![
                 #[cfg(feature = "thread_local_gc")]
                 MetadataSpec::OnSide(Block::BLOCK_PUBLICATION_AND_OWNER_TABLE),
-                #[cfg(feature = "thread_local_gc")]
+                #[cfg(all(feature = "thread_local_gc", debug_assertions))]
                 MetadataSpec::OnSide(Block::OWNER_TABLE),
                 #[cfg(feature = "thread_local_gc")]
                 MetadataSpec::OnSide(Line::LINE_PUBLICATION_TABLE),
@@ -644,6 +644,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     /// Release a block.
     pub fn release_block(&self, block: Block) {
+        #[cfg(debug_assertions)]
         debug_assert!(block.owner() == 0);
         block.deinit();
         self.pr.release_block(block);
@@ -954,7 +955,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             {
                 // Now public object may be left in-place
 
-                #[cfg(all(feature = "debug_publish_object", feature = "thread_local_gc"))]
+                #[cfg(all(
+                    feature = "debug_publish_object",
+                    feature = "thread_local_gc",
+                    debug_assertions
+                ))]
                 {
                     debug_assert!(
                         usize::try_from(Block::containing::<VM>(object).owner()).unwrap()
@@ -981,6 +986,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     // public object is left in place, public line mark bit will be set during line marking
                     // The following assertion holds iff global reusable block is not defrag source
                     // if anything changes when determining defrag source, it needs to be revisited
+                    #[cfg(debug_assertions)]
                     debug_assert!(
                         block.is_block_dirty() || block.owner() == Block::ANONYMOUS_OWNER,
                         "block: {:?} is not dirty but it is defrag source",
@@ -1188,7 +1194,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             return ThreadlocalTracedObjectType::Scanned(object);
         }
 
-        #[cfg(feature = "debug_publish_object")]
+        #[cfg(all(feature = "debug_publish_object", debug_assertions))]
         {
             let m = crate::util::object_extra_header_metadata::get_extra_header_metadata::<VM, usize>(
                 object,
@@ -1215,6 +1221,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
         // Now object is private, it cannot live in a public block that does not
         // belong to its owner
+        #[cfg(debug_assertions)]
         debug_assert!(
             Block::containing::<VM>(object).is_defrag_source(),
             "block: {:?}, owner: {:?}, mutator: {:?}, object: {:?} | block is not in defarg source",
@@ -1255,6 +1262,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             // private objects living in public reusable blocks may have mark bit set
             // The object is already marked so we clear the
             // forwarding status and return the unmoved object
+            #[cfg(debug_assertions)]
             debug_assert!(
                 false,
                 "should not reach here in local gc, mutator: {}, block: {:?}, published: {}, owner: {}, object: {:?}",
@@ -1843,6 +1851,7 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
                 true
             } else if !is_public {
                 // do not defrag private blocks
+                #[cfg(debug_assertions)]
                 debug_assert_ne!(block.owner(), u32::MAX);
                 debug_assert!(block.is_block_dirty());
                 false

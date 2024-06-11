@@ -281,7 +281,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     #[cfg(feature = "thread_local_gc_copying_stats")]
-    fn print_heap_stats(&self, mutator: &mut crate::Mutator<VM>) {
+    fn print_local_heap_stats(&self, mutator: &mut crate::Mutator<VM>) {
         use std::{fs::OpenOptions, io::Write};
 
         use crate::{
@@ -308,7 +308,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             .unwrap();
         writeln!(
             file,
-            "{}, {}, {}, {}, {}, {}, {}, {}, {}, {}",
+            "{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}",
             TOTAL_IMMIX_ALLOCATION_BYTES.load(Ordering::SeqCst),
             GLOBAL_REQUEST_ID.load(Ordering::SeqCst),
             mutator.mutator_id,
@@ -317,6 +317,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             result.2,
             result.3,
             result.4,
+            result.5,
             live_los_pages,
             local_blocks_count
         )
@@ -325,11 +326,26 @@ impl<VM: VMBinding> Plan for Immix<VM> {
 
     #[cfg(feature = "thread_local_gc_copying_stats")]
     fn print_global_heap_stats(&self) {
+        use crate::util::alloc::ImmixAllocator;
+        use crate::vm::ActivePlan;
+        use crate::{policy::immix::TOTAL_IMMIX_ALLOCATION_BYTES, util::GLOBAL_REQUEST_ID};
         use std::{fs::OpenOptions, io::Write};
 
-        use crate::{policy::immix::TOTAL_IMMIX_ALLOCATION_BYTES, util::GLOBAL_REQUEST_ID};
-
         let result = self.immix_space.print_immixspace_stats();
+        let mut local_resuable_blocks = 0;
+        for mutator in VM::VMActivePlan::mutators() {
+            let allocator = unsafe {
+                mutator
+                    .allocators
+                    .get_allocator_mut(
+                        mutator.config.allocator_mapping[AllocationSemantics::Default],
+                    )
+                    .downcast_mut::<ImmixAllocator<VM>>()
+                    .unwrap()
+            };
+            local_resuable_blocks += allocator.local_reusable_blocks.len()
+        }
+
         let live_los_pages = self.common().print_heap_stats();
 
         let mut file = OpenOptions::new()
@@ -339,7 +355,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             .unwrap();
         writeln!(
             file,
-            "{}, {}, {}, {}, {}, {}, {}, {}",
+            "{}, {}, {}, {}, {}, {}, {}, {}, {}|{}",
             TOTAL_IMMIX_ALLOCATION_BYTES.load(Ordering::SeqCst),
             GLOBAL_REQUEST_ID.load(Ordering::SeqCst),
             result.0,
@@ -347,7 +363,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             result.2,
             result.3,
             result.4,
+            result.5,
             live_los_pages,
+            local_resuable_blocks
         )
         .unwrap();
     }

@@ -458,7 +458,7 @@ impl<VM: VMBinding> MMTK<VM> {
 
     #[cfg(feature = "thread_local_gc_copying_stats")]
     pub fn print_heap_stats(&self, _mutator: &mut crate::Mutator<VM>) {
-        self.get_plan().print_heap_stats(_mutator);
+        self.get_plan().print_local_heap_stats(_mutator);
     }
 
     #[cfg(feature = "thread_local_gc_copying_stats")]

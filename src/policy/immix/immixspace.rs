@@ -11,7 +11,7 @@ use crate::policy::sft_map::SFTMap;
 use crate::policy::space::{CommonSpace, Space};
 use crate::util::alloc::allocator::AllocatorContext;
 use crate::util::alloc::immix_allocator::ImmixAllocSemantics;
-use crate::util::constants::{BYTES_IN_PAGE, LOG_BYTES_IN_PAGE};
+use crate::util::constants::LOG_BYTES_IN_PAGE;
 use crate::util::copy::*;
 use crate::util::heap::chunk_map::*;
 use crate::util::heap::BlockPageResource;
@@ -64,11 +64,13 @@ pub struct ImmixSpace<VM: VMBinding> {
     #[cfg(feature = "thread_local_gc_copying")]
     pub(crate) bytes_published: AtomicUsize,
     #[cfg(feature = "thread_local_gc_copying")]
-    pub(super) bytes_copied: AtomicUsize,
-    #[cfg(feature = "thread_local_gc_copying")]
-    blocks_acquired_for_evacuation: AtomicUsize,
-    #[cfg(feature = "thread_local_gc_copying")]
-    blocks_freed: AtomicUsize,
+    pub sparse_reusable_blocks: ReusableBlockPool,
+    // #[cfg(feature = "thread_local_gc_copying")]
+    // pub(super) bytes_copied: AtomicUsize,
+    // #[cfg(feature = "thread_local_gc_copying")]
+    // blocks_acquired_for_evacuation: AtomicUsize,
+    // #[cfg(feature = "thread_local_gc_copying")]
+    // blocks_freed: AtomicUsize,
     // pub log_buffer: crossbeam::queue::SegQueue<(
     //     usize,
     //     ObjectReference,
@@ -276,7 +278,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         metadata::extract_side_metadata(&if super::BLOCK_ONLY {
             vec![
                 #[cfg(feature = "thread_local_gc")]
-                MetadataSpec::OnSide(Block::BLOCK_PUBLICATION_AND_OWNER_TABLE),
+                MetadataSpec::OnSide(Block::METADATA_TABLE),
+                #[cfg(feature = "thread_local_gc_copying")]
+                MetadataSpec::OnSide(Block::HOLE_SIZE),
                 #[cfg(all(feature = "thread_local_gc", debug_assertions))]
                 MetadataSpec::OnSide(Block::OWNER_TABLE),
                 MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
@@ -291,7 +295,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         } else {
             vec![
                 #[cfg(feature = "thread_local_gc")]
-                MetadataSpec::OnSide(Block::BLOCK_PUBLICATION_AND_OWNER_TABLE),
+                MetadataSpec::OnSide(Block::METADATA_TABLE),
+                #[cfg(feature = "thread_local_gc_copying")]
+                MetadataSpec::OnSide(Block::HOLE_SIZE),
                 #[cfg(all(feature = "thread_local_gc", debug_assertions))]
                 MetadataSpec::OnSide(Block::OWNER_TABLE),
                 #[cfg(feature = "thread_local_gc")]
@@ -394,11 +400,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             #[cfg(feature = "thread_local_gc_copying")]
             bytes_published: AtomicUsize::new(0),
             #[cfg(feature = "thread_local_gc_copying")]
-            bytes_copied: AtomicUsize::new(0),
-            #[cfg(feature = "thread_local_gc_copying")]
-            blocks_acquired_for_evacuation: AtomicUsize::new(0),
-            #[cfg(feature = "thread_local_gc_copying")]
-            blocks_freed: AtomicUsize::new(0),
+            sparse_reusable_blocks: ReusableBlockPool::new(scheduler.num_workers()),
+            // #[cfg(feature = "thread_local_gc_copying")]
+            // bytes_copied: AtomicUsize::new(0),
+            // #[cfg(feature = "thread_local_gc_copying")]
+            // blocks_acquired_for_evacuation: AtomicUsize::new(0),
+            // #[cfg(feature = "thread_local_gc_copying")]
+            // blocks_freed: AtomicUsize::new(0),
             // log_buffer: crossbeam::queue::SegQueue::new(),
         }
     }
@@ -406,6 +414,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Flush the thread-local queues in BlockPageResource
     pub fn flush_page_resource(&self) {
         self.reusable_blocks.flush_all();
+        #[cfg(feature = "thread_local_gc_copying")]
+        self.sparse_reusable_blocks.flush_all();
         #[cfg(target_pointer_width = "64")]
         self.pr.flush_all()
     }
@@ -506,16 +516,15 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         #[cfg(feature = "thread_local_gc_copying")]
         {
             self.bytes_published.store(0, Ordering::SeqCst);
-            self.blocks_acquired_for_evacuation
-                .store(0, Ordering::Relaxed);
-            self.blocks_freed.store(0, Ordering::Relaxed);
+            // self.blocks_acquired_for_evacuation
+            //     .store(0, Ordering::Relaxed);
+            // self.blocks_freed.store(0, Ordering::Relaxed);
             // reset local copy reserve, it will be recalculated at the end of the gc
             crate::policy::immix::LOCAL_GC_COPY_RESERVE_PAGES.store(0, Ordering::Relaxed);
         }
 
         #[cfg(feature = "thread_local_gc_copying")]
-        self.bytes_copied.store(0, Ordering::SeqCst);
-
+        // self.bytes_copied.store(0, Ordering::SeqCst);
         #[cfg(feature = "vo_bit")]
         if vo_bit::helper::need_to_clear_vo_bits_before_tracing::<VM>() {
             let maybe_scope = if major_gc {
@@ -569,6 +578,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         // Clear reusable blocks list
         if !super::BLOCK_ONLY {
             self.reusable_blocks.reset();
+            self.sparse_reusable_blocks.reset();
         }
         // Sweep chunks and blocks
         let work_packets = self.generate_sweep_tasks();
@@ -611,12 +621,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             let mut guard = GLOBAL_GC_STATISTICS.lock().unwrap();
             guard.bytes_copied += self.bytes_copied.load(Ordering::SeqCst);
         }
-        info!(
-            "{} bytes copied, that is roughly {} pages | {} clean pages acquired",
-            self.bytes_copied.load(Ordering::Relaxed),
-            1 + self.bytes_copied.load(Ordering::Relaxed) / BYTES_IN_PAGE,
-            self.blocks_acquired_for_evacuation.load(Ordering::Relaxed) << Block::LOG_PAGES,
-        );
+        // info!(
+        //     "{} bytes copied, that is roughly {} pages | {} clean pages acquired",
+        //     self.bytes_copied.load(Ordering::Relaxed),
+        //     1 + self.bytes_copied.load(Ordering::Relaxed) / BYTES_IN_PAGE,
+        //     self.blocks_acquired_for_evacuation.load(Ordering::Relaxed) << Block::LOG_PAGES,
+        // );
         did_defrag
     }
 
@@ -661,13 +671,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if block_address.is_zero() {
             return None;
         }
-        #[cfg(feature = "thread_local_gc_copying")]
-        {
-            if copy {
-                self.blocks_acquired_for_evacuation
-                    .fetch_add(1, Ordering::SeqCst);
-            }
-        }
+        // #[cfg(feature = "thread_local_gc_copying")]
+        // {
+        //     if copy {
+        //         self.blocks_acquired_for_evacuation
+        //             .fetch_add(1, Ordering::SeqCst);
+        //     }
+        // }
         self.defrag.notify_new_clean_block(copy);
         let block = Block::from_aligned_address(block_address);
         block.init(copy);
@@ -685,13 +695,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if address.is_zero() {
             return None;
         }
-        #[cfg(feature = "thread_local_gc_copying")]
-        {
-            if copy {
-                self.blocks_acquired_for_evacuation
-                    .fetch_add(n, Ordering::SeqCst);
-            }
-        }
+        // #[cfg(feature = "thread_local_gc_copying")]
+        // {
+        //     if copy {
+        //         self.blocks_acquired_for_evacuation
+        //             .fetch_add(n, Ordering::SeqCst);
+        //     }
+        // }
         let mut blocks = Vec::with_capacity(n);
         for i in 0..n {
             self.defrag.notify_new_clean_block(copy);
@@ -708,11 +718,26 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     #[cfg(not(feature = "thread_local_gc_ibm_style"))]
     pub fn get_reusable_block(&self, copy: bool) -> Option<Block> {
+        self.get_reusable_block_impl(copy, false)
+    }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub fn get_sparse_reusable_block(&self, copy: bool) -> Option<Block> {
+        self.get_reusable_block_impl(copy, true)
+    }
+
+    #[cfg(not(feature = "thread_local_gc_ibm_style"))]
+    fn get_reusable_block_impl(&self, copy: bool, sparse: bool) -> Option<Block> {
         if super::BLOCK_ONLY {
             return None;
         }
         loop {
-            if let Some(block) = self.reusable_blocks.pop() {
+            let b = if sparse {
+                self.sparse_reusable_blocks.pop()
+            } else {
+                self.reusable_blocks.pop()
+            };
+            if let Some(block) = b {
                 // Skip blocks that should be evacuated.
                 if copy && block.is_defrag_source() {
                     continue;
@@ -756,22 +781,22 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             }
         }
 
-        if object.to_address::<VM>().class_is_valid::<VM>() == false {
-            println!(
-                "worker: {:?}, object: {:?}, klass: {:?}",
-                _worker.ordinal,
-                object,
-                object.to_address::<VM>().class_pointer::<VM>()
-            );
-            // while self.log_buffer.is_empty() == false {
-            //     let log = self.log_buffer.pop().unwrap();
-            //     println!(
-            //         "w: {:?}, old: {:?}|{:?}|{}, new: {:?}|{:?}|{}",
-            //         log.0, log.1, log.2, log.3, log.4, log.5, log.6
-            //     )
-            // }
-            panic!();
-        }
+        // if object.to_address::<VM>().class_is_valid::<VM>() == false {
+        //     println!(
+        //         "worker: {:?}, object: {:?}, klass: {:?}",
+        //         _worker.ordinal,
+        //         object,
+        //         object.to_address::<VM>().class_pointer::<VM>()
+        //     );
+        //     // while self.log_buffer.is_empty() == false {
+        //     //     let log = self.log_buffer.pop().unwrap();
+        //     //     println!(
+        //     //         "w: {:?}, old: {:?}|{:?}|{}, new: {:?}|{:?}|{}",
+        //     //         log.0, log.1, log.2, log.3, log.4, log.5, log.6
+        //     //     )
+        //     // }
+        //     panic!();
+        // }
 
         if self.attempt_mark(object, self.mark_state) {
             let block: Block = Block::containing::<VM>(object);
@@ -853,45 +878,45 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 }
             }
         }
-        if object.to_address::<VM>().class_is_valid::<VM>() == false {
-            println!(
-                "worker: {:?}, object: {:?}, klass: {:?}, defrag: {}, public: {}",
-                worker.ordinal,
-                object,
-                object.to_address::<VM>().class_pointer::<VM>(),
-                Block::containing::<VM>(object).is_defrag_source(),
-                crate::util::metadata::public_bit::is_public::<VM>(object)
-            );
-            // while self.log_buffer.is_empty() == false {
-            //     let log = self.log_buffer.pop().unwrap();
-            //     println!(
-            //         "w: {:?}, old: {:?}|{:?}|{}, new: {:?}|{:?}|{}",
-            //         log.0, log.1, log.2, log.3, log.4, log.5, log.6
-            //     )
-            // }
-            panic!();
-        }
+        // if object.to_address::<VM>().class_is_valid::<VM>() == false {
+        //     println!(
+        //         "worker: {:?}, object: {:?}, klass: {:?}, defrag: {}, public: {}",
+        //         worker.ordinal,
+        //         object,
+        //         object.to_address::<VM>().class_pointer::<VM>(),
+        //         Block::containing::<VM>(object).is_defrag_source(),
+        //         crate::util::metadata::public_bit::is_public::<VM>(object)
+        //     );
+        //     // while self.log_buffer.is_empty() == false {
+        //     //     let log = self.log_buffer.pop().unwrap();
+        //     //     println!(
+        //     //         "w: {:?}, old: {:?}|{:?}|{}, new: {:?}|{:?}|{}",
+        //     //         log.0, log.1, log.2, log.3, log.4, log.5, log.6
+        //     //     )
+        //     // }
+        //     panic!();
+        // }
         let forwarding_status = object_forwarding::attempt_to_forward::<VM>(object);
         if object_forwarding::state_is_forwarded_or_being_forwarded(forwarding_status) {
             // We lost the forwarding race as some other thread has set the forwarding word; wait
             // until the object has been forwarded by the winner. Note that the object may not
             // necessarily get forwarded since Immix opportunistically moves objects.
-            if object.to_address::<VM>().class_is_valid::<VM>() == false {
-                println!(
-                    "worker: {:?}, object: {:?}, klass: {:?}",
-                    worker.ordinal,
-                    object,
-                    object.to_address::<VM>().class_pointer::<VM>()
-                );
-                // while self.log_buffer.is_empty() == false {
-                //     let log = self.log_buffer.pop().unwrap();
-                //     println!(
-                //         "w: {:?}, old: {:?}|{:?}|{}, new: {:?}|{:?}|{}",
-                //         log.0, log.1, log.2, log.3, log.4, log.5, log.6
-                //     )
-                // }
-                panic!();
-            }
+            // if object.to_address::<VM>().class_is_valid::<VM>() == false {
+            //     println!(
+            //         "worker: {:?}, object: {:?}, klass: {:?}",
+            //         worker.ordinal,
+            //         object,
+            //         object.to_address::<VM>().class_pointer::<VM>()
+            //     );
+            //     // while self.log_buffer.is_empty() == false {
+            //     //     let log = self.log_buffer.pop().unwrap();
+            //     //     println!(
+            //     //         "w: {:?}, old: {:?}|{:?}|{}, new: {:?}|{:?}|{}",
+            //     //         log.0, log.1, log.2, log.3, log.4, log.5, log.6
+            //     //     )
+            //     // }
+            //     panic!();
+            // }
             #[allow(clippy::let_and_return)]
             let new_object =
                 object_forwarding::spin_and_get_forwarded_object::<VM>(object, forwarding_status);
@@ -1013,11 +1038,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     VM::VMObjectModel::get_current_size(object),
                     Ordering::SeqCst,
                 );
-                #[cfg(feature = "thread_local_gc_copying")]
-                self.bytes_copied.fetch_add(
-                    VM::VMObjectModel::get_current_size(object),
-                    Ordering::SeqCst,
-                );
+                // #[cfg(feature = "thread_local_gc_copying")]
+                // self.bytes_copied.fetch_add(
+                //     VM::VMObjectModel::get_current_size(object),
+                //     Ordering::SeqCst,
+                // );
 
                 // When local gc is enabled, global gc only evacuates public object
                 #[cfg(all(feature = "thread_local_gc_copying", feature = "debug_publish_object"))]
@@ -1467,55 +1492,115 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     ///
     /// Returns None if the search could not find any more holes.
     #[allow(clippy::assertions_on_constants)]
-    pub fn get_next_available_lines(&self, search_start: Line) -> Option<(Line, Line)> {
+    pub fn get_next_available_lines(
+        &self,
+        search_start: Line,
+        minimum_lines_needed: u8,
+    ) -> Option<(Line, Line)> {
         debug_assert!(!super::BLOCK_ONLY);
 
-        let unavail_state = self.line_unavail_state.load(Ordering::Acquire);
-        let current_state = self.line_mark_state.load(Ordering::Acquire);
-
-        let block = search_start.block();
-        let mark_data = block.line_mark_table();
-        let start_cursor = search_start.get_index_within_block();
-        let mut cursor = start_cursor;
-        // Find start
-        while cursor < mark_data.len() {
-            let mark = mark_data.get(cursor);
-            if mark != unavail_state && mark != current_state {
-                break;
-            }
-            cursor += 1;
-        }
-        if cursor == mark_data.len() {
-            return None;
-        }
-        let start = search_start.next_nth(cursor - start_cursor);
-        #[cfg(feature = "thread_local_gc")]
+        #[cfg(feature = "thread_local_gc_copying")]
         {
-            debug_assert!(
-                start.is_line_published() == false,
-                "line: {:?} is published and thus not free/reusable",
-                start
-            );
-        }
-        // Find limit
-        while cursor < mark_data.len() {
-            let mark = mark_data.get(cursor);
-            if mark == unavail_state || mark == current_state {
-                break;
-            }
-            cursor += 1;
-        }
-        let end = search_start.next_nth(cursor - start_cursor);
-        #[cfg(not(feature = "thread_local_gc"))]
-        debug_assert!(RegionIterator::<Line>::new(start, end)
-            .all(|line| !line.is_marked(unavail_state) && !line.is_marked(current_state)));
-        #[cfg(feature = "thread_local_gc")]
-        debug_assert!(RegionIterator::<Line>::new(start, end)
-            .all(|line| !line.is_marked(unavail_state)
-                && !line.is_marked(current_state)
-                && !line.is_line_published()));
+            fn search_hole(
+                search_start: Line,
+                unavail_state: u8,
+                current_state: u8,
+            ) -> Option<(Line, Line, usize)> {
+                let block = search_start.block();
+                let mark_data = block.line_mark_table();
+                let search_start_cursor = search_start.get_index_within_block();
+                let mut start_cursor = search_start_cursor;
+                let mut end_cursor;
+                // Find start
+                while start_cursor < mark_data.len() {
+                    let mark = mark_data.get(start_cursor);
+                    if mark != unavail_state && mark != current_state {
+                        break;
+                    }
+                    start_cursor += 1;
+                }
+                if start_cursor == mark_data.len() {
+                    return None;
+                }
+                let start = search_start.next_nth(start_cursor - search_start_cursor);
+                end_cursor = start_cursor;
+                // Find limit
+                while end_cursor < mark_data.len() {
+                    let mark = mark_data.get(end_cursor);
+                    if mark == unavail_state || mark == current_state {
+                        break;
+                    }
+                    end_cursor += 1;
+                }
+                let end = search_start.next_nth(end_cursor - search_start_cursor);
+                #[cfg(not(feature = "thread_local_gc"))]
+                debug_assert!(RegionIterator::<Line>::new(start, end)
+                    .all(|line| !line.is_marked(unavail_state) && !line.is_marked(current_state)));
+                #[cfg(feature = "thread_local_gc")]
+                debug_assert!(RegionIterator::<Line>::new(start, end)
+                    .all(|line| !line.is_marked(unavail_state)
+                        && !line.is_marked(current_state)
+                        && !line.is_line_published()));
 
-        Some((start, end))
+                Some((start, end, end_cursor - start_cursor))
+            }
+
+            let unavail_state = self.line_unavail_state.load(Ordering::Acquire);
+            let current_state = self.line_mark_state.load(Ordering::Acquire);
+
+            let block = search_start.block();
+            let mut search_start_line = search_start;
+
+            loop {
+                if let Some((start, end, size)) =
+                    search_hole(search_start_line, unavail_state, current_state)
+                {
+                    if size >= minimum_lines_needed as usize {
+                        return Some((start, end));
+                    } else {
+                        // keep searching until it reaches the end of the block
+                        search_start_line = end;
+                        // A hole is skipped, this block can be used as a dense reusable block
+                        block.reset_sparse();
+                    }
+                } else {
+                    return None;
+                }
+            }
+        }
+        #[cfg(not(feature = "thread_local_gc_copying"))]
+        {
+            let unavail_state = self.line_unavail_state.load(Ordering::Acquire);
+            let current_state = self.line_mark_state.load(Ordering::Acquire);
+            let block = search_start.block();
+            let mark_data = block.line_mark_table();
+            let start_cursor = search_start.get_index_within_block();
+            let mut cursor = start_cursor;
+            // Find start
+            while cursor < mark_data.len() {
+                let mark = mark_data.get(cursor);
+                if mark != unavail_state && mark != current_state {
+                    break;
+                }
+                cursor += 1;
+            }
+            if cursor == mark_data.len() {
+                return None;
+            }
+            let start = search_start.next_nth(cursor - start_cursor);
+            // Find limit
+            while cursor < mark_data.len() {
+                let mark = mark_data.get(cursor);
+                if mark == unavail_state || mark == current_state {
+                    break;
+                }
+                cursor += 1;
+            }
+            let end = search_start.next_nth(cursor - start_cursor);
+            debug_assert!(RegionIterator::<Line>::new(start, end)
+                .all(|line| !line.is_marked(unavail_state) && !line.is_marked(current_state)));
+            Some((start, end))
+        }
     }
 
     pub fn is_last_gc_exhaustive(did_defrag_for_last_gc: bool) -> bool {
@@ -1634,44 +1719,51 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     #[cfg(feature = "thread_local_gc_copying_stats")]
-    pub fn print_immixspace_stats(&self) -> (usize, usize, usize, usize, usize) {
+    pub fn print_immixspace_stats(&self) -> (usize, usize, usize, usize, usize, usize, usize) {
         let mut free_blocks = 0;
         let mut reusable_block = 0;
         let mut allocated_block = 0;
         let mut global_reusable_block = 0;
         let mut published_block = 0;
+        let mut available_lines = 0;
+        let mut sparse_block = 0;
         for chunk in self.chunk_map.all_chunks() {
             let blocks = chunk.iter_region::<Block>();
             if self.chunk_map.get(chunk) == ChunkState::Free {
                 free_blocks += blocks.count();
             } else {
                 for block in blocks {
-                    if block.get_state().is_reusable() {
-                        reusable_block += 1;
-                        if block.is_block_published() {
-                            global_reusable_block += 1;
+                    match block.get_state() {
+                        BlockState::Unallocated => free_blocks += 1,
+                        BlockState::Reusable { unavailable_lines } => {
+                            available_lines += Block::LINES - unavailable_lines as usize;
+                            reusable_block += 1;
+                            if block.is_block_published() {
+                                global_reusable_block += 1;
+                            }
+                            if block.is_block_sparse() {
+                                sparse_block += 1;
+                            }
                         }
-                    } else if block.get_state() == BlockState::Unallocated {
-                        free_blocks += 1;
-                    } else {
-                        allocated_block += 1;
-                        if block.is_block_published() {
-                            published_block += 1;
+                        _ => {
+                            allocated_block += 1;
+                            if block.is_block_published() {
+                                published_block += 1;
+                            }
                         }
                     }
                 }
             }
         }
-        // println!(
-        //     "{}, {}, {}, {}, {}",
-        //     free_blocks, reusable_block, global_reusable_block, allocated_block, published_block
-        // );
+
         (
             free_blocks,
             reusable_block,
             global_reusable_block,
             allocated_block,
             published_block,
+            available_lines,
+            sparse_block,
         )
     }
 }
@@ -1852,17 +1944,24 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
             } else if !is_public {
                 // do not defrag private blocks
                 #[cfg(debug_assertions)]
-                debug_assert_ne!(block.owner(), u32::MAX);
-                debug_assert!(block.is_block_dirty());
+                {
+                    debug_assert_ne!(block.owner(), u32::MAX);
+                    debug_assert!(block.is_block_dirty());
+                }
                 false
             } else if state.is_reusable() {
                 // A corner case is that some local reusable block
                 // might get published during mutator phase. However,
-                // those blocks' owner are not u32::MAX
+                // those blocks have dirty bit set
                 #[cfg(debug_assertions)]
                 {
                     let mut exists = false;
                     self.space.reusable_blocks.iterate_blocks(|b| {
+                        if b == block {
+                            exists = true;
+                        }
+                    });
+                    self.space.sparse_reusable_blocks.iterate_blocks(|b| {
                         if b == block {
                             exists = true;
                         }
@@ -1874,15 +1973,14 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
                     }
                 }
 
-                // block.owner() != u32::MAX
-                block.is_block_dirty()
-                // false
+                // Since every global gc is a defrag gc, defrag_threshold will never be None
+                block.is_block_dirty() || block.get_holes() > self.defrag_threshold.unwrap()
             } else {
                 // fully occupied public blocks, they may not be dirty
-                // but always try defrag those blocks
+                // do not defrag those blocks
                 debug_assert!(is_public);
                 debug_assert!(block.get_state() == BlockState::Unmarked);
-                true
+                false
             };
 
             #[cfg(not(feature = "thread_local_gc"))]
@@ -1951,7 +2049,7 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
                     // Block is live. Increment the allocated block count.
                     allocated_blocks += 1;
                 } else {
-                    self.space.blocks_freed.fetch_add(1, Ordering::SeqCst);
+                    // self.space.blocks_freed.fetch_add(1, Ordering::SeqCst);
                 }
                 #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
                 {

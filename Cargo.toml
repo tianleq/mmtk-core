@@ -64,7 +64,7 @@ name = "main"
 harness = false
 
 [features]
-default = []
+default = ["thread_local_gc_copying_stats"]
 
 # This feature is only supported on x86-64 for now
 # It's manually added to CI scripts

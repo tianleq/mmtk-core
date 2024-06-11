@@ -89,6 +89,11 @@ impl<C: GCWorkContext> GCWork<C::VM> for Prepare<C> {
             // }
         }
 
+        #[cfg(feature = "thread_local_gc_copying_stats")]
+        {
+            // Now all mutators have been stopped, it is safe to collect stats
+            mmtk.print_global_heap_stats();
+        }
         trace!("Prepare Global");
         // We assume this is the only running work packet that accesses plan at the point of execution
         let plan_mut: &mut C::PlanType = unsafe { &mut *(self.plan as *const _ as *mut _) };

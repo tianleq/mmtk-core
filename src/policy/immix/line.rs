@@ -92,7 +92,7 @@ impl Line {
     /// Mark all lines the object is spanned to.
     pub fn mark_lines_for_object<VM: VMBinding>(object: ObjectReference, state: u8) {
         // This function is only called in a global gc
-        Self::mark_lines_for_object_impl::<VM>(object, state, None);
+        Self::mark_lines_for_object_impl::<VM>(object, state);
     }
 
     #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
@@ -134,11 +134,10 @@ impl Line {
     pub fn publish_lines_of_object<VM: VMBinding>(object: ObjectReference, state: u8) {
         // mark line as public
 
-        let (start_line, end_line) =
-            Self::mark_lines_for_object_impl::<VM>(object, state, Some(true));
+        let (_start_line, _end_line) = Self::mark_lines_for_object_impl::<VM>(object, state);
         #[cfg(debug_assertions)]
         {
-            let iter = RegionIterator::<Line>::new(start_line, end_line);
+            let iter = RegionIterator::<Line>::new(_start_line, _end_line);
             for line in iter {
                 debug_assert!(
                     line.is_marked(state),
@@ -153,7 +152,7 @@ impl Line {
         {
             use crate::util::TOTAL_PU8LISHED_LINES;
 
-            let iter = RegionIterator::<Line>::new(start_line, end_line);
+            let iter = RegionIterator::<Line>::new(_start_line, _end_line);
             let mut lines = 0;
             for _ in iter {
                 lines += 1;
@@ -172,14 +171,13 @@ impl Line {
     pub fn thread_local_mark_lines_for_object<VM: VMBinding>(object: ObjectReference, state: u8) {
         // local gc will never mark a public object
         debug_assert!(crate::util::metadata::public_bit::is_public::<VM>(object) == false);
-        Self::mark_lines_for_object_impl::<VM>(object, state, Some(false));
+        Self::mark_lines_for_object_impl::<VM>(object, state);
     }
 
     #[cfg(feature = "thread_local_gc")]
     fn mark_lines_for_object_impl<VM: VMBinding>(
         object: ObjectReference,
         state: u8,
-        publish_lines: Option<bool>,
     ) -> (Line, Line) {
         debug_assert!(!super::BLOCK_ONLY);
         #[cfg(not(feature = "debug_publish_object"))]
@@ -201,26 +199,36 @@ impl Line {
             // benign race here, as the state is the same,
             // multiple gc threads are trying to write the same byte value
             line.mark(state);
-            if publish_lines.is_some_and(|v| v) {
+            // also publish lines if object is public
+            if crate::util::metadata::public_bit::is_public::<VM>(object) {
                 // benign race here, line is shared by multiple objects, set 1 can occur concurrently
+                // during global gc phase
                 Line::LINE_PUBLICATION_TABLE.store_atomic::<u8>(
                     line.start(),
                     1,
                     atomic::Ordering::SeqCst,
                 );
-            } else if publish_lines.is_some_and(|v| !v) {
-                debug_assert!(crate::util::metadata::public_bit::is_public::<VM>(object) == false);
-            } else {
-                // also publish lines if object is public
-                if crate::util::metadata::public_bit::is_public::<VM>(object) {
-                    // benign race here, line is shared by multiple objects, set 1 can occur concurrently
-                    Line::LINE_PUBLICATION_TABLE.store_atomic::<u8>(
-                        line.start(),
-                        1,
-                        atomic::Ordering::SeqCst,
-                    );
-                }
             }
+            // if publish_lines.is_some_and(|v| v) {
+            //     // benign race here, line is shared by multiple objects, set 1 can occur concurrently
+            //     Line::LINE_PUBLICATION_TABLE.store_atomic::<u8>(
+            //         line.start(),
+            //         1,
+            //         atomic::Ordering::SeqCst,
+            //     );
+            // } else if publish_lines.is_some_and(|v| !v) {
+            //     debug_assert!(crate::util::metadata::public_bit::is_public::<VM>(object) == false);
+            // } else {
+            //     // also publish lines if object is public
+            //     if crate::util::metadata::public_bit::is_public::<VM>(object) {
+            //         // benign race here, line is shared by multiple objects, set 1 can occur concurrently
+            //         Line::LINE_PUBLICATION_TABLE.store_atomic::<u8>(
+            //             line.start(),
+            //             1,
+            //             atomic::Ordering::SeqCst,
+            //         );
+            //     }
+            // }
         }
         (start_line, end_line)
     }

@@ -370,7 +370,7 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
     fn collect_local_gc_stats(&self, _tls: VMMutatorThread) {}
 
     #[cfg(feature = "thread_local_gc_copying_stats")]
-    fn print_heap_stats(&self, _mutator: &mut crate::Mutator<Self::VM>) {}
+    fn print_local_heap_stats(&self, _mutator: &mut crate::Mutator<Self::VM>) {}
 
     #[cfg(feature = "thread_local_gc_copying_stats")]
     fn print_global_heap_stats(&self) {}
@@ -1061,7 +1061,6 @@ pub trait PlanThreadlocalTraceObject<VM: VMBinding> {
     /// Arguments:
     /// * `mutator`: the current thread's context
     /// * `object`: the object to trace. This is a non-nullable object reference.
-    /// * `worker`: the GC worker that is tracing this object.
     fn thread_local_trace_object<const KIND: TraceKind>(
         &self,
         mutator: &mut Mutator<VM>,
@@ -1076,7 +1075,6 @@ pub trait PlanThreadlocalTraceObject<VM: VMBinding> {
     /// Arguments:
     /// * `mutator`: the current thread's context
     /// * `object`: the object to trace. This is a non-nullable object reference.
-    /// * `worker`: the GC worker that is tracing this object.
     fn thread_local_trace_object<const KIND: TraceKind>(
         &self,
         mutator: &mut Mutator<VM>,

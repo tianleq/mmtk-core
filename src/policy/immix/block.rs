@@ -103,14 +103,23 @@ impl Block {
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_MARK;
 
     pub const ANONYMOUS_OWNER: u32 = u32::MAX;
-
-    //       public bit
-    //       |
+    //     dense bit
+    //     |
+    //     | public bit
+    //     | |
     // 00000000
-    //        |
-    //        dirty bit
-    pub const PUBLIC_BIT: u8 = 0b10;
-    pub const DIRTY_BIT: u8 = 0b01;
+    //      | |
+    //      | dirty bit
+    //      |
+    //      sparse bit
+    #[cfg(feature = "thread_local_gc")]
+    pub const PUBLIC_BIT: u8 = 0b0010;
+    #[cfg(feature = "thread_local_gc")]
+    pub const DIRTY_BIT: u8 = 0b0001;
+    #[cfg(feature = "thread_local_gc")]
+    pub const SPARSE_BIT: u8 = 0b0100;
+    #[cfg(feature = "thread_local_gc")]
+    pub const DENSE_BIT: u8 = 0b1000;
 
     /// Block owner table (side)
     #[cfg(all(feature = "thread_local_gc", debug_assertions))]
@@ -119,8 +128,16 @@ impl Block {
 
     /// Block level public table (side)
     #[cfg(feature = "thread_local_gc")]
-    pub const BLOCK_PUBLICATION_AND_OWNER_TABLE: SideMetadataSpec =
-        crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_PUBLICATION_AND_OWNER;
+    pub const METADATA_TABLE: SideMetadataSpec =
+        crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_METADATA;
+
+    /// max hole size of a block
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub const HOLE_SIZE: SideMetadataSpec =
+        crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_HOLE_SIZE; // no need to clear/reset the hole size, as stale value should never be read.
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub const SPARSE_BLOCK_THRESHOLD: u8 = 16;
 
     /// Get the chunk containing the block.
     pub fn chunk(&self) -> Chunk {
@@ -151,8 +168,7 @@ impl Block {
     pub fn publish(&self, dirty: bool) -> bool {
         let val = if dirty {
             debug_assert!(
-                (Self::BLOCK_PUBLICATION_AND_OWNER_TABLE
-                    .load_atomic::<u8>(self.start(), Ordering::Acquire)
+                (Self::METADATA_TABLE.load_atomic::<u8>(self.start(), Ordering::Acquire)
                     & Self::DIRTY_BIT)
                     == 1,
                 "block: {:?} dirty bit is not set",
@@ -161,8 +177,7 @@ impl Block {
             Self::DIRTY_BIT | Self::PUBLIC_BIT
         } else {
             debug_assert!(
-                (Self::BLOCK_PUBLICATION_AND_OWNER_TABLE
-                    .load_atomic::<u8>(self.start(), Ordering::Acquire)
+                (Self::METADATA_TABLE.load_atomic::<u8>(self.start(), Ordering::Acquire)
                     & Self::DIRTY_BIT)
                     == 0,
                 "block: {:?} dirty bit is set",
@@ -171,42 +186,35 @@ impl Block {
             Self::PUBLIC_BIT
         };
 
-        let prev_value = Self::BLOCK_PUBLICATION_AND_OWNER_TABLE.fetch_or_atomic::<u8>(
-            self.start(),
-            val,
-            Ordering::SeqCst,
-        );
+        let prev_value =
+            Self::METADATA_TABLE.fetch_or_atomic::<u8>(self.start(), val, Ordering::SeqCst);
 
         (prev_value & Self::PUBLIC_BIT) == 0
     }
 
     #[cfg(feature = "thread_local_gc")]
     pub fn reset_publication(&self) {
-        Self::BLOCK_PUBLICATION_AND_OWNER_TABLE.fetch_and_atomic::<u8>(
+        Self::METADATA_TABLE.fetch_and_atomic::<u8>(
             self.start(),
-            Self::DIRTY_BIT,
+            !Self::PUBLIC_BIT,
             Ordering::SeqCst,
         );
         // Also rest all lines within the block
         Line::LINE_PUBLICATION_TABLE.bzero_metadata(self.start(), Self::BYTES);
     }
 
-    #[cfg(feature = "thread_local_gc")]
+    #[cfg(feature = "thread_local_gc_copying")]
     pub fn reset_dirty(&self) {
-        Self::BLOCK_PUBLICATION_AND_OWNER_TABLE.fetch_and_atomic::<u8>(
+        Self::METADATA_TABLE.fetch_and_atomic::<u8>(
             self.start(),
-            Self::PUBLIC_BIT,
+            !Self::DIRTY_BIT,
             Ordering::SeqCst,
         );
     }
 
     #[cfg(feature = "thread_local_gc")]
-    pub fn reset_publication_and_dirty(&self) {
-        Self::BLOCK_PUBLICATION_AND_OWNER_TABLE.store_atomic::<u8>(
-            self.start(),
-            0,
-            Ordering::SeqCst,
-        );
+    pub fn reset_metadata(&self) {
+        Self::METADATA_TABLE.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
         // Also rest all lines within the block
         Line::LINE_PUBLICATION_TABLE.bzero_metadata(self.start(), Self::BYTES);
     }
@@ -219,27 +227,68 @@ impl Block {
 
     #[cfg(feature = "thread_local_gc")]
     pub fn is_block_published(&self) -> bool {
-        (Self::BLOCK_PUBLICATION_AND_OWNER_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst)
-            & Self::PUBLIC_BIT)
+        (Self::METADATA_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst) & Self::PUBLIC_BIT)
             == Self::PUBLIC_BIT
     }
 
-    // dirty the block
-    #[cfg(feature = "thread_local_gc")]
+    #[cfg(feature = "thread_local_gc_copying")]
     pub fn is_block_dirty(&self) -> bool {
-        (Self::BLOCK_PUBLICATION_AND_OWNER_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst)
-            & Self::DIRTY_BIT)
+        (Self::METADATA_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst) & Self::DIRTY_BIT)
             == Self::DIRTY_BIT
     }
 
     // dirty the block
-    #[cfg(feature = "thread_local_gc")]
+    #[cfg(feature = "thread_local_gc_copying")]
     pub fn taint(&self) {
-        Self::BLOCK_PUBLICATION_AND_OWNER_TABLE.fetch_or_atomic::<u8>(
+        Self::METADATA_TABLE.fetch_or_atomic::<u8>(self.start(), Self::DIRTY_BIT, Ordering::SeqCst);
+    }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub fn is_block_sparse(&self) -> bool {
+        (Self::METADATA_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst) & Self::SPARSE_BIT)
+            == Self::SPARSE_BIT
+    }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub fn set_sparse(&self) {
+        Self::METADATA_TABLE.fetch_or_atomic::<u8>(
             self.start(),
-            Self::DIRTY_BIT,
+            Self::SPARSE_BIT,
             Ordering::SeqCst,
         );
+    }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub fn reset_sparse(&self) {
+        Self::METADATA_TABLE.fetch_and_atomic::<u8>(
+            self.start(),
+            !Self::SPARSE_BIT,
+            Ordering::SeqCst,
+        );
+    }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub fn set_dense(&self) {
+        Self::METADATA_TABLE.fetch_or_atomic::<u8>(self.start(), Self::DENSE_BIT, Ordering::SeqCst);
+    }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub fn reset_dense(&self) {
+        Self::METADATA_TABLE.fetch_and_atomic::<u8>(
+            self.start(),
+            !Self::DENSE_BIT,
+            Ordering::SeqCst,
+        );
+    }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub fn set_hole_size(&self, lines: u8) {
+        Self::HOLE_SIZE.store_atomic::<u8>(self.start(), lines, Ordering::SeqCst);
+    }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub fn get_hole_size(&self) -> u8 {
+        Self::HOLE_SIZE.load_atomic::<u8>(self.start(), Ordering::SeqCst)
     }
 
     #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
@@ -280,19 +329,6 @@ impl Block {
         }
     }
 
-    #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
-    pub fn all_lines_unmarked(&self, state: u8) {
-        for line in self.lines() {
-            if line.is_marked(state) {
-                panic!(
-                    "public block: {:?}|owner: {:?} -> free line: {:?} is marked",
-                    self,
-                    self.owner(),
-                    line
-                );
-            }
-        }
-    }
     // Defrag byte
 
     const DEFRAG_SOURCE_STATE: u8 = u8::MAX;
@@ -332,6 +368,7 @@ impl Block {
         });
 
         Self::DEFRAG_STATE_TABLE.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
+        // Self::PUBLICATION_STATE.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
     }
 
     /// Deinitalize a block before releasing.
@@ -429,6 +466,9 @@ impl Block {
 
             let is_published = self.is_block_published();
 
+            let mut max_hole_size: u8 = 0;
+            let mut hole_size: u8 = 0;
+
             for line in self.lines() {
                 #[cfg(debug_assertions)]
                 {
@@ -469,12 +509,14 @@ impl Block {
                 } else {
                     if prev_line_is_marked {
                         holes += 1;
+                        max_hole_size = std::cmp::max(max_hole_size, hole_size);
+                        hole_size = 0;
                     }
                     // // #[cfg(debug_assertions)]
                     // {
                     //     crate::util::memory::set(line.start(), 0xCA, Line::BYTES);
                     // }
-                    crate::util::memory::zero(line.start(), Line::BYTES);
+                    hole_size += 1;
 
                     #[cfg(feature = "immix_zero_on_release")]
                     crate::util::memory::zero(line.start(), Line::BYTES);
@@ -483,7 +525,10 @@ impl Block {
                 }
             }
 
+            max_hole_size = std::cmp::max(max_hole_size, hole_size);
+
             if marked_lines == 0 {
+                debug_assert_eq!(max_hole_size, Self::LINES as u8);
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_region_swept::<VM, _>(self, false);
                 // liveness of public block is unknown during thread-local gc
@@ -513,9 +558,18 @@ impl Block {
                     self.set_state(BlockState::Reusable {
                         unavailable_lines: marked_lines as _,
                     });
+
+                    self.set_hole_size(max_hole_size);
+                    if max_hole_size >= Self::SPARSE_BLOCK_THRESHOLD {
+                        self.set_sparse();
+                    } else {
+                        self.reset_sparse();
+                    }
                 } else {
                     // Clear mark state.
                     self.set_state(BlockState::Unmarked);
+                    debug_assert_eq!(max_hole_size, hole_size);
+                    debug_assert_eq!(max_hole_size, 0);
                 }
                 // Update mark_histogram
                 mark_histogram[holes] += marked_lines;
@@ -552,7 +606,7 @@ impl Block {
                     {
                         #[cfg(debug_assertions)]
                         self.clear_owner();
-                        self.reset_publication_and_dirty();
+                        self.reset_metadata();
                     }
                     // release_block will set the block state to BlockState::Unallocated
                     space.release_block(*self);
@@ -575,47 +629,63 @@ impl Block {
             let line_mark_state = line_mark_state.unwrap();
             #[cfg(feature = "thread_local_gc_copying")]
             let mut is_block_public = false;
+            #[cfg(feature = "thread_local_gc_copying")]
+            let mut max_hole_size: u8 = 0;
+            #[cfg(feature = "thread_local_gc_copying")]
+            let mut hole_size: u8 = 0;
 
             for line in self.lines() {
                 if line.is_marked(line_mark_state) {
                     marked_lines += 1;
                     prev_line_is_marked = true;
-                    let is_line_published = line.is_line_published();
                     // a line is public iff it is marked and line level public bit is set
+                    let is_line_published = line.is_line_published();
                     if !is_block_public && is_line_published {
                         is_block_public = true;
                     }
                 } else {
                     if prev_line_is_marked {
                         holes += 1;
+                        #[cfg(feature = "thread_local_gc_copying")]
+                        {
+                            max_hole_size = std::cmp::max(max_hole_size, hole_size);
+                            hole_size = 0;
+                        }
                     }
                     // line is not marked, so it is free, line level public bit
                     // needs to be cleared
                     #[cfg(feature = "thread_local_gc_ibm_style")]
                     line.reset_publication();
 
-                    // #[cfg(debug_assertions)]
-                    // {
-                    //     crate::util::memory::set(line.start(), 0xCA, Line::BYTES);
-                    // }
-
                     #[cfg(feature = "immix_zero_on_release")]
                     crate::util::memory::zero(line.start(), Line::BYTES);
+                    #[cfg(feature = "thread_local_gc_copying")]
+                    {
+                        hole_size += 1;
+                    }
 
                     prev_line_is_marked = false;
                 }
+            }
+            #[cfg(feature = "thread_local_gc_copying")]
+            {
+                max_hole_size = std::cmp::max(max_hole_size, hole_size);
             }
 
             if marked_lines == 0 {
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_region_swept::<VM, _>(self, false);
-                // Release the block if non of its lines are marked.
+                // Release the block if non of its lines is marked.
                 #[cfg(feature = "thread_local_gc")]
                 {
                     #[cfg(debug_assertions)]
                     self.clear_owner();
-                    self.reset_publication_and_dirty();
+                    self.reset_metadata();
                     debug_assert!(self.is_block_published() == false);
+                }
+                #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
+                {
+                    debug_assert_eq!(max_hole_size as usize, Self::LINES);
                 }
                 space.release_block(*self);
                 #[cfg(feature = "debug_thread_local_gc_copying")]
@@ -645,6 +715,10 @@ impl Block {
                     self.set_state(BlockState::Reusable {
                         unavailable_lines: marked_lines as _,
                     });
+                    #[cfg(feature = "thread_local_gc_copying")]
+                    let is_block_sparse = max_hole_size >= Self::SPARSE_BLOCK_THRESHOLD;
+                    #[cfg(feature = "thread_local_gc_copying")]
+                    self.set_hole_size(max_hole_size);
 
                     #[cfg(not(feature = "thread_local_gc"))]
                     space.reusable_blocks.push(*self);
@@ -652,11 +726,22 @@ impl Block {
                     // can be reused
                     #[cfg(feature = "thread_local_gc_copying")]
                     {
+                        if is_block_sparse {
+                            self.set_sparse();
+                        } else {
+                            self.reset_sparse();
+                        }
                         if is_block_public {
                             // now private objects and public objects may co-exist
-                            // in the same block
+                            // in the same block, only blocks that never acquired
+                            // by mutator can be reused by all mutators
                             if !self.is_block_dirty() {
-                                space.reusable_blocks.push(*self);
+                                if is_block_sparse {
+                                    space.sparse_reusable_blocks.push(*self);
+                                } else {
+                                    space.reusable_blocks.push(*self);
+                                }
+
                                 #[cfg(feature = "debug_thread_local_gc_copying")]
                                 {
                                     (*gc_stats).number_of_global_reusable_blocks += 1;
@@ -665,6 +750,7 @@ impl Block {
                                 }
                             }
                         } else {
+                            // private reusable block, it will go to local reusable block list
                             debug_assert!(!self.is_block_published());
                             #[cfg(feature = "debug_thread_local_gc_copying")]
                             {
@@ -685,6 +771,7 @@ impl Block {
 
                     // Clear mark state.
                     self.set_state(BlockState::Unmarked);
+                    self.reset_sparse();
                 }
                 // Update mark_histogram
                 mark_histogram[holes] += marked_lines;

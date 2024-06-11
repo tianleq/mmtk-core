@@ -41,8 +41,7 @@ pub const DEFRAG_EVERY_BLOCK: bool = false;
 
 #[cfg(feature = "thread_local_gc")]
 /// Make every GC a defragment GC to make sure
-/// public objects are always strictly evacuated
-/// in global gc
+/// public objects are always evacuated in global gc
 pub const STRESS_DEFRAG: bool = DEFRAG;
 
 #[cfg(feature = "thread_local_gc")]

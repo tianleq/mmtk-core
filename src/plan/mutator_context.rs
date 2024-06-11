@@ -142,17 +142,6 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         offset: usize,
         semantics: AllocationSemantics,
     ) -> Address {
-        // #[cfg(feature = "thread_local_gc_copying_stats")]
-        // {
-        //     use crate::util::alloc::GLOBAL_ALLOC_LOCK;
-        //     let _lock = GLOBAL_ALLOC_LOCK.lock().unwrap();
-        //     unsafe {
-        //         self.allocators
-        //             .get_allocator_mut(self.config.allocator_mapping[semantics])
-        //     }
-        //     .alloc(size, align, offset)
-        // }
-        // #[cfg(not(feature = "thread_local_gc_copying_stats"))]
         unsafe {
             self.allocators
                 .get_allocator_mut(self.config.allocator_mapping[semantics])

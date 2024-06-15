@@ -238,6 +238,7 @@ impl<VM: VMBinding> MMTK<VM> {
             }
         }
 
+        #[cfg(feature = "thread_local_gc_copying_stats")]
         {
             let path = "/home/tianleq/misc/global-gc-debug-logs";
             std::fs::remove_dir_all(path).unwrap();

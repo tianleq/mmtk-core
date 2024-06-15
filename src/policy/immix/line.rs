@@ -209,26 +209,6 @@ impl Line {
                     atomic::Ordering::SeqCst,
                 );
             }
-            // if publish_lines.is_some_and(|v| v) {
-            //     // benign race here, line is shared by multiple objects, set 1 can occur concurrently
-            //     Line::LINE_PUBLICATION_TABLE.store_atomic::<u8>(
-            //         line.start(),
-            //         1,
-            //         atomic::Ordering::SeqCst,
-            //     );
-            // } else if publish_lines.is_some_and(|v| !v) {
-            //     debug_assert!(crate::util::metadata::public_bit::is_public::<VM>(object) == false);
-            // } else {
-            //     // also publish lines if object is public
-            //     if crate::util::metadata::public_bit::is_public::<VM>(object) {
-            //         // benign race here, line is shared by multiple objects, set 1 can occur concurrently
-            //         Line::LINE_PUBLICATION_TABLE.store_atomic::<u8>(
-            //             line.start(),
-            //             1,
-            //             atomic::Ordering::SeqCst,
-            //         );
-            //     }
-            // }
         }
         (start_line, end_line)
     }

@@ -262,7 +262,14 @@ impl<VM: VMBinding> GCTriggerPolicy<VM> for FixedHeapSizeTrigger {
         false
     }
 
-    fn on_gc_start(&self, _mmtk: &'static MMTK<VM>) {}
+    fn on_gc_start(&self, _mmtk: &'static MMTK<VM>) {
+        #[cfg(debug_assertions)]
+        {
+            use crate::policy::immix::GLOBAL_BLOCK_SET;
+            crate::util::GLOBAL_GC_ID.fetch_add(1, Ordering::SeqCst);
+            GLOBAL_BLOCK_SET.lock().unwrap().clear();
+        }
+    }
 
     fn on_gc_end(&self, _mmtk: &'static MMTK<VM>) {
         #[cfg(feature = "thread_local_gc_copying_stats")]

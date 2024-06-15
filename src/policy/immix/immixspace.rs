@@ -752,6 +752,15 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     _ => unreachable!("{:?} {:?}", block, block.get_state()),
                 };
                 self.lines_consumed.fetch_add(lines_delta, Ordering::SeqCst);
+                #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
+                {
+                    if !copy {
+                        block.get_reusable_block_info(
+                            self.line_unavail_state.load(Ordering::Acquire),
+                            self.line_mark_state.load(Ordering::Acquire),
+                        );
+                    }
+                }
 
                 block.init(copy);
                 return Some(block);
@@ -1413,6 +1422,20 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         Line::mark_lines_for_object::<VM>(object, self.line_mark_state.load(Ordering::Acquire));
     }
 
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub fn mark_multiple_lines(&self, start: Address, end: Address) {
+        let state = self.line_mark_state.load(Ordering::Acquire);
+        let start_line = Line::from_unaligned_address(start);
+        let mut end_line = Line::from_unaligned_address(end);
+        if !Line::is_aligned(end) {
+            end_line = end_line.next();
+        }
+        let iter = RegionIterator::<Line>::new(start_line, end_line);
+        for line in iter {
+            line.mark(state);
+        }
+    }
+
     #[cfg(feature = "thread_local_gc")]
     pub fn thread_local_mark_lines(&self, object: ObjectReference, local_state: u8) {
         debug_assert!(!super::BLOCK_ONLY);
@@ -1495,7 +1518,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     pub fn get_next_available_lines(
         &self,
         search_start: Line,
-        minimum_lines_needed: u8,
+        lines_required: u8,
     ) -> Option<(Line, Line)> {
         debug_assert!(!super::BLOCK_ONLY);
 
@@ -1523,6 +1546,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     return None;
                 }
                 let start = search_start.next_nth(start_cursor - search_start_cursor);
+                #[cfg(debug_assertions)]
+                debug_assert_eq!(start_cursor, start.get_index_within_block());
                 end_cursor = start_cursor;
                 // Find limit
                 while end_cursor < mark_data.len() {
@@ -1533,6 +1558,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     end_cursor += 1;
                 }
                 let end = search_start.next_nth(end_cursor - search_start_cursor);
+
                 #[cfg(not(feature = "thread_local_gc"))]
                 debug_assert!(RegionIterator::<Line>::new(start, end)
                     .all(|line| !line.is_marked(unavail_state) && !line.is_marked(current_state)));
@@ -1555,13 +1581,16 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 if let Some((start, end, size)) =
                     search_hole(search_start_line, unavail_state, current_state)
                 {
-                    if size >= minimum_lines_needed as usize {
+                    if size >= lines_required as usize {
                         return Some((start, end));
                     } else {
                         // keep searching until it reaches the end of the block
+                        if end == block.end_line() {
+                            return None;
+                        }
                         search_start_line = end;
                         // A hole is skipped, this block can be used as a dense reusable block
-                        block.reset_sparse();
+                        // block.reset_sparse();
                     }
                 } else {
                     return None;

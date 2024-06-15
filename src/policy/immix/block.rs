@@ -103,23 +103,19 @@ impl Block {
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_MARK;
 
     pub const ANONYMOUS_OWNER: u32 = u32::MAX;
-    //     dense bit
-    //     |
-    //     | public bit
-    //     | |
+
+    //       public bit
+    //       |
     // 00000000
-    //      | |
-    //      | dirty bit
-    //      |
-    //      sparse bit
+    //        |
+    //        dirty bit
+    //
     #[cfg(feature = "thread_local_gc")]
-    pub const PUBLIC_BIT: u8 = 0b0010;
+    pub const PUBLIC_BIT: u8 = 0b10;
     #[cfg(feature = "thread_local_gc")]
-    pub const DIRTY_BIT: u8 = 0b0001;
-    #[cfg(feature = "thread_local_gc")]
-    pub const SPARSE_BIT: u8 = 0b0100;
-    #[cfg(feature = "thread_local_gc")]
-    pub const DENSE_BIT: u8 = 0b1000;
+    pub const DIRTY_BIT: u8 = 0b01;
+    // #[cfg(feature = "thread_local_gc")]
+    // pub const SPARSE_BIT: u8 = 0b0100;
 
     /// Block owner table (side)
     #[cfg(all(feature = "thread_local_gc", debug_assertions))]
@@ -137,7 +133,7 @@ impl Block {
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_HOLE_SIZE; // no need to clear/reset the hole size, as stale value should never be read.
 
     #[cfg(feature = "thread_local_gc_copying")]
-    pub const SPARSE_BLOCK_THRESHOLD: u8 = 16;
+    pub const SPARSE_BLOCK_THRESHOLD: u8 = 120;
 
     /// Get the chunk containing the block.
     pub fn chunk(&self) -> Chunk {
@@ -245,40 +241,9 @@ impl Block {
 
     #[cfg(feature = "thread_local_gc_copying")]
     pub fn is_block_sparse(&self) -> bool {
-        (Self::METADATA_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst) & Self::SPARSE_BIT)
-            == Self::SPARSE_BIT
-    }
-
-    #[cfg(feature = "thread_local_gc_copying")]
-    pub fn set_sparse(&self) {
-        Self::METADATA_TABLE.fetch_or_atomic::<u8>(
-            self.start(),
-            Self::SPARSE_BIT,
-            Ordering::SeqCst,
-        );
-    }
-
-    #[cfg(feature = "thread_local_gc_copying")]
-    pub fn reset_sparse(&self) {
-        Self::METADATA_TABLE.fetch_and_atomic::<u8>(
-            self.start(),
-            !Self::SPARSE_BIT,
-            Ordering::SeqCst,
-        );
-    }
-
-    #[cfg(feature = "thread_local_gc_copying")]
-    pub fn set_dense(&self) {
-        Self::METADATA_TABLE.fetch_or_atomic::<u8>(self.start(), Self::DENSE_BIT, Ordering::SeqCst);
-    }
-
-    #[cfg(feature = "thread_local_gc_copying")]
-    pub fn reset_dense(&self) {
-        Self::METADATA_TABLE.fetch_and_atomic::<u8>(
-            self.start(),
-            !Self::DENSE_BIT,
-            Ordering::SeqCst,
-        );
+        // (Self::METADATA_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst) & Self::SPARSE_BIT)
+        //     == Self::SPARSE_BIT
+        self.get_hole_size() >= Self::SPARSE_BLOCK_THRESHOLD
     }
 
     #[cfg(feature = "thread_local_gc_copying")]
@@ -368,7 +333,6 @@ impl Block {
         });
 
         Self::DEFRAG_STATE_TABLE.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
-        // Self::PUBLICATION_STATE.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
     }
 
     /// Deinitalize a block before releasing.
@@ -537,7 +501,7 @@ impl Block {
                     debug_assert!(self.get_state() == BlockState::Unmarked);
                     false
                 } else {
-                    #[cfg(all(feature = "debug_publish_object", debug_assertions))]
+                    #[cfg(debug_assertions)]
                     {
                         // check if locally freed blocks exist in global reusable pool
                         _space.reusable_blocks.iterate_blocks(|block| {
@@ -560,11 +524,6 @@ impl Block {
                     });
 
                     self.set_hole_size(max_hole_size);
-                    if max_hole_size >= Self::SPARSE_BLOCK_THRESHOLD {
-                        self.set_sparse();
-                    } else {
-                        self.reset_sparse();
-                    }
                 } else {
                     // Clear mark state.
                     self.set_state(BlockState::Unmarked);
@@ -726,11 +685,6 @@ impl Block {
                     // can be reused
                     #[cfg(feature = "thread_local_gc_copying")]
                     {
-                        if is_block_sparse {
-                            self.set_sparse();
-                        } else {
-                            self.reset_sparse();
-                        }
                         if is_block_public {
                             // now private objects and public objects may co-exist
                             // in the same block, only blocks that never acquired
@@ -771,7 +725,6 @@ impl Block {
 
                     // Clear mark state.
                     self.set_state(BlockState::Unmarked);
-                    self.reset_sparse();
                 }
                 // Update mark_histogram
                 mark_histogram[holes] += marked_lines;
@@ -784,6 +737,52 @@ impl Block {
                 false
             }
         }
+    }
+
+    #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
+    pub fn get_reusable_block_info(&self, unavail_state: u8, current_state: u8) -> (u8, u8, u8) {
+        let mut marked_lines = 0;
+        let mut holes: u8 = 0;
+        let mut prev_line_is_marked = true;
+        let mut max_hole_size: u8 = 0;
+        let mut hole_size: u8 = 0;
+        assert_eq!(unavail_state, current_state);
+        for line in self.lines() {
+            if line.is_marked(unavail_state) || line.is_marked(current_state) {
+                marked_lines += 1;
+                prev_line_is_marked = true;
+            } else {
+                if prev_line_is_marked {
+                    holes += 1;
+                    max_hole_size = std::cmp::max(max_hole_size, hole_size);
+                    hole_size = 0;
+                }
+
+                hole_size += 1;
+
+                prev_line_is_marked = false;
+            }
+        }
+        max_hole_size = std::cmp::max(max_hole_size, hole_size);
+
+        match self.get_state() {
+            BlockState::Reusable { unavailable_lines } => {
+                assert_eq!(
+                    marked_lines,
+                    unavailable_lines,
+                    "GC: {}, block: {:?}",
+                    crate::util::GLOBAL_GC_ID.load(atomic::Ordering::SeqCst),
+                    self
+                );
+            }
+            _ => {
+                panic!("block: {:?} is not reusable", self);
+            }
+        }
+        assert_eq!(self.get_hole_size(), max_hole_size);
+        assert_eq!(self.get_holes(), holes as usize);
+
+        (holes, max_hole_size, marked_lines)
     }
 
     #[cfg(all(feature = "thread_local_gc", debug_assertions))]

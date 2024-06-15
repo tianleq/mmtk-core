@@ -27,8 +27,8 @@ pub enum ImmixAllocSemantics {
 }
 
 pub struct ReusableBlocks {
-    pub dense: Vec<Block>,
-    pub sparse: Vec<Block>,
+    dense: Vec<Block>,
+    sparse: Vec<Block>,
 }
 
 impl ReusableBlocks {
@@ -37,6 +37,14 @@ impl ReusableBlocks {
             dense: vec![],
             sparse: vec![],
         }
+    }
+
+    pub fn push_dense_block(&mut self, block: Block) {
+        self.dense.push(block);
+    }
+
+    pub fn push_sparse_block(&mut self, block: Block) {
+        self.sparse.push(block);
     }
 
     pub fn len(&self) -> usize {
@@ -79,6 +87,9 @@ pub struct ImmixAllocator<VM: VMBinding> {
     /// Hole-searching cursor
     line: Option<Line>,
     #[cfg(feature = "thread_local_gc")]
+    /// Large hole-searching cursor
+    sparse_line: Option<Line>,
+    #[cfg(feature = "thread_local_gc")]
     pub local_blocks: Box<Vec<Block>>,
     #[cfg(feature = "thread_local_gc")]
     pub local_free_blocks: Box<Vec<Block>>,
@@ -94,6 +105,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         self.large_bump_pointer.reset(Address::ZERO, Address::ZERO);
         self.request_for_large = false;
         self.line = None;
+        self.sparse_line = None;
     }
 
     #[cfg(feature = "thread_local_gc")]
@@ -141,6 +153,47 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         // Reset local line mark state
         // self.local_line_mark_state = self.space.line_mark_state.load(atomic::Ordering::Acquire);
         // self.local_unavailable_line_mark_state = self.local_line_mark_state;
+
+        // #[cfg(debug_assertions)]
+        // {
+        //     use crate::policy::immix::GLOBAL_BLOCK_SET;
+        //     let mut set = GLOBAL_BLOCK_SET.lock().unwrap();
+        //     for sparse in &self.local_reusable_blocks.sparse {
+        //         assert!(
+        //             set.insert(sparse.start()),
+        //             "sparse block: {:?} already exists",
+        //             sparse
+        //         );
+        //         if self.local_reusable_blocks.dense.contains(sparse) {
+        //             panic!("block: {:?} exists in both dense and sparse", sparse);
+        //         }
+        //     }
+
+        //     for dense in &self.local_reusable_blocks.dense {
+        //         assert!(
+        //             set.insert(dense.start()),
+        //             "dense block: {:?} already exists",
+        //             dense
+        //         );
+        //         if self.local_reusable_blocks.sparse.contains(dense) {
+        //             panic!("block: {:?} exists in both dense and sparse", dense);
+        //         }
+        //     }
+
+        //     for block in &(*self.local_blocks) {
+        //         assert!(
+        //             set.insert(block.start()),
+        //             "block: {:?} already exists",
+        //             block
+        //         );
+        //         if self.local_reusable_blocks.dense.contains(block) {
+        //             panic!("dense block: {:?} exists in local list", block);
+        //         }
+        //         if self.local_reusable_blocks.sparse.contains(block) {
+        //             panic!("sparse block: {:?} exists in local list", block);
+        //         }
+        //     }
+        // }
 
         // clear local reusable block list so that it can be rebuilt
         self.local_blocks
@@ -192,9 +245,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                             }
                             // block may contain live private objects, so it cannot be reused by other mutator
                             if is_block_sparse {
-                                self.local_reusable_blocks.sparse.push(block);
+                                self.local_reusable_blocks.push_sparse_block(block);
                             } else {
-                                self.local_reusable_blocks.dense.push(block);
+                                self.local_reusable_blocks.push_dense_block(block);
                             }
                         } else {
                             #[cfg(debug_assertions)]
@@ -224,11 +277,17 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         {
                             debug_assert!(block.owner() == self.mutator_id);
                             debug_assert!(block.are_lines_private());
+                            block.get_reusable_block_info(
+                                self.space
+                                    .line_unavail_state
+                                    .load(atomic::Ordering::Acquire),
+                                self.space.line_mark_state.load(atomic::Ordering::Acquire),
+                            );
                         }
                         if is_block_sparse {
-                            self.local_reusable_blocks.sparse.push(block);
+                            self.local_reusable_blocks.push_sparse_block(block);
                         } else {
-                            self.local_reusable_blocks.dense.push(block);
+                            self.local_reusable_blocks.push_dense_block(block);
                         }
                     }
                 } else {
@@ -382,7 +441,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
             // clear line mark state (public lines have line level public bit set)
             block.reset_line_mark_state();
-            block.reset_sparse();
             block.set_state(BlockState::Unmarked);
         }
         // pre-allocate copy reserve pages
@@ -445,6 +503,15 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     debug_assert!(block.is_block_dirty());
                     let published = block.is_block_published();
                     if block.get_state().is_reusable() {
+                        #[cfg(debug_assertions)]
+                        {
+                            block.get_reusable_block_info(
+                                self.space
+                                    .line_unavail_state
+                                    .load(atomic::Ordering::Acquire),
+                                self.space.line_mark_state.load(atomic::Ordering::Acquire),
+                            );
+                        }
                         let is_block_sparse = block.is_block_sparse();
                         if published {
                             #[cfg(debug_assertions)]
@@ -467,10 +534,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                             );
                             if is_block_sparse {
                                 // private reusable block
-                                self.local_reusable_blocks.sparse.push(block);
+                                self.local_reusable_blocks.push_sparse_block(block);
                             } else {
                                 // private reusable block
-                                self.local_reusable_blocks.dense.push(block);
+                                self.local_reusable_blocks.push_dense_block(block);
                             }
                         }
                     } else {
@@ -530,7 +597,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             .thread_local_release_blocks(self.local_free_blocks.drain(..).map(|block| {
                 #[cfg(debug_assertions)]
                 block.clear_owner();
-                block.reset_dirty();
+                block.reset_metadata();
                 block.deinit();
                 block
             }));
@@ -904,6 +971,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             request_for_large: false,
             line: None,
             #[cfg(feature = "thread_local_gc")]
+            sparse_line: None,
+            #[cfg(feature = "thread_local_gc")]
             semantic: _semantic,
             #[cfg(feature = "thread_local_gc")]
             local_blocks: Box::new(Vec::new()),
@@ -926,35 +995,16 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         if end > self.large_bump_pointer.limit {
             #[cfg(feature = "thread_local_gc_copying")]
             {
-                // // overflow alloc slow path, check if the current block can be used as a dense reusable block
-                // // if so, move it to the dense reusable block list
-                // if !start.is_zero()
-                //     && self.line.is_none()
-                //     && !Block::from_unaligned_address(start).is_block_sparse()
-                // {
-                //     #[cfg(debug_assertions)]
-                //     warn!(
-                //         "block: {:?} moved to dense reusable block list, overflow alloc size: {}",
-                //         Block::from_unaligned_address(start),
-                //         size
-                //     );
-                //     self.local_reusable_blocks
-                //         .dense
-                //         .push(Block::from_unaligned_address(start));
-                // } else if self.large_bump_pointer.limit - start > Line::BYTES {
-                //     #[cfg(debug_assertions)]
-                //     warn!("{} bytes wasted", self.large_bump_pointer.limit - start);
-                // }
-
                 // try looking for sparse reusable blocks first
                 self.request_for_large = true;
                 // use sparse reusable blocks during mutator phase only
-                // let rtn = if !self.copy && self.acquire_recyclable_lines(size, align, offset) {
-                //     self.alloc(size, align, offset)
-                // } else {
-                //     self.alloc_slow_inline(size, align, offset)
-                // };
-                let rtn = self.alloc_slow_inline(size, align, offset);
+                let rtn = if !self.copy && self.acquire_sparse_recyclable_lines(size, align, offset)
+                {
+                    self.alloc(size, align, offset)
+                } else {
+                    self.alloc_slow_inline(size, align, offset)
+                };
+                // let rtn = self.alloc_slow_inline(size, align, offset);
                 self.request_for_large = false;
 
                 rtn
@@ -968,6 +1018,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 rtn
             }
         } else {
+            // #[cfg(feature = "thread_local_gc_copying")]
+            // self.space.mark_multiple_lines(start, end);
             fill_alignment_gap::<VM>(self.large_bump_pointer.cursor, start);
             self.large_bump_pointer.cursor = end;
             start
@@ -1008,48 +1060,15 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
     /// Search for recyclable lines.
     fn acquire_recyclable_lines(&mut self, size: usize, align: usize, offset: usize) -> bool {
-        let lines_required = if (size % Line::BYTES as usize) != 0 {
-            1 + (size / Line::BYTES)
-        } else {
-            size / Line::BYTES
-        };
-        while self.line.is_some() || self.acquire_recyclable_block(lines_required as u8) {
+        while self.line.is_some() || self.acquire_recyclable_block(1) {
             let line = self.line.unwrap();
 
-            let result = if self.request_for_large {
-                self.immix_space()
-                    .get_next_available_lines(line, u8::try_from(lines_required).unwrap())
-            } else {
+            if let Some((start_line, end_line)) =
                 self.immix_space().get_next_available_lines(line, 1)
-            };
-
-            if let Some((start_line, end_line)) = result {
+            {
                 // Find recyclable lines. Update the bump allocation cursor and limit.
-                if self.request_for_large {
-                    self.large_bump_pointer.cursor = start_line.start();
-                    self.large_bump_pointer.limit = end_line.start();
-                    crate::util::metadata::public_bit::bzero_public_bit(
-                        self.large_bump_pointer.cursor,
-                        self.large_bump_pointer.limit - self.large_bump_pointer.cursor,
-                    );
-                    crate::util::memory::zero(
-                        self.large_bump_pointer.cursor,
-                        self.large_bump_pointer.limit - self.large_bump_pointer.cursor,
-                    );
-                } else {
-                    self.bump_pointer.cursor = start_line.start();
-                    self.bump_pointer.limit = end_line.start();
-                    crate::util::metadata::public_bit::bzero_public_bit(
-                        self.bump_pointer.cursor,
-                        self.bump_pointer.limit - self.bump_pointer.cursor,
-                    );
-                    crate::util::memory::zero(
-                        self.bump_pointer.cursor,
-                        self.bump_pointer.limit - self.bump_pointer.cursor,
-                    );
-                }
-                // self.bump_pointer.cursor = start_line.start();
-                // self.bump_pointer.limit = end_line.start();
+                self.bump_pointer.cursor = start_line.start();
+                self.bump_pointer.limit = end_line.start();
                 trace!(
                     "{:?}: acquire_recyclable_lines -> {:?} [{:?}, {:?}) {:?}",
                     self.tls,
@@ -1059,29 +1078,27 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     self.tls
                 );
 
+                crate::util::memory::zero(
+                    self.bump_pointer.cursor,
+                    self.bump_pointer.limit - self.bump_pointer.cursor,
+                );
+                debug_assert!(
+                    align_allocation_no_fill::<VM>(self.bump_pointer.cursor, align, offset) + size
+                        <= self.bump_pointer.limit
+                );
+
+                #[cfg(feature = "public_bit")]
+                crate::util::metadata::public_bit::bzero_public_bit(
+                    self.bump_pointer.cursor,
+                    self.bump_pointer.limit - self.bump_pointer.cursor,
+                );
+
                 #[cfg(all(feature = "thread_local_gc", debug_assertions))]
                 {
                     let iter =
                         crate::util::linear_scan::RegionIterator::<Line>::new(start_line, end_line);
                     for line in iter {
                         debug_assert!(!line.is_line_published());
-                    }
-
-                    if self.request_for_large {
-                        debug_assert!(
-                            align_allocation_no_fill::<VM>(
-                                self.large_bump_pointer.cursor,
-                                align,
-                                offset
-                            ) + size
-                                <= self.large_bump_pointer.limit
-                        );
-                    } else {
-                        debug_assert!(
-                            align_allocation_no_fill::<VM>(self.bump_pointer.cursor, align, offset)
-                                + size
-                                <= self.bump_pointer.limit
-                        );
                     }
                 }
 
@@ -1090,13 +1107,157 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     // Hole searching reached the end of a reusable block. Set the hole-searching cursor to None.
                     None
                 } else {
-                    // Update the hole-searching cursor to None.
+                    // Update the hole-searching cursor .
                     Some(end_line)
                 };
                 return true;
             } else {
                 // No more recyclable lines. Set the hole-searching cursor to None.
-                self.line = None;
+                self.line = None
+            }
+        }
+        false
+    }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    /// Search for recyclable lines.
+    fn acquire_sparse_recyclable_lines(
+        &mut self,
+        size: usize,
+        align: usize,
+        offset: usize,
+    ) -> bool {
+        let lines_required = if (size % Line::BYTES as usize) != 0 {
+            1 + (size / Line::BYTES)
+        } else {
+            size / Line::BYTES
+        };
+
+        let mut fresh = false;
+        // // previous block has been exhausted
+        // if self.sparse_line.is_none() {
+        //     let block = Block::from_unaligned_address(self.large_bump_pointer.limit);
+        //     if !block.is_block_sparse()
+        //         || (self.large_bump_pointer.limit - self.large_bump_pointer.cursor) >= Line::BYTES
+        //     {
+        //         #[cfg(debug_assertions)]
+        //         {
+        //             debug_assert!(!self.local_reusable_blocks.dense.contains(&block));
+        //             debug_assert!(!self.local_reusable_blocks.sparse.contains(&block));
+        //             debug_assert!(self.local_blocks.contains(&block));
+        //             warn!("block: {:?} moved to dense list", block);
+        //         }
+        //         self.local_reusable_blocks.dense.push(block);
+        //     }
+        // }
+
+        while self.sparse_line.is_some() || {
+            fresh = self.acquire_recyclable_block(lines_required as u8);
+            fresh
+        } {
+            let line = self.sparse_line.unwrap();
+
+            if let Some((start_line, end_line)) = self
+                .immix_space()
+                .get_next_available_lines(line, u8::try_from(lines_required).unwrap())
+            {
+                #[cfg(debug_assertions)]
+                {
+                    debug_assert!(end_line.start() - start_line.start() < Block::BYTES);
+                    let end_block = end_line.block();
+                    let start_block = start_line.block();
+                    if fresh {
+                        debug_assert!(
+                            end_block.start() == start_block.start()
+                                || end_block.start() == start_block.next().start()
+                        );
+                    } else {
+                        debug_assert!(
+                            line.block().start() == start_block.start()
+                                && (line.block().start() == end_block.start()
+                                    || line.block().next().start() == end_block.start())
+                        );
+                    }
+                }
+
+                // Find recyclable lines. Update the bump allocation cursor and limit.
+                self.large_bump_pointer.cursor = start_line.start();
+                self.large_bump_pointer.limit = end_line.start();
+
+                trace!(
+                    "{:?}: acquire_sparse_recyclable_lines -> {:?} [{:?}, {:?}) {:?}",
+                    self.tls,
+                    self.line,
+                    start_line,
+                    end_line,
+                    self.tls
+                );
+
+                #[cfg(feature = "public_bit")]
+                crate::util::metadata::public_bit::bzero_public_bit(
+                    self.large_bump_pointer.cursor,
+                    self.large_bump_pointer.limit - self.large_bump_pointer.cursor,
+                );
+                crate::util::memory::zero(
+                    self.large_bump_pointer.cursor,
+                    self.large_bump_pointer.limit - self.large_bump_pointer.cursor,
+                );
+
+                #[cfg(all(feature = "thread_local_gc", debug_assertions))]
+                {
+                    let iter =
+                        crate::util::linear_scan::RegionIterator::<Line>::new(start_line, end_line);
+                    for line in iter {
+                        debug_assert!(!line.is_line_published());
+                    }
+                }
+                debug_assert!(
+                    align_allocation_no_fill::<VM>(self.large_bump_pointer.cursor, align, offset)
+                        + size
+                        <= self.large_bump_pointer.limit
+                );
+
+                let block = line.block();
+                self.sparse_line = if end_line == block.end_line() {
+                    // Hole searching reached the end of a reusable block. Set the hole-searching cursor to None.
+                    None
+                } else {
+                    // Update the hole-searching cursor .
+                    Some(end_line)
+                };
+
+                return true;
+            } else {
+                let block = line.block();
+                debug_assert!(
+                    self.large_bump_pointer.cursor.is_zero()
+                        || block.start()
+                            == Block::from_unaligned_address(self.large_bump_pointer.cursor)
+                                .start()
+                );
+                // No more recyclable lines. Set the hole-searching cursor to None.
+                self.sparse_line = None;
+                // It is guaranteed that freshly acquired reusable block has a hole large enough
+                debug_assert!(
+                    fresh == false,
+                    "fresh block: {:?} does not have enough space. hole size: {:?}",
+                    block,
+                    block.get_hole_size()
+                );
+                // The block has been exhaused, it may be used as a dense reusable block
+                // if !block.is_block_sparse()
+                //     || (self.large_bump_pointer.limit - self.large_bump_pointer.cursor)
+                //         >= Line::BYTES
+                // {
+                //     #[cfg(debug_assertions)]
+                //     {
+                //         debug_assert!(!self.local_reusable_blocks.dense.contains(&block));
+                //         debug_assert!(!self.local_reusable_blocks.sparse.contains(&block));
+                //         debug_assert!(self.local_blocks.contains(&block));
+                //         warn!("block: {:?} moved to dense list", block);
+                //     }
+                //     self.local_reusable_blocks.dense.push(block);
+                // }
             }
         }
         false
@@ -1162,15 +1323,11 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 }
                 None => {
                     let local_reusable_block = if self.request_for_large {
+                        debug_assert_ne!(lines_required, 1);
                         // search the local list and find a sparse block that can fit the object
                         self.acquire_local_sparse_reusable_block(lines_required)
                     } else {
-                        // self.local_reusable_blocks.dense.pop()
-                        let mut rtn = self.local_reusable_blocks.dense.pop();
-                        if rtn.is_none() {
-                            rtn = self.local_reusable_blocks.sparse.pop();
-                        }
-                        rtn
+                        self.local_reusable_blocks.dense.pop()
                     };
                     // this is a mutator
                     if let Some(block) = local_reusable_block {
@@ -1180,13 +1337,33 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                             block.start(),
                             block.end()
                         );
-                        let exists_in_local = !block.get_state().is_reusable();
 
-                        debug_assert!(!self.copy, "evacuation should always acquire a clean page");
+                        #[cfg(debug_assertions)]
+                        let exists_in_local;
+                        #[cfg(debug_assertions)]
+                        {
+                            exists_in_local = !block.get_state().is_reusable();
+
+                            debug_assert!(
+                                !self.copy,
+                                "evacuation should always acquire a clean page"
+                            );
+                            block.get_reusable_block_info(
+                                self.space
+                                    .line_unavail_state
+                                    .load(atomic::Ordering::Acquire),
+                                self.space.line_mark_state.load(atomic::Ordering::Acquire),
+                            );
+                        }
                         block.init(false);
                         block.taint();
                         // Set the hole-searching cursor to the start of this block.
-                        self.line = Some(block.start_line());
+                        if self.request_for_large {
+                            self.sparse_line = Some(block.start_line());
+                        } else {
+                            self.line = Some(block.start_line());
+                        }
+
                         #[cfg(debug_assertions)]
                         debug_assert!(
                             block.owner() == self.mutator_id,
@@ -1195,24 +1372,19 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                             self.mutator_id
                         );
                         // add local reusable block to local block list
-                        if !exists_in_local {
-                            self.local_blocks.push(block);
-                        }
-
+                        #[cfg(debug_assertions)]
+                        debug_assert!(exists_in_local == false);
+                        self.local_blocks.push(block);
+                        // block.set_hole_size(0);
                         return true;
                     }
 
                     let public_reusable_block = if self.request_for_large {
+                        debug_assert_ne!(lines_required, 1);
                         // search the local list that can fit the object
                         self.acquire_public_sparse_recyclable_block(lines_required)
                     } else {
-                        // self.acquire_public_recyclable_block()
-                        let mut rtn = self.acquire_public_recyclable_block();
-                        if rtn.is_none() {
-                            debug_assert!(lines_required == 1);
-                            rtn = self.acquire_public_sparse_recyclable_block(lines_required);
-                        }
-                        rtn
+                        self.acquire_public_recyclable_block()
                     };
                     match public_reusable_block {
                         Some(block) => {
@@ -1225,7 +1397,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                             // leaked and local gc cannot reuse them
                             block.taint();
                             self.local_blocks.push(block);
-
+                            // block.set_hole_size(0);
                             true
                         }
                         _ => false,
@@ -1268,12 +1440,29 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 debug_assert!(block.is_block_sparse());
                 if block.get_hole_size() >= lines_required {
                     // Set the hole-searching cursor to the start of this block.
-                    self.line = Some(block.start_line());
+                    self.sparse_line = Some(block.start_line());
+                    // #[cfg(debug_assertions)]
+                    // {
+                    //     use crate::util::GLOBAL_GC_ID;
+                    //     warn!(
+                    //         "GC: {}, mutator: {:?} acquire a global sparse block: {:?}",
+                    //         GLOBAL_GC_ID.load(atomic::Ordering::SeqCst),
+                    //         self.mutator_id,
+                    //         block
+                    //     );
+                    // }
+
                     return Some(block);
                 } else {
-                    #[cfg(debug_assertions)]
-                    warn!("sparse block: {:?} with hole size: {} does not fit {} lines required, add it to local list", block, block.get_hole_size(), lines_required);
-                    self.local_reusable_blocks.sparse.push(block);
+                    // #[cfg(debug_assertions)]
+                    // {
+                    //     use crate::util::GLOBAL_GC_ID;
+                    //     warn!("GC: {}, sparse block: {:?} with hole size: {} does not fit {} lines required, add it to local list",
+                    //           GLOBAL_GC_ID.load(atomic::Ordering::SeqCst), block, block.get_hole_size(), lines_required);
+                    // }
+
+                    block.taint();
+                    self.local_reusable_blocks.push_sparse_block(block);
                 }
             } else {
                 return None;
@@ -1284,23 +1473,58 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     #[cfg(feature = "thread_local_gc_copying")]
     fn acquire_local_sparse_reusable_block(&mut self, lines_required: u8) -> Option<Block> {
         let mut result = None;
-        for i in 0..self.local_reusable_blocks.sparse_block_len() {
+        let length = self.local_reusable_blocks.sparse_block_len();
+
+        // #[cfg(debug_assertions)]
+        // {
+        //     let mut set = std::collections::HashSet::new();
+        //     for sparse in &self.local_reusable_blocks.sparse {
+        //         assert!(
+        //             set.insert(sparse.start()),
+        //             "sparse block: {:?} already exists",
+        //             sparse
+        //         );
+        //     }
+        // }
+
+        for i in 0..length {
             let b = self.local_reusable_blocks.sparse.get(i).unwrap();
             #[cfg(debug_assertions)]
             {
+                use atomic::Ordering;
+
                 debug_assert!(b.is_block_sparse());
+                debug_assert!(b.is_block_dirty());
+                b.get_reusable_block_info(
+                    self.space.line_unavail_state.load(Ordering::Acquire),
+                    self.space.line_mark_state.load(Ordering::Acquire),
+                );
             }
             if b.get_hole_size() >= lines_required {
-                #[cfg(debug_assertions)]
-                info!(
-                    "acquire sparse block: {:?} with hole size: {}, lines_required: {}",
-                    b,
-                    b.get_hole_size(),
-                    lines_required
-                );
+                // #[cfg(debug_assertions)]
+                // {
+                //     use crate::util::GLOBAL_GC_ID;
+                //     warn!(
+                //         "GC: {},  mutator: {:?} acquire sparse block: {:?} with hole size: {}, lines_required: {}",
+                //         GLOBAL_GC_ID.load(atomic::Ordering::SeqCst),
+                //         self.mutator_id,
+                //         b,
+                //         b.get_hole_size(),
+                //         lines_required
+                //     );
+                // }
+
                 result = Some(*b);
                 self.local_reusable_blocks.sparse.swap_remove(i);
                 break;
+            }
+        }
+        #[cfg(debug_assertions)]
+        {
+            if result.is_none() {
+                debug_assert_eq!(length, self.local_reusable_blocks.sparse_block_len());
+            } else {
+                debug_assert_eq!(length - 1, self.local_reusable_blocks.sparse_block_len());
             }
         }
         result

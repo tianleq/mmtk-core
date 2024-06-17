@@ -134,6 +134,53 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         >(tls, self, &self.immix_space, mmtk)
     }
 
+    #[cfg(feature = "thread_local_gc")]
+    fn do_thread_local_defrag(
+        &'static self,
+        _tls: VMMutatorThread,
+        _mmtk: &'static crate::MMTK<VM>,
+    ) {
+        ThreadlocalPrepare::<VM>::new(_tls).execute();
+
+        //Scan mutator
+        thread_local_gc_work::ScanMutator::<
+            VM,
+            thread_local_gc_work::PlanThreadlocalObjectGraphTraversalClosure<
+                VM,
+                Immix<VM>,
+                { crate::policy::immix::TRACE_THREAD_LOCAL_DEFRAG },
+            >,
+        >::new(_tls, _mmtk)
+        .execute();
+        // cannot do release since finalizer has not been executed yet
+        // objects may be resurrected
+    }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    fn defrag_mutator_required(&self, tls: VMMutatorThread) -> bool {
+        use crate::vm::ActivePlan;
+        use std::borrow::Borrow;
+
+        let mutator = VM::VMActivePlan::mutator(tls);
+        let allocators: &crate::util::alloc::allocators::Allocators<VM> =
+            mutator.allocators.borrow();
+
+        let immix_allocator = unsafe {
+            allocators.get_allocator(mutator.config.allocator_mapping[AllocationSemantics::Default])
+        }
+        .downcast_ref::<crate::util::alloc::ImmixAllocator<VM>>()
+        .unwrap();
+        if immix_allocator.local_reusable_blocks.len() > 0 {
+            println!(
+                "mutator: {}, local reusable blocks: {}",
+                mutator.mutator_id,
+                immix_allocator.local_reusable_blocks.len()
+            );
+        }
+
+        false
+    }
+
     fn get_allocator_mapping(&self) -> &'static EnumMap<AllocationSemantics, AllocatorSelector> {
         &ALLOCATOR_MAPPING
     }

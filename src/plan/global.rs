@@ -246,6 +246,19 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
     ) {
     }
 
+    #[cfg(feature = "thread_local_gc")]
+    fn do_thread_local_defrag(
+        &'static self,
+        _tls: VMMutatorThread,
+        _mmtk: &'static MMTK<Self::VM>,
+    ) {
+    }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    fn defrag_mutator_required(&self, _tls: VMMutatorThread) -> bool {
+        false
+    }
+
     // Note: The following methods are about page accounting. The default implementation should
     // work fine for non-copying plans. For copying plans, the plan should override any of these methods
     // if necessary.

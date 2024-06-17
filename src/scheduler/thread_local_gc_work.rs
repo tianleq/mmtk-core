@@ -1,3 +1,6 @@
+use scheduler::GCWork;
+use scheduler::GCWorker;
+
 use crate::plan::PlanThreadlocalTraceObject;
 use crate::plan::ThreadlocalTracedObjectType::*;
 use crate::policy::gc_work::TraceKind;
@@ -61,6 +64,27 @@ impl<VM: VMBinding> ExecuteThreadlocalCollection<VM> {
             Err(_) => panic!("LOCAL_GC_ACTIVE is broken"),
             _ => (),
         };
+    }
+}
+
+pub struct ThreadlocalDefrag<VM: VMBinding> {
+    // The mutator reference has static lifetime.
+    // It is safe because the actual lifetime of this work-packet will not exceed the lifetime of a GC.
+    pub mutator: &'static mut Mutator<VM>,
+}
+
+impl<VM: VMBinding> ThreadlocalDefrag<VM> {
+    pub fn new(mutator: &'static mut Mutator<VM>) -> Self {
+        Self { mutator }
+    }
+}
+
+impl<VM: VMBinding> GCWork<VM> for ThreadlocalDefrag<VM> {
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+        trace!("Defrag Mutator");
+        _mmtk
+            .get_plan()
+            .do_thread_local_defrag(self.mutator.mutator_tls, _mmtk);
     }
 }
 

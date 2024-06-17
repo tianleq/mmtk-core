@@ -144,24 +144,4 @@ impl<VM: VMBinding> GCController<VM> {
 
         self.scheduler.debug_assert_all_buckets_deactivated();
     }
-
-    // /// Find more work for workers to do.  Return true if more work is available.
-    // fn find_more_work_for_workers(&mut self) -> bool {
-    //     if self.scheduler.worker_group.has_designated_work() {
-    //         return true;
-    //     }
-
-    //     // See if any bucket has a sentinel.
-    //     if self.scheduler.schedule_sentinels() {
-    //         return true;
-    //     }
-
-    //     // Try to open new buckets.
-    //     if self.scheduler.update_buckets() {
-    //         return true;
-    //     }
-
-    //     // If all of the above failed, it means GC has finished.
-    //     false
-    // }
 }

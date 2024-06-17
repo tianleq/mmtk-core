@@ -2148,13 +2148,16 @@ impl<VM: VMBinding> FlushPageResource<VM> {
                     crate::scheduler::gc_work::ReleaseMutator::<VM>::new(mutator),
                 );
             }
-            let mut set = std::collections::HashSet::new();
-            self.space.reusable_blocks.iterate_blocks(|block| {
-                let v = set.insert(block.start());
-                if !v {
-                    panic!("block: {:?} already exists", block);
-                }
-            });
+            #[cfg(debug_assertions)]
+            {
+                let mut set = std::collections::HashSet::new();
+                self.space.reusable_blocks.iterate_blocks(|block| {
+                    let v = set.insert(block.start());
+                    if !v {
+                        panic!("block: {:?} already exists", block);
+                    }
+                });
+            }
         }
     }
 }

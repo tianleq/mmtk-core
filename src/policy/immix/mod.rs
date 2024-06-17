@@ -41,8 +41,7 @@ pub const DEFRAG_EVERY_BLOCK: bool = false;
 
 #[cfg(feature = "thread_local_gc")]
 /// Make every GC a defragment GC to make sure
-/// public objects are always strictly evacuated
-/// in global gc
+/// public objects are always evacuated in global gc
 pub const STRESS_DEFRAG: bool = DEFRAG;
 
 #[cfg(feature = "thread_local_gc")]
@@ -85,3 +84,9 @@ fn validate_features() {
 #[cfg(feature = "thread_local_gc_copying")]
 pub(crate) static LOCAL_GC_COPY_RESERVE_PAGES: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
+lazy_static! {
+    pub(crate) static ref GLOBAL_BLOCK_SET: std::sync::Mutex<std::collections::HashSet<crate::util::Address>> =
+        std::sync::Mutex::new(std::collections::HashSet::new());
+}

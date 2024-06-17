@@ -134,6 +134,53 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         >(tls, self, &self.immix_space, mmtk)
     }
 
+    #[cfg(feature = "thread_local_gc")]
+    fn do_thread_local_defrag(
+        &'static self,
+        _tls: VMMutatorThread,
+        _mmtk: &'static crate::MMTK<VM>,
+    ) {
+        ThreadlocalPrepare::<VM>::new(_tls).execute();
+
+        //Scan mutator
+        thread_local_gc_work::ScanMutator::<
+            VM,
+            thread_local_gc_work::PlanThreadlocalObjectGraphTraversalClosure<
+                VM,
+                Immix<VM>,
+                { crate::policy::immix::TRACE_THREAD_LOCAL_DEFRAG },
+            >,
+        >::new(_tls, _mmtk)
+        .execute();
+        // cannot do release since finalizer has not been executed yet
+        // objects may be resurrected
+    }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    fn defrag_mutator_required(&self, tls: VMMutatorThread) -> bool {
+        use crate::vm::ActivePlan;
+        use std::borrow::Borrow;
+
+        let mutator = VM::VMActivePlan::mutator(tls);
+        let allocators: &crate::util::alloc::allocators::Allocators<VM> =
+            mutator.allocators.borrow();
+
+        let immix_allocator = unsafe {
+            allocators.get_allocator(mutator.config.allocator_mapping[AllocationSemantics::Default])
+        }
+        .downcast_ref::<crate::util::alloc::ImmixAllocator<VM>>()
+        .unwrap();
+        if immix_allocator.local_reusable_blocks.len() > 0 {
+            println!(
+                "mutator: {}, local reusable blocks: {}",
+                mutator.mutator_id,
+                immix_allocator.local_reusable_blocks.len()
+            );
+        }
+
+        false
+    }
+
     fn get_allocator_mapping(&self) -> &'static EnumMap<AllocationSemantics, AllocatorSelector> {
         &ALLOCATOR_MAPPING
     }
@@ -281,7 +328,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     #[cfg(feature = "thread_local_gc_copying_stats")]
-    fn print_heap_stats(&self, mutator: &mut crate::Mutator<VM>) {
+    fn print_local_heap_stats(&self, mutator: &mut crate::Mutator<VM>) {
         use std::{fs::OpenOptions, io::Write};
 
         use crate::{
@@ -308,7 +355,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             .unwrap();
         writeln!(
             file,
-            "{}, {}, {}, {}, {}, {}, {}, {}, {}, {}",
+            "{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}",
             TOTAL_IMMIX_ALLOCATION_BYTES.load(Ordering::SeqCst),
             GLOBAL_REQUEST_ID.load(Ordering::SeqCst),
             mutator.mutator_id,
@@ -317,6 +364,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             result.2,
             result.3,
             result.4,
+            result.5,
             live_los_pages,
             local_blocks_count
         )
@@ -325,11 +373,26 @@ impl<VM: VMBinding> Plan for Immix<VM> {
 
     #[cfg(feature = "thread_local_gc_copying_stats")]
     fn print_global_heap_stats(&self) {
+        use crate::util::alloc::ImmixAllocator;
+        use crate::vm::ActivePlan;
+        use crate::{policy::immix::TOTAL_IMMIX_ALLOCATION_BYTES, util::GLOBAL_REQUEST_ID};
         use std::{fs::OpenOptions, io::Write};
 
-        use crate::{policy::immix::TOTAL_IMMIX_ALLOCATION_BYTES, util::GLOBAL_REQUEST_ID};
-
         let result = self.immix_space.print_immixspace_stats();
+        let mut local_resuable_blocks = 0;
+        for mutator in VM::VMActivePlan::mutators() {
+            let allocator = unsafe {
+                mutator
+                    .allocators
+                    .get_allocator_mut(
+                        mutator.config.allocator_mapping[AllocationSemantics::Default],
+                    )
+                    .downcast_mut::<ImmixAllocator<VM>>()
+                    .unwrap()
+            };
+            local_resuable_blocks += allocator.local_reusable_blocks.len()
+        }
+
         let live_los_pages = self.common().print_heap_stats();
 
         let mut file = OpenOptions::new()
@@ -339,7 +402,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             .unwrap();
         writeln!(
             file,
-            "{}, {}, {}, {}, {}, {}, {}, {}",
+            "{}, {}, {}, {}, {}, {}, {}, {}, {}|{}",
             TOTAL_IMMIX_ALLOCATION_BYTES.load(Ordering::SeqCst),
             GLOBAL_REQUEST_ID.load(Ordering::SeqCst),
             result.0,
@@ -347,7 +410,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             result.2,
             result.3,
             result.4,
+            result.5,
             live_los_pages,
+            local_resuable_blocks
         )
         .unwrap();
     }

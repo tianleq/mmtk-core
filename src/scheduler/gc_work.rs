@@ -89,6 +89,11 @@ impl<C: GCWorkContext> GCWork<C::VM> for Prepare<C> {
             // }
         }
 
+        #[cfg(feature = "thread_local_gc_copying_stats")]
+        {
+            // Now all mutators have been stopped, it is safe to collect stats
+            mmtk.print_global_heap_stats();
+        }
         trace!("Prepare Global");
         // We assume this is the only running work packet that accesses plan at the point of execution
         let plan_mut: &mut C::PlanType = unsafe { &mut *(self.plan as *const _ as *mut _) };
@@ -96,6 +101,7 @@ impl<C: GCWorkContext> GCWork<C::VM> for Prepare<C> {
 
         if plan_mut.constraints().needs_prepare_mutator {
             for mutator in <C::VM as VMBinding>::VMActivePlan::mutators() {
+                if plan_mut.defrag_mutator_required(mutator.mutator_tls) {}
                 mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
                     .add(PrepareMutator::<C::VM>::new(mutator));
             }
@@ -112,18 +118,7 @@ impl<C: GCWorkContext> GCWork<C::VM> for Prepare<C> {
                     .add_candidates(mutator.finalizable_candidates.drain(0..))
             }
         }
-        #[cfg(feature = "thread_local_gc")]
-        {
-            // move finalizable candidates from local buffer to the global buffer
-            // rust's borrow checker is not happy if putting the following in the previous loop
-            // it is safe because those two mutable operations are doing different things
-            for mutator in <C::VM as VMBinding>::VMActivePlan::mutators() {
-                mmtk.finalizable_processor
-                    .lock()
-                    .unwrap()
-                    .add_candidates(mutator.finalizable_candidates.drain(0..))
-            }
-        }
+
         for w in &mmtk.scheduler.worker_group.workers_shared {
             let result = w.designated_work.push(Box::new(PrepareCollector));
             debug_assert!(result.is_ok());

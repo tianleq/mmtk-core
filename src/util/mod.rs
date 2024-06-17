@@ -165,8 +165,7 @@ pub(crate) static GLOBAL_GC_STATISTICS: std::sync::Mutex<GCStatistics> =
         number_of_free_lines_in_local_reusable_blocks: 0,
     });
 
-#[cfg(feature = "debug_thread_local_gc_copying")]
-pub(crate) static GLOBAL_GC_ID: AtomicU32 = AtomicU32::new(1);
+pub(crate) static GLOBAL_GC_ID: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(feature = "thread_local_gc_copying_stats")]
 pub(crate) static GLOBAL_REQUEST_ID: AtomicU32 = AtomicU32::new(0);

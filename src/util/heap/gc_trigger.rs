@@ -83,7 +83,44 @@ impl<VM: VMBinding> GCTrigger<VM> {
             .policy
             .is_gc_required(space_full, space.map(|s| SpaceStats::new(s)), plan)
         {
-            info!(
+            #[cfg(feature = "thread_local_gc_copying_stats")]
+            let mut overflow = false;
+            #[cfg(feature = "thread_local_gc_copying_stats")]
+            {
+                use crate::util::alloc::ImmixAllocator;
+                use crate::vm::ActivePlan;
+                use crate::AllocationSemantics;
+
+                let mutator = VM::VMActivePlan::mutator(_tls);
+                let allocator = unsafe {
+                    mutator
+                        .allocators
+                        .get_allocator_mut(
+                            mutator.config.allocator_mapping[AllocationSemantics::Default],
+                        )
+                        .downcast_mut::<ImmixAllocator<VM>>()
+                        .unwrap()
+                };
+                if allocator.hot {
+                    overflow = true;
+                }
+            }
+            #[cfg(feature = "thread_local_gc_copying_stats")]
+            warn!(
+                "[POLL] {}{} ({}/{} pages {} pages reserved for collection) | overflow: {}",
+                if let Some(space) = space {
+                    format!("{}: ", space.get_name())
+                } else {
+                    "".to_string()
+                },
+                "Triggering collection",
+                plan.get_reserved_pages(),
+                plan.get_total_pages(),
+                plan.get_collection_reserved_pages(),
+                overflow
+            );
+            #[cfg(not(feature = "thread_local_gc_copying_stats"))]
+            warn!(
                 "[POLL] {}{} ({}/{} pages {} pages reserved for collection)",
                 if let Some(space) = space {
                     format!("{}: ", space.get_name())
@@ -226,9 +263,11 @@ impl<VM: VMBinding> GCTriggerPolicy<VM> for FixedHeapSizeTrigger {
     }
 
     fn on_gc_start(&self, _mmtk: &'static MMTK<VM>) {
-        #[cfg(feature = "thread_local_gc_copying_stats")]
+        #[cfg(debug_assertions)]
         {
-            _mmtk.print_global_heap_stats();
+            use crate::policy::immix::GLOBAL_BLOCK_SET;
+            crate::util::GLOBAL_GC_ID.fetch_add(1, Ordering::SeqCst);
+            GLOBAL_BLOCK_SET.lock().unwrap().clear();
         }
     }
 

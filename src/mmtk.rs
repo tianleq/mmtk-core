@@ -369,7 +369,7 @@ impl<VM: VMBinding> MMTK<VM> {
         }
 
         if force || !*self.options.ignore_system_gc && VM::VMCollection::is_collection_enabled() {
-            info!("User triggering collection");
+            warn!("User triggering collection");
             if exhaustive {
                 if let Some(gen) = self.get_plan().generational() {
                     gen.force_full_heap_collection();
@@ -459,7 +459,7 @@ impl<VM: VMBinding> MMTK<VM> {
 
     #[cfg(feature = "thread_local_gc_copying_stats")]
     pub fn print_heap_stats(&self, _mutator: &mut crate::Mutator<VM>) {
-        self.get_plan().print_heap_stats(_mutator);
+        self.get_plan().print_local_heap_stats(_mutator);
     }
 
     #[cfg(feature = "thread_local_gc_copying_stats")]

@@ -64,6 +64,7 @@ pub fn immix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMW
         los_allocator.release();
         // Force a local gc in the next polling
         mutator.local_allocation_size = u32::MAX as usize;
+        mutator.thread_local_gc_status = 0;
     }
 }
 
@@ -142,6 +143,19 @@ fn immix_mutator_thread_local_post_copy<VM: VMBinding>(
         .thread_local_post_copy(mutator, obj, bytes)
 }
 
+#[cfg(feature = "thread_local_gc")]
+pub fn immix_mutator_thread_local_defrag_prepare<VM: VMBinding>(mutator: &mut Mutator<VM>) {
+    let allocators: &mut Allocators<VM> = mutator.allocators.borrow_mut();
+
+    let immix_allocator = unsafe {
+        allocators.get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
+    }
+    .downcast_mut::<ImmixAllocator<VM>>()
+    .unwrap();
+
+    immix_allocator.thread_local_defrag_prepare();
+}
+
 pub(in crate::plan) const RESERVED_ALLOCATORS: ReservedAllocators = ReservedAllocators {
     n_immix: 1,
     ..ReservedAllocators::DEFAULT
@@ -177,6 +191,8 @@ pub fn create_immix_mutator<VM: VMBinding>(
         thread_local_alloc_copy_func: &immix_mutator_thread_local_alloc_copy,
         #[cfg(feature = "thread_local_gc_copying")]
         thread_local_post_copy_func: &immix_mutator_thread_local_post_copy,
+        #[cfg(feature = "thread_local_gc_copying")]
+        thread_local_defrag_prepare_func: &immix_mutator_thread_local_defrag_prepare,
     };
     let mutator_id = crate::util::MUTATOR_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);
     #[cfg(feature = "public_bit")]

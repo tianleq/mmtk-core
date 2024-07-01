@@ -169,8 +169,6 @@ impl Line {
     #[cfg(feature = "thread_local_gc")]
     /// Mark all lines the object is spanned to, but keep public lines untouched
     pub fn thread_local_mark_lines_for_object<VM: VMBinding>(object: ObjectReference, state: u8) {
-        // local gc will never mark a public object
-        debug_assert!(crate::util::metadata::public_bit::is_public::<VM>(object) == false);
         Self::mark_lines_for_object_impl::<VM>(object, state);
     }
 

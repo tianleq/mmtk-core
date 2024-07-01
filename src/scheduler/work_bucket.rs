@@ -234,6 +234,8 @@ pub enum WorkBucketStage {
     /// Clear the VO bit metadata.  Mainly used by ImmixSpace.
     #[cfg(feature = "vo_bit")]
     ClearVOBits,
+    #[cfg(feature = "thread_local_gc_copying")]
+    DefragMutator,
     /// Compute the transtive closure starting from transitively pinning (TP) roots following only strong references.
     /// No objects in this closure are allow to move.
     TPinningClosure,

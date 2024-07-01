@@ -147,53 +147,12 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     // This function is only called after a global gc
     #[cfg(feature = "thread_local_gc")]
     pub fn release(&mut self) {
+        // #[cfg(feature = "thread_local_gc_copying")]
+        // use crate::policy::immix::LOCAL_GC_COPY_RESERVE_PAGES;
         #[cfg(feature = "thread_local_gc_copying")]
-        use crate::policy::immix::LOCAL_GC_COPY_RESERVE_PAGES;
-
-        // Reset local line mark state
-        // self.local_line_mark_state = self.space.line_mark_state.load(atomic::Ordering::Acquire);
-        // self.local_unavailable_line_mark_state = self.local_line_mark_state;
-
-        // #[cfg(debug_assertions)]
-        // {
-        //     use crate::policy::immix::GLOBAL_BLOCK_SET;
-        //     let mut set = GLOBAL_BLOCK_SET.lock().unwrap();
-        //     for sparse in &self.local_reusable_blocks.sparse {
-        //         assert!(
-        //             set.insert(sparse.start()),
-        //             "sparse block: {:?} already exists",
-        //             sparse
-        //         );
-        //         if self.local_reusable_blocks.dense.contains(sparse) {
-        //             panic!("block: {:?} exists in both dense and sparse", sparse);
-        //         }
-        //     }
-
-        //     for dense in &self.local_reusable_blocks.dense {
-        //         assert!(
-        //             set.insert(dense.start()),
-        //             "dense block: {:?} already exists",
-        //             dense
-        //         );
-        //         if self.local_reusable_blocks.sparse.contains(dense) {
-        //             panic!("block: {:?} exists in both dense and sparse", dense);
-        //         }
-        //     }
-
-        //     for block in &(*self.local_blocks) {
-        //         assert!(
-        //             set.insert(block.start()),
-        //             "block: {:?} already exists",
-        //             block
-        //         );
-        //         if self.local_reusable_blocks.dense.contains(block) {
-        //             panic!("dense block: {:?} exists in local list", block);
-        //         }
-        //         if self.local_reusable_blocks.sparse.contains(block) {
-        //             panic!("sparse block: {:?} exists in local list", block);
-        //         }
-        //     }
-        // }
+        {
+            self.copy = false;
+        }
 
         // clear local reusable block list so that it can be rebuilt
         self.local_blocks
@@ -293,12 +252,33 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 } else {
                     // always add non-reusable block back
                     debug_assert!(block.get_state() == BlockState::Unmarked);
-                    #[cfg(debug_assertions)]
-                    {
+
+                    if block.is_block_dirty() {
+                        #[cfg(debug_assertions)]
                         debug_assert!(block.owner() == self.mutator_id);
-                        block.set_owner(self.mutator_id);
+
+                        blocks.push(block);
+                    } else {
+                        #[cfg(debug_assertions)]
+                        {
+                            // here the block is full, and if the block is not dirty,
+                            // it must be a public block and the current mutator
+                            // must have just done a defrag
+                            debug_assert!(
+                                block.is_block_published(),
+                                "block: {:?} without dirty bit set is not published",
+                                block
+                            );
+                            debug_assert!(
+                                block.are_lines_public(),
+                                "fully occupied block: {:?} contains private lines",
+                                block
+                            );
+                            block.all_public_lines_marked_and_free_lines_unmarked(
+                                self.space.line_mark_state.load(atomic::Ordering::Acquire),
+                            );
+                        }
                     }
-                    blocks.push(block);
                 }
 
                 // In a non-moving setting, there is no public reusable blocks
@@ -313,18 +293,29 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     }
                 }
             }
+            #[cfg(debug_assertions)]
+            {
+                if block.get_state() != BlockState::Unallocated && !block.is_block_published() {
+                    assert!(
+                        block.is_block_dirty(),
+                        "block: {:?}, state: {:?}",
+                        block,
+                        block.get_state()
+                    );
+                }
+            }
         }
         // keep local blocks list accurate
         self.local_blocks.extend(blocks);
 
         // update the local gc copy reserve
-        #[cfg(feature = "thread_local_gc_copying")]
-        {
-            LOCAL_GC_COPY_RESERVE_PAGES.fetch_max(
-                Block::PAGES * (self.local_blocks.len() + self.local_reusable_blocks.len()),
-                atomic::Ordering::SeqCst,
-            );
-        }
+        // #[cfg(feature = "thread_local_gc_copying")]
+        // {
+        //     LOCAL_GC_COPY_RESERVE_PAGES.fetch_max(
+        //         Block::PAGES * (self.local_blocks.len() + self.local_reusable_blocks.len()),
+        //         atomic::Ordering::SeqCst,
+        //     );
+        // }
 
         // verify thread local block list
         #[cfg(debug_assertions)]
@@ -355,6 +346,14 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     block.owner(),
                     self.mutator_id,
                 );
+                debug_assert!(block.is_block_dirty());
+            }
+            if self.local_reusable_blocks.len() > 32 {
+                println!(
+                    "after gc | mutator: {:?} local reusable blocks: {}",
+                    self.mutator_id,
+                    self.local_reusable_blocks.len()
+                );
             }
         }
     }
@@ -374,6 +373,32 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     #[cfg(feature = "debug_thread_local_gc_copying")]
     pub fn local_reusable_blocks_size(&self) -> usize {
         self.local_reusable_blocks.len()
+    }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub fn thread_local_defrag_prepare(&mut self) {
+        debug_assert!(VM::VMActivePlan::is_mutator(self.tls));
+        self.copy = true;
+
+        // move local reusable blocks to local blocks
+        self.local_blocks
+            .extend(self.local_reusable_blocks.dense.drain(..));
+        self.local_blocks
+            .extend(self.local_reusable_blocks.sparse.drain(..));
+
+        for &block in self.local_blocks.iter() {
+            debug_assert!(block.get_state() == BlockState::Unmarked);
+            // all local blocks should be defrag source
+            block.set_as_defrag_source(true);
+            // dirty bit will be set again later on blocks containing private objects
+            block.reset_dirty();
+        }
+        #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
+        self.space
+            .mutator_in_defrag
+            .lock()
+            .unwrap()
+            .push(self.mutator_id);
     }
 
     #[cfg(feature = "thread_local_gc")]
@@ -427,16 +452,11 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             }
 
             // Clear forwarding bits if necessary.
-            if is_defrag_source {
-                // Note that `ImmixSpace::is_live` depends on the fact that we only clear side
-                // forwarding bits for defrag sources.  If we change the code here, we need to
-                // make sure `ImmixSpace::is_live` is fixed, too.
-                if let crate::util::metadata::MetadataSpec::OnSide(side) =
-                    *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC
-                {
-                    // Clear on-the-side forwarding bits.
-                    side.bzero_metadata(block.start(), Block::BYTES);
-                }
+            if let crate::util::metadata::MetadataSpec::OnSide(side) =
+                *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC
+            {
+                // Clear on-the-side forwarding bits.
+                side.bzero_metadata(block.start(), Block::BYTES);
             }
 
             // clear line mark state (public lines have line level public bit set)
@@ -457,10 +477,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         }
         #[cfg(feature = "debug_thread_local_gc_copying")]
         let mutator = VM::VMActivePlan::mutator(VMMutatorThread(self.tls));
-        // #[cfg(feature = "debug_thread_local_gc_copying")]
-        // {
-        //     mutator.stats.number_of_blocks_acquired_for_evacuation -= self.local_free_blocks.len();
-        // }
 
         // TODO defrag in local gc is different, needs to be revisited
         let mut histogram = self.space.defrag.new_histogram();
@@ -502,6 +518,15 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 {
                     debug_assert!(block.is_block_dirty());
                     let published = block.is_block_published();
+
+                    // After a local gc, public blocks should contain public
+                    // objects only, so those blocks are no longer ditry
+                    if published {
+                        block.reset_dirty();
+                        #[cfg(debug_assertions)]
+                        block.set_owner(Block::ANONYMOUS_OWNER);
+                    }
+
                     if block.get_state().is_reusable() {
                         #[cfg(debug_assertions)]
                         {
@@ -514,11 +539,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         }
                         let is_block_sparse = block.is_block_sparse();
                         if published {
-                            #[cfg(debug_assertions)]
-                            // public reusable block
-                            block.set_owner(u32::MAX);
                             // block containing only public objects are no longer dirty
-                            block.reset_dirty();
+                            // block.reset_dirty();
                             if is_block_sparse {
                                 global_sparse_reusable_blocks.push(block);
                             } else {
@@ -541,10 +563,33 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                             }
                         }
                     } else {
-                        // block is not reusable, add to local block list
-                        #[cfg(debug_assertions)]
-                        debug_assert!(block.owner() == self.mutator_id);
-                        blocks.push(block);
+                        // block is not reusable, add to local block list if it is not public
+                        // a fully occupied public block cannot be reused until a global gc
+                        // occurs, so it is meaningless keep it in the local block list
+                        if !published {
+                            #[cfg(debug_assertions)]
+                            {
+                                debug_assert!(
+                                    block.is_block_dirty(),
+                                    "block: {:?} is not dirty",
+                                    block
+                                );
+                                debug_assert!(block.owner() == self.mutator_id);
+                            }
+
+                            blocks.push(block);
+                        } else {
+                            #[cfg(debug_assertions)]
+                            {
+                                assert!(
+                                    block.are_lines_public(),
+                                    "fully occupied public block: {:?} contains private lines",
+                                    block
+                                );
+                                assert!(block.is_block_dirty() == false);
+                                debug_assert_eq!(block.owner(), Block::ANONYMOUS_OWNER);
+                            }
+                        }
                     }
                 }
             }
@@ -715,9 +760,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
     #[cfg(feature = "thread_local_gc")]
     pub fn alloc_copy(&mut self, size: usize, align: usize, offset: usize) -> Address {
+        debug_assert!(self.copy, "calling alloc_copy with self.copy == false");
         let is_mutator = self.mutator_id != u32::MAX;
         let clean_page_only = is_mutator;
-        debug_assert!(self.copy, "calling alloc_copy with self.copy == false");
 
         #[cfg(not(feature = "extra_header"))]
         {
@@ -771,19 +816,13 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
     #[cfg(feature = "thread_local_gc_copying")]
     pub fn thread_local_gc_reserve_pages(&mut self) {
-        use crate::policy::immix::LOCAL_GC_COPY_RESERVE_PAGES;
-        use atomic::Ordering;
-
         let number_of_clean_blocks =
-            LOCAL_GC_COPY_RESERVE_PAGES.load(Ordering::SeqCst) / Block::PAGES;
+            self.context.options.get_thread_local_heap_size() / Block::BYTES;
         debug_assert!(
             VM::VMActivePlan::is_mutator(self.tls),
             "only mutator doing local gc should call thread_local_gc_reserve_pages"
         );
-        debug_assert!(
-            LOCAL_GC_COPY_RESERVE_PAGES.load(Ordering::SeqCst) % Block::PAGES == 0,
-            "number of copy reserve pages is not a multiply of blocks"
-        );
+
         #[cfg(feature = "debug_thread_local_gc_copying")]
         {
             let mutator = VM::VMActivePlan::mutator(VMMutatorThread(self.tls));
@@ -796,13 +835,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             .get_clean_blocks(self.tls, false, number_of_clean_blocks)
         {
             Some(blocks) => {
-                #[cfg(feature = "debug_thread_local_gc_copying")]
-                {
-                    for b in &blocks {
-                        debug_assert!(b.is_block_published() == false);
-                    }
-                }
-
                 self.local_free_blocks.extend(blocks);
             }
             None => panic!("does not have enough space to do evacuation during local gc"),
@@ -1069,6 +1101,19 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 // Find recyclable lines. Update the bump allocation cursor and limit.
                 self.bump_pointer.cursor = start_line.start();
                 self.bump_pointer.limit = end_line.start();
+
+                #[cfg(feature = "thread_local_gc_copying")]
+                {
+                    // conservatively increase the local allocation size
+                    if !self.copy {
+                        debug_assert_ne!(self.mutator_id, u32::MAX);
+                        debug_assert!(VM::VMActivePlan::is_mutator(self.tls));
+                        let mutator =
+                            VM::VMActivePlan::mutator(crate::util::VMMutatorThread(self.tls));
+                        mutator.local_allocation_size += end_line.start() - start_line.start();
+                    }
+                }
+
                 trace!(
                     "{:?}: acquire_recyclable_lines -> {:?} [{:?}, {:?}) {:?}",
                     self.tls,
@@ -1183,6 +1228,14 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 // Find recyclable lines. Update the bump allocation cursor and limit.
                 self.large_bump_pointer.cursor = start_line.start();
                 self.large_bump_pointer.limit = end_line.start();
+
+                #[cfg(feature = "thread_local_gc_copying")]
+                {
+                    // only mutator phase use sparse reusable blocks
+                    debug_assert!(VM::VMActivePlan::is_mutator(self.tls));
+                    let mutator = VM::VMActivePlan::mutator(crate::util::VMMutatorThread(self.tls));
+                    mutator.local_allocation_size += end_line.start() - start_line.start();
+                }
 
                 trace!(
                     "{:?}: acquire_sparse_recyclable_lines -> {:?} [{:?}, {:?}) {:?}",
@@ -1395,8 +1448,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                             }
                             // add reusable block to local block list, otherwise, those blocks
                             // leaked and local gc cannot reuse them
-                            block.taint();
                             self.local_blocks.push(block);
+                            block.taint();
                             // block.set_hole_size(0);
                             true
                         }
@@ -1416,7 +1469,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 {
                     debug_assert!(block.is_block_published());
                     debug_assert!(block.is_block_sparse() == false);
-                    debug_assert!(block.owner() == u32::MAX);
+                    debug_assert!(block.owner() == Block::ANONYMOUS_OWNER);
                     debug_assert!(
                         block.is_block_dirty() == false,
                         "global reusable block: {:?} has dirty bit set",
@@ -1441,27 +1494,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 if block.get_hole_size() >= lines_required {
                     // Set the hole-searching cursor to the start of this block.
                     self.sparse_line = Some(block.start_line());
-                    // #[cfg(debug_assertions)]
-                    // {
-                    //     use crate::util::GLOBAL_GC_ID;
-                    //     warn!(
-                    //         "GC: {}, mutator: {:?} acquire a global sparse block: {:?}",
-                    //         GLOBAL_GC_ID.load(atomic::Ordering::SeqCst),
-                    //         self.mutator_id,
-                    //         block
-                    //     );
-                    // }
 
                     return Some(block);
                 } else {
-                    // #[cfg(debug_assertions)]
-                    // {
-                    //     use crate::util::GLOBAL_GC_ID;
-                    //     warn!("GC: {}, sparse block: {:?} with hole size: {} does not fit {} lines required, add it to local list",
-                    //           GLOBAL_GC_ID.load(atomic::Ordering::SeqCst), block, block.get_hole_size(), lines_required);
-                    // }
-
-                    block.taint();
+                    // block.taint();
                     self.local_reusable_blocks.push_sparse_block(block);
                 }
             } else {
@@ -1474,18 +1510,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     fn acquire_local_sparse_reusable_block(&mut self, lines_required: u8) -> Option<Block> {
         let mut result = None;
         let length = self.local_reusable_blocks.sparse_block_len();
-
-        // #[cfg(debug_assertions)]
-        // {
-        //     let mut set = std::collections::HashSet::new();
-        //     for sparse in &self.local_reusable_blocks.sparse {
-        //         assert!(
-        //             set.insert(sparse.start()),
-        //             "sparse block: {:?} already exists",
-        //             sparse
-        //         );
-        //     }
-        // }
 
         for i in 0..length {
             let b = self.local_reusable_blocks.sparse.get(i).unwrap();
@@ -1501,19 +1525,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 );
             }
             if b.get_hole_size() >= lines_required {
-                // #[cfg(debug_assertions)]
-                // {
-                //     use crate::util::GLOBAL_GC_ID;
-                //     warn!(
-                //         "GC: {},  mutator: {:?} acquire sparse block: {:?} with hole size: {}, lines_required: {}",
-                //         GLOBAL_GC_ID.load(atomic::Ordering::SeqCst),
-                //         self.mutator_id,
-                //         b,
-                //         b.get_hole_size(),
-                //         lines_required
-                //     );
-                // }
-
                 result = Some(*b);
                 self.local_reusable_blocks.sparse.swap_remove(i);
                 break;
@@ -1538,9 +1549,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 #[cfg(feature = "thread_local_gc")]
                 // add an assertion here, assume collectors can always allocate new blocks
                 assert!(
-                    self.semantic.is_none(),
-                    "collector cannot acquire clean blocks"
+                    self.semantic.is_none() && !self.copy,
+                    "cannot acquire clean blocks to evacuate"
                 );
+
                 Address::ZERO
             }
             Some(block) => {
@@ -1592,11 +1604,11 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                             block.taint();
                             // mutator phase only
                             if !self.copy {
-                                let local_heap_in_pages = Block::PAGES
-                                    * (self.local_blocks.len() + self.local_reusable_blocks.len());
+                                // let local_heap_in_pages = Block::PAGES
+                                //     * (self.local_blocks.len() + self.local_reusable_blocks.len());
 
-                                crate::policy::immix::LOCAL_GC_COPY_RESERVE_PAGES
-                                    .fetch_max(local_heap_in_pages, atomic::Ordering::SeqCst);
+                                // crate::policy::immix::LOCAL_GC_COPY_RESERVE_PAGES
+                                //     .fetch_max(local_heap_in_pages, atomic::Ordering::SeqCst);
 
                                 let mutator = VM::VMActivePlan::mutator(
                                     crate::util::VMMutatorThread(self.tls),
@@ -1653,8 +1665,16 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
             return Some(block);
         }
+        #[cfg(not(feature = "thread_local_gc_copying"))]
+        let tls = self.tls;
+        #[cfg(feature = "thread_local_gc_copying")]
+        let tls = if self.copy {
+            VMThread::UNINITIALIZED
+        } else {
+            self.tls
+        };
 
-        let block = self.immix_space().get_clean_block(self.tls, self.copy);
+        let block = self.immix_space().get_clean_block(tls, self.copy);
         #[cfg(debug_assertions)]
         debug_assert!(
             block.is_none() || block.unwrap().owner() == 0,

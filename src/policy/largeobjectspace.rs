@@ -163,9 +163,19 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM>
         &self,
         mutator: &mut crate::Mutator<VM>,
         object: ObjectReference,
+        _worker: Option<*mut GCWorker<VM>>,
         _copy: Option<CopySemantics>,
     ) -> ThreadlocalTracedObjectType {
-        self.thread_local_trace_object(object, mutator)
+        use super::immix::TRACE_THREAD_LOCAL_DEFRAG;
+
+        if KIND == TRACE_THREAD_LOCAL_DEFRAG {
+            #[cfg(feature = "thread_local_gc_copying")]
+            return self.thread_local_trace_object_defrag(object, mutator);
+            #[cfg(not(feature = "thread_local_gc_copying"))]
+            unreachable!()
+        } else {
+            self.thread_local_trace_object(object, mutator)
+        }
     }
 
     #[cfg(feature = "debug_publish_object")]
@@ -275,6 +285,92 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         ThreadlocalTracedObjectType::Scanned(object)
     }
 
+    #[cfg(feature = "thread_local_gc_copying")]
+    fn thread_local_trace_object_defrag(
+        &self,
+        object: ObjectReference,
+        _mutator: &crate::Mutator<VM>,
+    ) -> ThreadlocalTracedObjectType {
+        // use crate::plan::VectorQueue;
+        // // This is a hack,
+        // let mut queue = VectorQueue::new();
+        // let new_object = self.trace_object(&mut queue, object);
+        // if queue.is_empty() {
+        //     ThreadlocalTracedObjectType::Scanned(new_object)
+        // } else {
+        //     ThreadlocalTracedObjectType::ToBeScanned(new_object)
+        // }
+
+        // during defrag mutator, tracing los object should do the same thing as normal trace
+        self.trace_object_impl(object)
+    }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    // Allow nested-if for this function to make it clear that test_and_mark() is only executed
+    // for the outer condition is met.
+    #[allow(clippy::collapsible_if)]
+    pub fn trace_object<Q: ObjectQueue>(
+        &self,
+        queue: &mut Q,
+        object: ObjectReference,
+    ) -> ObjectReference {
+        match self.trace_object_impl(object) {
+            ThreadlocalTracedObjectType::Scanned(_) => (),
+            ThreadlocalTracedObjectType::ToBeScanned(object) => queue.enqueue(object),
+        }
+        object
+    }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    // Allow nested-if for this function to make it clear that test_and_mark() is only executed
+    // for the outer condition is met.
+    #[allow(clippy::collapsible_if)]
+    pub fn trace_object_impl(&self, object: ObjectReference) -> ThreadlocalTracedObjectType {
+        debug_assert!(!object.is_null());
+        #[cfg(feature = "vo_bit")]
+        debug_assert!(
+            crate::util::metadata::vo_bit::is_vo_bit_set::<VM>(object),
+            "{:x}: VO bit not set",
+            object
+        );
+
+        let nursery_object = self.is_in_nursery(object);
+        trace!(
+            "LOS object {} {} a nursery object",
+            object,
+            if nursery_object { "is" } else { "is not" }
+        );
+        if !self.in_nursery_gc || nursery_object {
+            // Note that test_and_mark() has side effects of
+            // clearing nursery bit/moving objects out of logical nursery
+            if self.test_and_mark(object, self.mark_state) {
+                trace!("LOS object {} is being marked now", object);
+
+                // When enabling thread_local_gc, local/private objects are not in the global tredmill
+                // So only copy public objects
+                if crate::util::metadata::public_bit::is_public::<VM>(object) {
+                    self.treadmill.copy(object, nursery_object);
+                }
+
+                // We just moved the object out of the logical nursery, mark it as unlogged.
+                if nursery_object && self.common.needs_log_bit {
+                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                        .mark_as_unlogged::<VM>(object, Ordering::SeqCst);
+                }
+
+                // queue.enqueue(object);
+                return ThreadlocalTracedObjectType::ToBeScanned(object);
+            } else {
+                trace!(
+                    "LOS object {} is not being marked now, it was marked before",
+                    object
+                );
+            }
+        }
+        ThreadlocalTracedObjectType::Scanned(object)
+    }
+
+    #[cfg(not(feature = "thread_local_gc_copying"))]
     // Allow nested-if for this function to make it clear that test_and_mark() is only executed
     // for the outer condition is met.
     #[allow(clippy::collapsible_if)]
@@ -339,47 +435,34 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     fn sweep_large_pages(&mut self, sweep_nursery: bool) {
         #[cfg(feature = "debug_thread_local_gc_copying")]
         let mut pages = 0;
-        let sweep =
-            |object: ObjectReference,
-             #[cfg(feature = "debug_thread_local_gc_copying")] pages: &mut i32| {
-                #[cfg(feature = "vo_bit")]
-                crate::util::metadata::vo_bit::unset_vo_bit::<VM>(object);
+        let sweep = |object: ObjectReference| {
+            #[cfg(feature = "vo_bit")]
+            crate::util::metadata::vo_bit::unset_vo_bit::<VM>(object);
 
-                #[cfg(feature = "thread_local_gc")]
-                {
-                    debug_assert!(
-                        crate::util::metadata::public_bit::is_public::<VM>(object),
-                        "local los object exists in global los treadmill"
-                    );
-                    crate::util::metadata::public_bit::unset_public_bit::<VM>(object);
-                }
-                let _pages = self
-                    .pr
-                    .release_pages(get_super_page(object.to_object_start::<VM>()));
-                #[cfg(feature = "debug_thread_local_gc_copying")]
-                {
-                    *pages += _pages;
-                }
-                #[cfg(feature = "thread_local_gc_copying_stats")]
-                {
-                    self.live_pages.fetch_sub(_pages as usize, Ordering::SeqCst);
-                }
-            };
+            #[cfg(feature = "thread_local_gc")]
+            {
+                debug_assert!(
+                    crate::util::metadata::public_bit::is_public::<VM>(object),
+                    "local los object exists in global los treadmill"
+                );
+                crate::util::metadata::public_bit::unset_public_bit::<VM>(object);
+            }
+            let _pages = self
+                .pr
+                .release_pages(get_super_page(object.to_object_start::<VM>()));
+
+            #[cfg(feature = "thread_local_gc_copying_stats")]
+            {
+                self.live_pages.fetch_sub(_pages as usize, Ordering::SeqCst);
+            }
+        };
         if sweep_nursery {
             for object in self.treadmill.collect_nursery() {
-                sweep(
-                    object,
-                    #[cfg(feature = "debug_thread_local_gc_copying")]
-                    &mut pages,
-                );
+                sweep(object);
             }
         } else {
             for object in self.treadmill.collect() {
-                sweep(
-                    object,
-                    #[cfg(feature = "debug_thread_local_gc_copying")]
-                    &mut pages,
-                );
+                sweep(object);
             }
         }
 

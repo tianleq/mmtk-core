@@ -5,6 +5,8 @@ use crate::plan::mutator_context::create_space_mapping;
 #[cfg(feature = "thread_local_gc_copying")]
 use crate::plan::mutator_context::generic_thread_local_alloc_copy;
 #[cfg(feature = "thread_local_gc_copying")]
+use crate::plan::mutator_context::generic_thread_local_defrag_prepare;
+#[cfg(feature = "thread_local_gc_copying")]
 use crate::plan::mutator_context::generic_thread_local_post_copy;
 #[cfg(feature = "thread_local_gc")]
 use crate::plan::mutator_context::generic_thread_local_prepare;
@@ -57,6 +59,8 @@ pub fn create_markcompact_mutator<VM: VMBinding>(
         thread_local_alloc_copy_func: &generic_thread_local_alloc_copy,
         #[cfg(feature = "thread_local_gc_copying")]
         thread_local_post_copy_func: &generic_thread_local_post_copy,
+        #[cfg(feature = "thread_local_gc_copying")]
+        thread_local_defrag_prepare_func: &generic_thread_local_defrag_prepare,
     };
 
     Mutator {

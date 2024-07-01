@@ -6,6 +6,8 @@ use crate::plan::barriers::PublicObjectMarkingBarrierSemantics;
 #[cfg(feature = "thread_local_gc_copying")]
 use crate::plan::mutator_context::generic_thread_local_alloc_copy;
 #[cfg(feature = "thread_local_gc_copying")]
+use crate::plan::mutator_context::generic_thread_local_defrag_prepare;
+#[cfg(feature = "thread_local_gc_copying")]
 use crate::plan::mutator_context::generic_thread_local_post_copy;
 #[cfg(feature = "thread_local_gc")]
 use crate::plan::mutator_context::generic_thread_local_prepare;
@@ -79,6 +81,8 @@ pub fn create_ss_mutator<VM: VMBinding>(
         thread_local_alloc_copy_func: &generic_thread_local_alloc_copy,
         #[cfg(feature = "thread_local_gc_copying")]
         thread_local_post_copy_func: &generic_thread_local_post_copy,
+        #[cfg(feature = "thread_local_gc_copying")]
+        thread_local_defrag_prepare_func: &generic_thread_local_defrag_prepare,
     };
 
     let mutator_id = crate::util::MUTATOR_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);

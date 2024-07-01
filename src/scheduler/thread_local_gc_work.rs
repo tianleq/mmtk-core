@@ -1,4 +1,3 @@
-use scheduler::GCWork;
 use scheduler::GCWorker;
 
 use crate::plan::PlanThreadlocalTraceObject;
@@ -67,27 +66,6 @@ impl<VM: VMBinding> ExecuteThreadlocalCollection<VM> {
     }
 }
 
-pub struct ThreadlocalDefrag<VM: VMBinding> {
-    // The mutator reference has static lifetime.
-    // It is safe because the actual lifetime of this work-packet will not exceed the lifetime of a GC.
-    pub mutator: &'static mut Mutator<VM>,
-}
-
-impl<VM: VMBinding> ThreadlocalDefrag<VM> {
-    pub fn new(mutator: &'static mut Mutator<VM>) -> Self {
-        Self { mutator }
-    }
-}
-
-impl<VM: VMBinding> GCWork<VM> for ThreadlocalDefrag<VM> {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        trace!("Defrag Mutator");
-        _mmtk
-            .get_plan()
-            .do_thread_local_defrag(self.mutator.mutator_tls, _mmtk);
-    }
-}
-
 /// The thread-local GC Preparation Work
 
 /// We should only have one such work packet per GC, before any actual GC work starts.
@@ -111,6 +89,26 @@ impl<VM: VMBinding> ThreadlocalPrepare<VM> {
         trace!("Thread local Prepare Mutator");
         let mutator = VM::VMActivePlan::mutator(self.tls);
         mutator.thread_local_prepare();
+    }
+}
+
+pub struct ThreadlocalDefragPrepare<VM: VMBinding> {
+    tls: VMMutatorThread,
+    phantom: PhantomData<VM>,
+}
+
+impl<VM: VMBinding> ThreadlocalDefragPrepare<VM> {
+    pub fn new(tls: VMMutatorThread) -> Self {
+        Self {
+            tls,
+            phantom: PhantomData,
+        }
+    }
+
+    pub fn execute(&mut self) {
+        trace!("Thread local DefragPrepare Mutator");
+        let mutator = VM::VMActivePlan::mutator(self.tls);
+        mutator.thread_local_defrag_prepare();
     }
 }
 
@@ -165,27 +163,33 @@ where
 {
     tls: VMMutatorThread,
     mmtk: &'static MMTK<VM>,
+    worker: Option<*mut GCWorker<VM>>,
     phantom: PhantomData<Closure>,
 }
 
-impl<VM, Closure> ScanMutator<VM, Closure>
+impl<'a, VM, Closure> ScanMutator<VM, Closure>
 where
     VM: VMBinding,
     Closure: ThreadlocalObjectGraphTraversalClosure<VM>,
 {
-    pub fn new(tls: VMMutatorThread, mmtk: &'static MMTK<VM>) -> Self {
+    pub fn new(
+        tls: VMMutatorThread,
+        mmtk: &'static MMTK<VM>,
+        worker: Option<*mut GCWorker<VM>>,
+    ) -> Self {
         Self {
             tls,
             mmtk,
+            worker,
             phantom: PhantomData,
         }
     }
 
     pub fn execute(&mut self) {
         trace!("scan_mutator start");
-        self.mmtk.state.prepare_for_stack_scanning();
+        // self.mmtk.state.prepare_for_stack_scanning();
         let object_graph_traversal =
-            ThreadlocalObjectGraphTraversal::<VM, Closure>::new(self.mmtk, self.tls);
+            ThreadlocalObjectGraphTraversal::<VM, Closure>::new(self.mmtk, self.tls, self.worker);
         VM::VMCollection::scan_mutator(self.tls, object_graph_traversal);
         trace!("scan_mutator end");
     }
@@ -198,6 +202,7 @@ where
 {
     mmtk: &'static MMTK<VM>,
     tls: VMMutatorThread,
+    worker: Option<*mut GCWorker<VM>>,
     phantom: PhantomData<Closure>,
 }
 
@@ -207,19 +212,24 @@ where
     Closure: ThreadlocalObjectGraphTraversalClosure<VM>,
 {
     fn traverse_from_roots(&mut self, root_slots: Vec<VM::VMEdge>) {
-        Closure::new(self.mmtk, self.tls, Some(root_slots)).do_closure();
+        Closure::new(self.mmtk, self.tls, Some(root_slots), self.worker).do_closure();
     }
 }
 
-impl<VM, Closure> ThreadlocalObjectGraphTraversal<VM, Closure>
+impl<'a, VM, Closure> ThreadlocalObjectGraphTraversal<VM, Closure>
 where
     VM: VMBinding,
     Closure: ThreadlocalObjectGraphTraversalClosure<VM>,
 {
-    pub fn new(mmtk: &'static MMTK<VM>, tls: VMMutatorThread) -> Self {
+    pub fn new(
+        mmtk: &'static MMTK<VM>,
+        tls: VMMutatorThread,
+        worker: Option<*mut GCWorker<VM>>,
+    ) -> Self {
         Self {
             mmtk,
             tls,
+            worker,
             phantom: PhantomData,
         }
     }
@@ -233,6 +243,7 @@ pub trait ThreadlocalObjectGraphTraversalClosure<VM: VMBinding>: EdgeVisitor<VM:
         mmtk: &'static MMTK<VM>,
         tls: VMMutatorThread,
         root_slots: Option<Vec<VM::VMEdge>>,
+        worker: Option<*mut GCWorker<VM>>,
     ) -> Self;
 }
 
@@ -246,9 +257,10 @@ pub struct PlanThreadlocalObjectGraphTraversalClosure<
     edge_buffer: VecDeque<VM::VMEdge>,
     #[cfg(feature = "debug_publish_object")]
     source_buffer: VecDeque<ObjectReference>,
+    worker: Option<*mut GCWorker<VM>>,
 }
 
-impl<VM, P, const KIND: TraceKind> ThreadlocalObjectGraphTraversalClosure<VM>
+impl<'a, VM, P, const KIND: TraceKind> ThreadlocalObjectGraphTraversalClosure<VM>
     for PlanThreadlocalObjectGraphTraversalClosure<VM, P, KIND>
 where
     VM: VMBinding,
@@ -258,6 +270,7 @@ where
         mmtk: &'static MMTK<VM>,
         tls: VMMutatorThread,
         root_slots: Option<Vec<VM::VMEdge>>,
+        worker: Option<*mut GCWorker<VM>>,
     ) -> Self {
         let mut edge_buffer = VecDeque::with_capacity(4096);
         #[cfg(feature = "debug_publish_object")]
@@ -279,6 +292,7 @@ where
             edge_buffer,
             #[cfg(feature = "debug_publish_object")]
             source_buffer,
+            worker,
         }
     }
 
@@ -299,18 +313,23 @@ where
                 continue;
             }
             #[cfg(not(feature = "debug_publish_object"))]
-            let new_object = match self.plan.thread_local_trace_object::<KIND>(mutator, object) {
-                Scanned(new_object) => new_object,
-                ToBeScanned(new_object) => {
-                    VM::VMScanning::scan_object(
-                        VMWorkerThread(VMThread::UNINITIALIZED),
-                        new_object,
-                        self,
-                    );
-                    self.plan.thread_local_post_scan_object(mutator, new_object);
-                    new_object
-                }
-            };
+            let new_object =
+                match self
+                    .plan
+                    .thread_local_trace_object::<KIND>(mutator, object, self.worker)
+                {
+                    Scanned(new_object) => new_object,
+                    ToBeScanned(new_object) => {
+                        VM::VMScanning::scan_object(
+                            VMWorkerThread(VMThread::UNINITIALIZED),
+                            new_object,
+                            self,
+                        );
+                        self.plan
+                            .thread_local_post_scan_object::<KIND>(mutator, new_object);
+                        new_object
+                    }
+                };
 
             #[cfg(feature = "debug_publish_object")]
             let new_object = match self
@@ -374,26 +393,33 @@ where
         debug_assert!(!object.is_null(), "object should not be null");
         let mutator = VM::VMActivePlan::mutator(self.tls);
 
+        debug_assert!(self.worker.is_none());
+
         #[cfg(not(feature = "debug_publish_object"))]
-        let new_object = match self.plan.thread_local_trace_object::<KIND>(mutator, object) {
-            Scanned(new_object) => {
-                debug_assert!(
-                    object.is_live(),
-                    "object: {:?} is supposed to be alive.",
-                    object
-                );
-                new_object
-            }
-            ToBeScanned(new_object) => {
-                VM::VMScanning::scan_object(
-                    VMWorkerThread(VMThread::UNINITIALIZED),
-                    new_object,
-                    self,
-                );
-                self.plan.thread_local_post_scan_object(mutator, new_object);
-                new_object
-            }
-        };
+        let new_object =
+            match self
+                .plan
+                .thread_local_trace_object::<KIND>(mutator, object, self.worker)
+            {
+                Scanned(new_object) => {
+                    debug_assert!(
+                        object.is_live(),
+                        "object: {:?} is supposed to be alive.",
+                        object
+                    );
+                    new_object
+                }
+                ToBeScanned(new_object) => {
+                    VM::VMScanning::scan_object(
+                        VMWorkerThread(VMThread::UNINITIALIZED),
+                        new_object,
+                        self,
+                    );
+                    self.plan
+                        .thread_local_post_scan_object::<KIND>(mutator, new_object);
+                    new_object
+                }
+            };
 
         #[cfg(feature = "debug_publish_object")]
         let new_object = match self.plan.thread_local_trace_object::<KIND>(
@@ -427,17 +453,21 @@ where
 
     fn do_object_tracing(&mut self, object: ObjectReference) -> ObjectReference {
         let mutator = VM::VMActivePlan::mutator(self.tls);
-
+        debug_assert!(self.worker.is_none());
         #[cfg(not(feature = "debug_publish_object"))]
-        let new_object = match self.plan.thread_local_trace_object::<KIND>(mutator, object) {
-            Scanned(new_object) => new_object,
-            _ => {
-                panic!(
-                    "live object: {:?} must have been traced/scanned already",
-                    object
-                );
-            }
-        };
+        let new_object =
+            match self
+                .plan
+                .thread_local_trace_object::<KIND>(mutator, object, self.worker)
+            {
+                Scanned(new_object) => new_object,
+                _ => {
+                    panic!(
+                        "live object: {:?} must have been traced/scanned already",
+                        object
+                    );
+                }
+            };
 
         #[cfg(feature = "debug_publish_object")]
         let new_object = match self.plan.thread_local_trace_object::<KIND>(
@@ -515,7 +545,7 @@ where
 
     pub fn do_finalization(&self) {
         let mutator = VM::VMActivePlan::mutator(self.tls);
-        let mut closure = Closure::new(self.mmtk, self.tls, None);
+        let mut closure = Closure::new(self.mmtk, self.tls, None, None);
         let mut ready_for_finalize = vec![];
         for mut f in mutator
             .finalizable_candidates

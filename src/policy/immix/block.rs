@@ -267,6 +267,16 @@ impl Block {
     }
 
     #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
+    pub fn are_lines_public(&self) -> bool {
+        for line in self.lines() {
+            if !line.is_line_published() {
+                return false;
+            }
+        }
+        true
+    }
+
+    #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
     pub fn all_public_lines_marked_and_free_lines_unmarked(&self, state: u8) {
         if !self.is_block_published() {
             // trivially true for private block
@@ -690,6 +700,8 @@ impl Block {
                             // in the same block, only blocks that never acquired
                             // by mutator can be reused by all mutators
                             if !self.is_block_dirty() {
+                                #[cfg(debug_assertions)]
+                                self.set_owner(Self::ANONYMOUS_OWNER);
                                 if is_block_sparse {
                                     space.sparse_reusable_blocks.push(*self);
                                 } else {

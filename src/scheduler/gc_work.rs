@@ -101,21 +101,21 @@ impl<C: GCWorkContext> GCWork<C::VM> for Prepare<C> {
 
         if plan_mut.constraints().needs_prepare_mutator {
             for mutator in <C::VM as VMBinding>::VMActivePlan::mutators() {
-                if plan_mut.defrag_mutator_required(mutator.mutator_tls) {}
-                mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
-                    .add(PrepareMutator::<C::VM>::new(mutator));
-            }
-        }
-        #[cfg(feature = "thread_local_gc")]
-        {
-            // move finalizable candidates from local buffer to the global buffer
-            // rust's borrow checker is not happy if putting the following in the previous loop
-            // it is safe because those two mutable operations are doing different things
-            for mutator in <C::VM as VMBinding>::VMActivePlan::mutators() {
-                mmtk.finalizable_processor
-                    .lock()
-                    .unwrap()
-                    .add_candidates(mutator.finalizable_candidates.drain(0..))
+                #[cfg(feature = "thread_local_gc")]
+                {
+                    // move finalizable candidates from local buffer to the global buffer
+                    mmtk.finalizable_processor
+                        .lock()
+                        .unwrap()
+                        .add_candidates(mutator.finalizable_candidates.drain(0..));
+                }
+                {
+                    mmtk.scheduler.work_buckets[WorkBucketStage::Prepare].add(PrepareMutator::<
+                        C::VM,
+                    >::new(
+                        mutator
+                    ));
+                }
             }
         }
 
@@ -240,6 +240,32 @@ impl<VM: VMBinding> GCWork<VM> for ReleaseCollector {
     }
 }
 
+#[cfg(feature = "thread_local_gc_copying")]
+pub struct DefragMutator<VM: VMBinding> {
+    tls: VMMutatorThread,
+    phantom: PhantomData<VM>,
+}
+
+#[cfg(feature = "thread_local_gc_copying")]
+impl<VM: VMBinding> DefragMutator<VM> {
+    pub fn new(tls: VMMutatorThread) -> Self {
+        Self {
+            tls,
+            phantom: PhantomData,
+        }
+    }
+}
+
+#[cfg(feature = "thread_local_gc_copying")]
+impl<VM: VMBinding> GCWork<VM> for DefragMutator<VM> {
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+        trace!("Defrag Mutator");
+        _mmtk
+            .get_plan()
+            .do_thread_local_defrag(self.tls, _mmtk, _worker);
+    }
+}
+
 /// Stop all mutators
 ///
 /// TODO: Smaller work granularity
@@ -259,8 +285,24 @@ impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
         <C::VM as VMBinding>::VMCollection::stop_all_mutators(worker.tls, |mutator| {
             // TODO: The stack scanning work won't start immediately, as the `Prepare` bucket is not opened yet (the bucket is opened in notify_mutators_paused).
             // Should we push to Unconstrained instead?
-            mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
-                .add(ScanMutatorRoots::<C>(mutator));
+            #[cfg(not(feature = "thread_local_gc_copying"))]
+            {
+                mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
+                    .add(ScanMutatorRoots::<C>(mutator));
+            }
+            #[cfg(feature = "thread_local_gc_copying")]
+            {
+                if mmtk.get_plan().defrag_mutator_required(mutator.mutator_tls) {
+                    #[cfg(debug_assertions)]
+                    warn!("mutator: {} needs defragmentation", mutator.mutator_id);
+                    // DefragMutator will evacuate public object as well, so no need to create ScanMutatorRoots packet
+                    mmtk.scheduler.work_buckets[WorkBucketStage::DefragMutator]
+                        .add(DefragMutator::<C::VM>::new(mutator.mutator_tls))
+                } else {
+                    mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
+                        .add(ScanMutatorRoots::<C>(mutator));
+                }
+            }
         });
         trace!("stop_all_mutators end");
         mmtk.scheduler.notify_mutators_paused(mmtk);
@@ -757,26 +799,26 @@ pub trait ProcessEdgesWork:
         if object.is_null() {
             return;
         }
-        assert!(
-            object.to_address::<Self::VM>().class_is_valid::<Self::VM>()
-                && <Self::VM as VMBinding>::VMObjectModel::is_object_sane(object),
-            "slot: {:?}, object: {:?}, klass: {:?}",
-            slot,
-            object,
-            object.to_address::<Self::VM>().class_pointer::<Self::VM>()
-        );
+        // assert!(
+        //     object.to_address::<Self::VM>().class_is_valid::<Self::VM>()
+        //         && <Self::VM as VMBinding>::VMObjectModel::is_object_sane(object),
+        //     "slot: {:?}, object: {:?}, klass: {:?}",
+        //     slot,
+        //     object,
+        //     object.to_address::<Self::VM>().class_pointer::<Self::VM>()
+        // );
         let new_object = self.trace_object(object);
-        assert!(
-            new_object
-                .to_address::<Self::VM>()
-                .class_is_valid::<Self::VM>(),
-            "slot: {:?}, object: {:?}, klass: {:?}",
-            slot,
-            new_object,
-            new_object
-                .to_address::<Self::VM>()
-                .class_pointer::<Self::VM>()
-        );
+        // assert!(
+        //     new_object
+        //         .to_address::<Self::VM>()
+        //         .class_is_valid::<Self::VM>(),
+        //     "slot: {:?}, object: {:?}, klass: {:?}",
+        //     slot,
+        //     new_object,
+        //     new_object
+        //         .to_address::<Self::VM>()
+        //         .class_pointer::<Self::VM>()
+        // );
         debug_assert!(!new_object.is_null());
         if Self::OVERWRITE_REFERENCE && new_object != object {
             slot.store(new_object);

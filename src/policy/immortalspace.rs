@@ -127,6 +127,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
         &self,
         _mutator: &mut crate::Mutator<VM>,
         object: ObjectReference,
+        _worker: Option<*mut GCWorker<VM>>,
         _copy: Option<CopySemantics>,
     ) -> ThreadlocalTracedObjectType {
         self.thread_local_trace_object(object)

@@ -53,7 +53,7 @@ pub const DEFRAG_EVERY_BLOCK: bool = false;
 /// Percentage of heap size reserved for defragmentation.
 /// According to [this paper](https://doi.org/10.1145/1375581.1375586), Immix works well with
 /// headroom between 1% to 3% of the heap size.
-pub const DEFRAG_HEADROOM_PERCENT: usize = 2;
+pub const DEFRAG_HEADROOM_PERCENT: usize = 5;
 
 /// If Immix is used as a nursery space, do we prefer copy?
 pub const PREFER_COPY_ON_NURSERY_GC: bool =

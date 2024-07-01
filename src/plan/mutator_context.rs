@@ -51,19 +51,21 @@ pub struct MutatorConfig<VM: VMBinding> {
     /// Plan-specific code for mutator release. The VMWorkerThread is the worker thread that executes this release function.
     pub release_func: &'static (dyn Fn(&mut Mutator<VM>, VMWorkerThread) + Send + Sync),
     #[cfg(feature = "thread_local_gc")]
-    /// Plan-specific code for mutator prepare. The VMWorkerThread is the worker thread that executes this prepare function.
+    /// Plan-specific code for mutator thread_loal_prepare.
     pub thread_local_prepare_func: &'static (dyn Fn(&mut Mutator<VM>) + Send + Sync),
     #[cfg(feature = "thread_local_gc")]
-    /// Plan-specific code for mutator release. The VMWorkerThread is the worker thread that executes this release function.
+    /// Plan-specific code for mutator thread_local_release. 
     pub thread_local_release_func: &'static (dyn Fn(&mut Mutator<VM>) + Send + Sync),
     #[cfg(feature = "thread_local_gc_copying")]
-    /// Plan-specific code for mutator prepare. The VMWorkerThread is the worker thread that executes this prepare function.
+    /// Plan-specific code for mutator thread-local copy alloc. 
     pub thread_local_alloc_copy_func:
         &'static (dyn Fn(&mut Mutator<VM>, usize, usize, usize) -> Address + Send + Sync),
     #[cfg(feature = "thread_local_gc_copying")]
-    /// Plan-specific code for mutator release. The VMWorkerThread is the worker thread that executes this release function.
+    /// Plan-specific code for mutator post thread-local copy.
     pub thread_local_post_copy_func:
         &'static (dyn Fn(&mut Mutator<VM>, ObjectReference, usize) + Send + Sync),
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub thread_local_defrag_prepare_func: &'static (dyn Fn(&mut Mutator<VM>) + Send + Sync),
 }
 
 impl<VM: VMBinding> std::fmt::Debug for MutatorConfig<VM> {
@@ -262,6 +264,11 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
     #[cfg(feature = "thread_local_gc_copying")]
     fn post_copy(&mut self, obj: ObjectReference, bytes: usize) {
         (*self.config.thread_local_post_copy_func)(self, obj, bytes)
+    }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    fn thread_local_defrag_prepare(&mut self) {
+        (*self.config.thread_local_defrag_prepare_func)(self)
     }
 
     #[cfg(feature = "thread_local_gc")]
@@ -528,6 +535,9 @@ pub trait MutatorContext<VM: VMBinding>: Send + 'static {
     #[cfg(feature = "thread_local_gc_copying")]
     fn post_copy(&mut self, obj: ObjectReference, bytes: usize);
 
+    #[cfg(feature = "thread_local_gc_copying")]
+    fn thread_local_defrag_prepare(&mut self);
+
     #[cfg(feature = "thread_local_gc")]
     fn thread_local_prepare(&mut self);
 
@@ -733,5 +743,11 @@ pub fn generic_thread_local_post_copy<VM: VMBinding>(
     _mutator: &mut Mutator<VM>,
     _obj: ObjectReference,
     _bytes: usize,
+) {
+}
+
+#[cfg(feature = "thread_local_gc_copying")]
+pub fn generic_thread_local_defrag_prepare<VM: VMBinding>(
+    _mutator: &mut Mutator<VM>,
 ) {
 }

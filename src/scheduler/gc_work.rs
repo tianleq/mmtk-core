@@ -327,11 +327,12 @@ impl<VM: VMBinding> GCWork<VM> for EndOfGC {
                 "Live bytes of all live objects ({} bytes) is larger than used pages ({} bytes), something is wrong.",
                 live_bytes, used_bytes
             );
-            info!(
-                "Live objects = {} bytes ({:04.1}% of {} used pages)",
+            warn!(
+                "Live objects = {} bytes ({:04.1}% of {} used pages) | reusable blocks: {}",
                 live_bytes,
                 live_bytes as f64 * 100.0 / used_bytes as f64,
-                mmtk.get_plan().get_used_pages()
+                mmtk.get_plan().get_used_pages(),
+                mmtk.get_plan().get_number_of_reusable_blocks()
             );
         }
 

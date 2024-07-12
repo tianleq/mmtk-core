@@ -256,6 +256,17 @@ impl Block {
         Self::HOLE_SIZE.load_atomic::<u8>(self.start(), Ordering::SeqCst)
     }
 
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub fn get_number_of_public_lines(&self) -> u8 {
+        let mut count = 0;
+        for line in self.lines() {
+            if line.is_line_published() {
+                count += 1;
+            }
+        }
+        count
+    }
+
     #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
     pub fn are_lines_private(&self) -> bool {
         for line in self.lines() {

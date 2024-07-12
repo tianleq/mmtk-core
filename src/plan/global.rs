@@ -367,6 +367,11 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
         #[cfg(feature = "debug_thread_local_gc_copying")] tls: VMMutatorThread,
     );
 
+    #[cfg(feature = "thread_local_gc")]
+    fn get_number_of_reusable_blocks(&self) -> usize {
+        0
+    }
+
     #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
     fn get_object_owner(&self, _object: ObjectReference) -> Option<u32> {
         Option::None

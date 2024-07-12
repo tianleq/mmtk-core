@@ -240,13 +240,6 @@ impl<VM: VMBinding> MMTK<VM> {
 
         #[cfg(feature = "thread_local_gc_copying_stats")]
         {
-            let path = "/home/tianleq/misc/global-gc-debug-logs";
-            std::fs::remove_dir_all(path).unwrap();
-            std::fs::create_dir(path).unwrap();
-        }
-
-        #[cfg(feature = "thread_local_gc_copying_stats")]
-        {
             use crate::policy::immix::TOTAL_IMMIX_ALLOCATION_BYTES;
             use crate::util::GLOBAL_REQUEST_ID;
 

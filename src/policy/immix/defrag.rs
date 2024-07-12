@@ -177,6 +177,7 @@ impl Defrag {
         });
         #[cfg(feature = "thread_local_gc_copying")]
         {
+            // sparse reusable blocks
             space.sparse_reusable_blocks.iterate_blocks(|block| {
                 let bucket = block.get_holes();
                 let unavailable_lines = match block.get_state() {

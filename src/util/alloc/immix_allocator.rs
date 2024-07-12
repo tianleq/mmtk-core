@@ -348,7 +348,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 );
                 debug_assert!(block.is_block_dirty());
             }
-            if self.local_reusable_blocks.len() > 32 {
+            if self.local_reusable_blocks.len() > 16 {
                 println!(
                     "after gc | mutator: {:?} local reusable blocks: {}",
                     self.mutator_id,
@@ -406,6 +406,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         #[cfg(feature = "thread_local_gc_copying")]
         {
             self.copy = true;
+            self.space
+                .local_reserved_blocks_exhausted
+                .store(false, atomic::Ordering::Relaxed);
         }
 
         // move local reusable blocks to local blocks
@@ -419,22 +422,25 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         for &block in self.local_blocks.iter() {
             // local list should not contain unallocated blocks
             // it may contain unmarked blocks(newly allocated)
-            debug_assert!(
-                block.get_state() != BlockState::Unallocated,
-                "mutator: {} | block: {:?} state: {:?}",
-                self.mutator_id,
-                block,
-                block.get_state()
-            );
             #[cfg(debug_assertions)]
-            debug_assert!(
-                self.mutator_id == block.owner(),
-                "local block list is corrupted, mutator: {}, owner: {}",
-                self.mutator_id,
-                block.owner()
-            );
+            {
+                debug_assert!(
+                    block.get_state() != BlockState::Unallocated,
+                    "mutator: {} | block: {:?} state: {:?}",
+                    self.mutator_id,
+                    block,
+                    block.get_state()
+                );
 
-            debug_assert!(block.is_block_dirty());
+                debug_assert!(
+                    self.mutator_id == block.owner(),
+                    "local block list is corrupted, mutator: {}, owner: {}",
+                    self.mutator_id,
+                    block.owner()
+                );
+
+                debug_assert!(block.is_block_dirty());
+            }
 
             #[cfg(not(feature = "thread_local_gc_copying"))]
             let is_defrag_source = false;
@@ -462,10 +468,13 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             // clear line mark state (public lines have line level public bit set)
             block.reset_line_mark_state();
             block.set_state(BlockState::Unmarked);
+            // clear the dirty bit on all owned blocks, if private objects left in place, the dirty bit will be reset
+            #[cfg(feature = "thread_local_gc_copying")]
+            block.reset_dirty();
         }
         // pre-allocate copy reserve pages
-        // #[cfg(feature = "thread_local_gc_copying")]
-        // self.thread_local_gc_reserve_pages();
+        #[cfg(feature = "thread_local_gc_copying")]
+        self.thread_local_gc_reserve_pages();
     }
 
     #[cfg(feature = "thread_local_gc")]
@@ -516,13 +525,13 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 }
                 #[cfg(feature = "thread_local_gc_copying")]
                 {
-                    debug_assert!(block.is_block_dirty());
                     let published = block.is_block_published();
+                    let is_dirty = block.is_block_dirty();
 
                     // After a local gc, public blocks should contain public
-                    // objects only, so those blocks are no longer ditry
+                    // objects only, so those blocks are no longer ditry(This is no longer the case, private objects may be left in-place)
                     if published {
-                        block.reset_dirty();
+                        // block.reset_dirty();
                         #[cfg(debug_assertions)]
                         block.set_owner(Block::ANONYMOUS_OWNER);
                     }
@@ -538,9 +547,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                             );
                         }
                         let is_block_sparse = block.is_block_sparse();
-                        if published {
-                            // block containing only public objects are no longer dirty
-                            // block.reset_dirty();
+                        if !is_dirty {
+                            #[cfg(debug_assertions)]
+                            debug_assert!(published, "block: {:?} is not published", block);
                             if is_block_sparse {
                                 global_sparse_reusable_blocks.push(block);
                             } else {
@@ -549,11 +558,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         } else {
                             #[cfg(debug_assertions)]
                             debug_assert!(block.owner() == self.mutator_id);
-                            debug_assert!(
-                                block.is_block_dirty(),
-                                "block: {:?} is not dirty",
-                                block
-                            );
+
                             if is_block_sparse {
                                 // private reusable block
                                 self.local_reusable_blocks.push_sparse_block(block);
@@ -563,19 +568,12 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                             }
                         }
                     } else {
-                        // block is not reusable, add to local block list if it is not public
+                        // block is not reusable, add to local block list if it is dirty
                         // a fully occupied public block cannot be reused until a global gc
                         // occurs, so it is meaningless keep it in the local block list
-                        if !published {
+                        if is_dirty {
                             #[cfg(debug_assertions)]
-                            {
-                                debug_assert!(
-                                    block.is_block_dirty(),
-                                    "block: {:?} is not dirty",
-                                    block
-                                );
-                                debug_assert!(block.owner() == self.mutator_id);
-                            }
+                            debug_assert!(block.owner() == self.mutator_id);
 
                             blocks.push(block);
                         } else {
@@ -586,8 +584,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                                     "fully occupied public block: {:?} contains private lines",
                                     block
                                 );
-                                assert!(block.is_block_dirty() == false);
-                                debug_assert_eq!(block.owner(), Block::ANONYMOUS_OWNER);
+                                assert!(published);
+                                assert_eq!(block.owner(), Block::ANONYMOUS_OWNER);
                             }
                         }
                     }
@@ -816,8 +814,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
     #[cfg(feature = "thread_local_gc_copying")]
     pub fn thread_local_gc_reserve_pages(&mut self) {
-        let number_of_clean_blocks =
-            self.context.options.get_thread_local_heap_size() / Block::BYTES;
+        let number_of_clean_blocks = 4;
         debug_assert!(
             VM::VMActivePlan::is_mutator(self.tls),
             "only mutator doing local gc should call thread_local_gc_reserve_pages"
@@ -1652,7 +1649,14 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
             // only reach here during local gc phase
             #[cfg(feature = "thread_local_gc_copying")]
-            debug_assert!(self.copy && VM::VMActivePlan::is_mutator(self.tls));
+            {
+                debug_assert!(self.copy && VM::VMActivePlan::is_mutator(self.tls));
+                if self.local_free_blocks.is_empty() {
+                    self.space
+                        .local_reserved_blocks_exhausted
+                        .store(true, atomic::Ordering::Release);
+                }
+            }
 
             block.init(self.copy);
             #[cfg(debug_assertions)]

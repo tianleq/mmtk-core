@@ -338,7 +338,7 @@ impl<VM: VMBinding> GCTriggerPolicy<VM> for FixedHeapSizeTrigger {
         }
         #[cfg(feature = "thread_local_gc_copying_stats")]
         {
-            _mmtk.print_heap_stats(_mutator);
+            // _mmtk.print_heap_stats(_mutator);
         }
     }
 
@@ -350,7 +350,7 @@ impl<VM: VMBinding> GCTriggerPolicy<VM> for FixedHeapSizeTrigger {
         }
         #[cfg(feature = "thread_local_gc_copying_stats")]
         {
-            _mmtk.print_heap_stats(_mutator);
+            // _mmtk.print_heap_stats(_mutator);
         }
     }
 }

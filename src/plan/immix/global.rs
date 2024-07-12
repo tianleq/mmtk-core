@@ -258,6 +258,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             );
         }
     }
+    #[cfg(feature = "thread_local_gc")]
+    fn get_number_of_reusable_blocks(&self) -> usize {
+        self.immix_space.reusable_blocks.len()
+    }
 
     #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
     fn get_object_owner(&self, _object: ObjectReference) -> Option<u32> {
@@ -392,7 +396,15 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         use crate::{policy::immix::TOTAL_IMMIX_ALLOCATION_BYTES, util::GLOBAL_REQUEST_ID};
         use std::{fs::OpenOptions, io::Write};
 
-        let result = self.immix_space.print_immixspace_stats();
+        let (
+            reusable_block,
+            global_reusable_block,
+            allocated_block,
+            published_block,
+            available_lines,
+            sparse_block,
+        ) = self.immix_space.print_immixspace_stats();
+        let free_pages = self.get_collection_reserved_pages();
         let mut local_resuable_blocks = 0;
         for mutator in VM::VMActivePlan::mutators() {
             let allocator = unsafe {
@@ -416,15 +428,16 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             .unwrap();
         writeln!(
             file,
-            "{}, {}, {}, {}, {}, {}, {}, {}, {}|{}",
+            "{}, {}, {}, {}, {}, {}, {}, {}, {}, {}|{}",
             TOTAL_IMMIX_ALLOCATION_BYTES.load(Ordering::SeqCst),
             GLOBAL_REQUEST_ID.load(Ordering::SeqCst),
-            result.0,
-            result.1,
-            result.2,
-            result.3,
-            result.4,
-            result.5,
+            free_pages,
+            reusable_block,
+            global_reusable_block,
+            allocated_block,
+            published_block,
+            available_lines,
+            sparse_block,
             live_los_pages,
             local_resuable_blocks
         )

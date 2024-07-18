@@ -554,23 +554,10 @@ impl<VM: VMBinding> WeakRefProcessing<VM> {
 }
 
 #[derive(Default)]
-pub(crate) struct PhantomRefProcessing<E: ProcessEdgesWork>(PhantomData<E>);
-impl<E: ProcessEdgesWork> GCWork<E::VM> for PhantomRefProcessing<E> {
-    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
-        #[cfg(not(feature = "debug_publish_object"))]
-        let mut w = E::new(vec![], false, mmtk, WorkBucketStage::PhantomRefClosure);
-        #[cfg(feature = "debug_publish_object")]
-        let mut w = E::new(
-            vec![],
-            vec![],
-            false,
-            0,
-            mmtk,
-            WorkBucketStage::PhantomRefClosure,
-        );
-        w.set_worker(worker);
-        mmtk.reference_processors.scan_phantom_refs(&mut w, mmtk);
-        w.flush();
+pub(crate) struct PhantomRefProcessing<VM: VMBinding>(PhantomData<VM>);
+impl<VM: VMBinding> GCWork<VM> for PhantomRefProcessing<VM> {
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        mmtk.reference_processors.scan_phantom_refs(mmtk);
     }
 }
 impl<VM: VMBinding> PhantomRefProcessing<VM> {

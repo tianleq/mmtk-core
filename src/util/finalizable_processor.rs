@@ -64,7 +64,7 @@ impl<F: Finalizable> FinalizableProcessor<F> {
     {
         for mut f in candidates {
             let reff: ObjectReference = f.get_reference();
-            debug_assert!(reff.is_live(), "object: {:?} should be live", reff);
+            debug_assert!(reff.is_live::<E::VM>(), "object: {:?} should be live", reff);
             FinalizableProcessor::<F>::forward_finalizable_reference(e, &mut f);
         }
     }
@@ -214,12 +214,12 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for Finalization<E> {
                 .finalizable_candidates
                 .iter()
                 .map(|f| *f)
-                .filter(|f| !f.get_reference().is_live());
+                .filter(|f| !f.get_reference().is_live::<E::VM>());
             finalizable_processor.add_ready_for_finalize_objects(local_reday_for_finalization);
             // get rid of dead objects from local finalizable list
             mutator
                 .finalizable_candidates
-                .retain(|f| f.get_reference().is_live());
+                .retain(|f| f.get_reference().is_live::<E::VM>());
 
             // make sure local finalizable objects are up-to-date
             finalizable_processor.scan_thread_local(&mut w, &mut mutator.finalizable_candidates);

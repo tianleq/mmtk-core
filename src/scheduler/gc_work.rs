@@ -1144,7 +1144,7 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
         let objects_to_scan = buffer;
 
         // Scan the objects in the list that supports slot-enququing.
-        // let mut scan_later = vec![];
+        let mut scan_later = vec![];
         {
             let mut closure = ObjectsClosure::<Self::E>::new(worker, self.get_bucket());
             for object in objects_to_scan.iter().copied() {
@@ -1177,25 +1177,25 @@ pub trait ScanObjectsWork<VM: VMBinding>: GCWork<VM> + Sized {
         probe!(mmtk, scan_objects, total_objects, scan_and_trace);
 
         // If any object does not support slot-enqueuing, we process them now.
-        // if !scan_later.is_empty() {
-        //     let object_tracer_context = ProcessEdgesWorkTracerContext::<Self::E> {
-        //         stage: self.get_bucket(),
-        //         phantom_data: PhantomData,
-        //     };
+        if !scan_later.is_empty() {
+            let object_tracer_context = ProcessEdgesWorkTracerContext::<Self::E> {
+                stage: self.get_bucket(),
+                phantom_data: PhantomData,
+            };
 
-        //     object_tracer_context.with_tracer(worker, |object_tracer| {
-        //         // Scan objects and trace their outgoing edges at the same time.
-        //         for object in scan_later.iter().copied() {
-        //             trace!("Scan object (node) {}", object);
-        //             <VM as VMBinding>::VMScanning::scan_object_and_trace_edges(
-        //                 tls,
-        //                 object,
-        //                 object_tracer,
-        //             );
-        //             self.post_scan_object(object);
-        //         }
-        //     });
-        // }
+            object_tracer_context.with_tracer(worker, |object_tracer| {
+                // Scan objects and trace their outgoing edges at the same time.
+                for object in scan_later.iter().copied() {
+                    trace!("Scan object (node) {}", object);
+                    <VM as VMBinding>::VMScanning::scan_object_and_trace_edges(
+                        tls,
+                        object,
+                        object_tracer,
+                    );
+                    self.post_scan_object(object);
+                }
+            });
+        }
     }
 }
 
@@ -1487,7 +1487,7 @@ impl<VM: VMBinding, R2OPE: ProcessEdgesWork<VM = VM>, O2OPE: ProcessEdgesWork<VM
         };
 
         #[cfg(feature = "debug_publish_object")]
-        let process_edges_work = E::new(vec![], vec![], false, 0, mmtk, self.bucket);
+        let process_edges_work = O2OPE::new(vec![], vec![], false, 0, mmtk, self.bucket);
         #[cfg(not(feature = "debug_publish_object"))]
         let process_edges_work = O2OPE::new(vec![], false, mmtk, self.bucket);
         let work = process_edges_work.create_scan_work(scanned_root_objects);

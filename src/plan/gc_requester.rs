@@ -3,15 +3,13 @@ use crate::scheduler::GCWorkScheduler;
 use crate::util::VMMutatorThread;
 use crate::vm::VMBinding;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Condvar, Mutex};
+use std::sync::Arc;
 
-struct RequestSync {
-    request_count: isize,
-    last_request_count: isize,
-    single_thread: bool,
-    #[cfg(feature = "thread_local_gc")]
-    global_gc_requested: bool,
-}
+// struct RequestSync {
+//     request_count: isize,
+//     last_request_count: isize,
+//     single_thread: bool,
+// }
 
 /// GC requester.  This object allows other threads to request (trigger) GC,
 /// and the GC coordinator thread waits for GC requests using this object.
@@ -20,21 +18,16 @@ pub struct GCRequester<VM: VMBinding> {
     /// been requested efficiently in `poll` without acquiring any mutex.
     request_flag: AtomicBool,
     scheduler: Arc<GCWorkScheduler<VM>>,
+    // #[cfg(feature = "thread_local_gc")]
+    // global_gc_requested: AtomicBool,
 }
 
 impl<VM: VMBinding> GCRequester<VM> {
     pub fn new(scheduler: Arc<GCWorkScheduler<VM>>) -> Self {
         GCRequester {
-            request_sync: Mutex::new(RequestSync {
-                request_count: 0,
-                last_request_count: -1,
-                single_thread: false,
-                #[cfg(feature = "thread_local_gc")]
-                global_gc_requested: false,
-            }),
-            request_condvar: Condvar::new(),
             request_flag: AtomicBool::new(false),
             scheduler,
+            // global_gc_requested: AtomicBool::new(false),
         }
     }
 
@@ -46,15 +39,12 @@ impl<VM: VMBinding> GCRequester<VM> {
         }
 
         if !self.request_flag.swap(true, Ordering::Relaxed) {
-            #[cfg(feature = "thread_local_gc")]
-            {
-                // `GCWorkScheduler::request_schedule_collection` needs to hold a mutex to communicate
-                // with GC workers, which is expensive for functions like `poll`.  We use the atomic
-                guard.global_gc_requested = true;
-            }
+            // #[cfg(feature = "thread_local_gc")]
+            // {
+            //     self.global_gc_requested.store(true, Ordering::SeqCst);
+            // }
 
             // flag `request_flag` to elide the need to acquire the mutex in subsequent calls.
-            guard.single_thread = false;
             self.scheduler.request_schedule_collection();
         }
     }
@@ -62,36 +52,19 @@ impl<VM: VMBinding> GCRequester<VM> {
     #[cfg(feature = "thread_local_gc")]
     pub fn request_thread_local_gc(&self, _tls: VMMutatorThread) -> bool {
         // If global gc has been requested, then skip the local gc
-        if self.request_flag.load(Ordering::Relaxed) {
-            return false;
-        }
 
-        let guard = self.request_sync.lock().unwrap();
-
-        !guard.global_gc_requested
-    }
-
-    #[cfg(feature = "thread_local_gc")]
-    pub fn request_thread_local_gc(&self, _tls: VMMutatorThread) -> bool {
-        // If global gc has been requested, then skip the local gc
-        if self.request_flag.load(Ordering::Relaxed) {
-            return false;
-        }
-        let guard = self.request_sync.lock().unwrap();
-
-        !guard.global_gc_requested
+        !self.request_flag.load(Ordering::Relaxed)
     }
 
     /// Clear the "GC requested" flag so that mutators can trigger the next GC.
     /// Called by a GC worker when all mutators have come to a stop.
     pub fn clear_request(&self) {
-        #[cfg(feature = "thread_local_gc")]
-        let mut guard = self.request_sync.lock().unwrap();
         #[cfg(not(feature = "thread_local_gc"))]
         self.request_flag.store(false, Ordering::Relaxed);
-        #[cfg(feature = "thread_local_gc")]
-        {
-            guard.global_gc_requested = false;
-        }
+
+        // #[cfg(feature = "thread_local_gc")]
+        // {
+        //     self.global_gc_requested.store(false, Ordering::SeqCst);
+        // }
     }
 }

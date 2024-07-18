@@ -86,7 +86,7 @@ pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
     fn object_reference_write_slow(
         &mut self,
         _src: ObjectReference,
-        _slot: VM::VMEdge,
+        _slot: VM::VMSlot,
         _target: Option<ObjectReference>,
     ) {
     }
@@ -307,19 +307,21 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
     fn object_reference_write_pre(
         &mut self,
         src: ObjectReference,
-        slot: <S::VM as VMBinding>::VMEdge,
-        target: ObjectReference,
+        slot: <S::VM as VMBinding>::VMSlot,
+        target: Option<ObjectReference>,
     ) {
-        // only trace when store private to a public object
+        // trace when store private to a public object
         if is_public::<S::VM>(src) {
-            if !target.is_null() && !is_public::<S::VM>(target) {
-                self.object_reference_write_slow(src, slot, target);
+            if let Some(object) = target {
+                if !is_public::<S::VM>(object) {
+                    self.object_reference_write_slow(src, slot, target);
+                }
             }
         } else {
             #[cfg(all(feature = "debug_publish_object", debug_assertions))]
             {
                 // use crate::vm::ActivePlan;
-                if !target.is_null() && !is_public::<S::VM>(target) {
+                if target.is_some() && !is_public::<S::VM>(target.unwrap()) {
                     // both source and target are private
                     // they should have the same owner
                     let source_owner = self.semantics.get_object_owner(src);
@@ -340,12 +342,15 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
     fn object_reference_write_slow(
         &mut self,
         src: ObjectReference,
-        slot: <S::VM as VMBinding>::VMEdge,
-        target: ObjectReference,
+        slot: <S::VM as VMBinding>::VMSlot,
+        target: Option<ObjectReference>,
     ) {
         debug_assert!(is_public::<S::VM>(src), "source check is broken");
-        debug_assert!(!target.is_null(), "target null check is broken");
-        debug_assert!(!is_public::<S::VM>(target), "target check is broken");
+        debug_assert!(!target.is_none(), "target null check is broken");
+        debug_assert!(
+            !is_public::<S::VM>(target.unwrap()),
+            "target check is broken"
+        );
         self.semantics
             .object_reference_write_slow(src, slot, target);
     }
@@ -358,8 +363,6 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
         src: <S::VM as VMBinding>::VMMemorySlice,
         dst: <S::VM as VMBinding>::VMMemorySlice,
     ) {
-        debug_assert!(!src_base.is_null(), "source array is null");
-        debug_assert!(!dst_base.is_null(), "destination array is null");
         // Only do publication when the dst array is public and src array is private
         // a private array should not have public object as its elements
         if is_public::<S::VM>(dst_base) {
@@ -384,7 +387,7 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
                     );
                     // Even if src base is private, it may still contain public objects
                     // so need to rule out public objects
-                    for slot in src.iter_edges() {
+                    for slot in src.iter_slots() {
                         let object = slot.load();
                         if !object.is_null() && !is_public::<S::VM>(object) {
                             let owner = self.semantics.get_object_owner(object);
@@ -495,10 +498,10 @@ impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM>
     fn object_reference_write_slow(
         &mut self,
         src: ObjectReference,
-        _slot: VM::VMEdge,
-        target: ObjectReference,
+        _slot: VM::VMSlot,
+        target: Option<ObjectReference>,
     ) {
-        self.trace_public_object(src, target)
+        self.trace_public_object(src, target.unwrap())
     }
 
     fn flush(&mut self) {}
@@ -513,14 +516,14 @@ impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM>
         _dst: <Self::VM as VMBinding>::VMMemorySlice,
     ) {
         // publish all objects in the src slice
-        for slot in src.iter_edges() {
+        for slot in src.iter_slots() {
             // info!("array_copy_slow:: slot: {:?}", slot);
             let object = slot.load();
             // although src array is private, it may contain
             // public objects, so need to rule out those public
             // objects
-            if !object.is_null() && !is_public::<VM>(object) {
-                self.trace_public_object(_dst_base, object)
+            if !object.is_none() && !is_public::<VM>(object.unwrap()) {
+                self.trace_public_object(_dst_base, object.unwrap())
             }
         }
     }

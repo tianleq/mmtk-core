@@ -328,7 +328,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
     /// large object space are recommended to use [`BlockPageResource`] whenever possible.
     ///
     /// [`BlockPageResource`]: crate::util::heap::blockpageresource::BlockPageResource
-    pub fn release_pages(&self, first: Address) {
+    pub fn release_pages(&self, first: Address) -> i32 {
         debug_assert!(conversions::is_page_aligned(first));
         let mut sync = self.sync.lock().unwrap();
         let page_offset = conversions::bytes_to_pages_up(first - sync.start);

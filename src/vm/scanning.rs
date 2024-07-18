@@ -12,11 +12,11 @@ pub trait SlotVisitor<SL: Slot> {
     fn visit_slot(&mut self, slot: SL);
     #[cfg(feature = "debug_publish_object")]
     /// Call this function for each edge.
-    fn visit_edge(&mut self, object: ObjectReference, edge: ES);
+    fn visit_edge(&mut self, object: ObjectReference, slot: SL);
 }
 
 /// This lets us use closures as SlotVisitor.
-impl<SL: Slot, F: FnMut(ObjectReference, SL)> SlotVisitor<SL> for F {
+impl<SL: Slot, F: FnMut(Option<ObjectReference>, SL)> SlotVisitor<SL> for F {
     #[cfg(not(feature = "debug_publish_object"))]
     fn visit_slot(&mut self, slot: SL) {
         #[cfg(debug_assertions)]
@@ -25,11 +25,11 @@ impl<SL: Slot, F: FnMut(ObjectReference, SL)> SlotVisitor<SL> for F {
             slot,
             slot.load()
         );
-        self(ObjectReference::NULL, edge)
+        self(None, slot)
     }
 
     #[cfg(feature = "debug_publish_object")]
-    fn visit_edge(&mut self, object: ObjectReference, edge: ES) {
+    fn visit_edge(&mut self, object: ObjectReference, slot: SL) {
         #[cfg(debug_assertions)]
         trace!(
             "(FunctionClosure) Visit edge {:?} of object {:?} (pointing to {})",
@@ -166,8 +166,8 @@ pub trait RootsWorkFactory<SL: Slot>: Clone + Send + 'static {
 }
 
 #[cfg(feature = "thread_local_gc")]
-pub trait ObjectGraphTraversal<ES: Edge> {
-    fn traverse_from_roots(&mut self, root_slots: Vec<ES>);
+pub trait ObjectGraphTraversal<SL: Slot> {
+    fn traverse_from_roots(&mut self, root_slots: Vec<SL>);
 }
 
 /// VM-specific methods for scanning roots/objects.
@@ -270,7 +270,7 @@ pub trait Scanning<VM: VMBinding> {
     fn scan_roots_in_mutator_thread(
         tls: VMWorkerThread,
         mutator: &'static mut Mutator<VM>,
-        factory: impl RootsWorkFactory<VM::VMEdge>,
+        factory: impl RootsWorkFactory<VM::VMSlot>,
     );
 
     // #[cfg(feature = "thread_local_gc")]

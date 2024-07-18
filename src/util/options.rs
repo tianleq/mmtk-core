@@ -300,6 +300,11 @@ impl Options {
         *self.stress_factor != DEFAULT_STRESS_FACTOR
             || *self.analysis_factor != DEFAULT_STRESS_FACTOR
     }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn get_thread_local_heap_size(&self) -> usize {
+        self.max_local_heap.size
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -596,11 +601,6 @@ mod nursery_size_parsing_tests {
         } else {
             panic!("Failed: {:?}", result);
         }
-    }
-
-    #[cfg(feature = "thread_local_gc")]
-    pub fn get_thread_local_heap_size(&self) -> usize {
-        self.max_local_heap.size
     }
 }
 

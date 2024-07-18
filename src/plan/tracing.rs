@@ -6,7 +6,7 @@ use crate::scheduler::{GCWorker, WorkBucketStage};
 use crate::util::ObjectReference;
 #[cfg(feature = "debug_thread_local_gc_copying")]
 use crate::util::VMMutatorThread;
-use crate::vm::edge_shape::Edge;
+use crate::vm::slot::Slot;
 #[cfg(feature = "debug_thread_local_gc_copying")]
 use crate::vm::ActivePlan;
 use crate::vm::Scanning;
@@ -142,7 +142,6 @@ impl<'a, E: ProcessEdgesWork> SlotVisitor<SlotOf<E>> for ObjectsClosure<'a, E> {
     fn visit_slot(&mut self, slot: SlotOf<E>) {
         #[cfg(debug_assertions)]
         {
-            use crate::vm::slot::Slot;
             trace!(
                 "(ObjectsClosure) Visit slot {:?} (pointing to {:?})",
                 slot,
@@ -156,11 +155,11 @@ impl<'a, E: ProcessEdgesWork> SlotVisitor<SlotOf<E>> for ObjectsClosure<'a, E> {
     }
 
     #[cfg(feature = "debug_publish_object")]
-    fn visit_edge(&mut self, object: ObjectReference, slot: EdgeOf<E>) {
+    fn visit_slot(&mut self, object: ObjectReference, slot: SlotOf<E>) {
         #[cfg(debug_assertions)]
         {
             trace!(
-                "(ObjectsClosure) Visit edge {:?} of Object {:?} (pointing to {})",
+                "(ObjectsClosure) Visit slot {:?} of Object {:?} (pointing to {})",
                 slot,
                 object,
                 slot.load()
@@ -182,7 +181,7 @@ impl<'a, E: ProcessEdgesWork> Drop for ObjectsClosure<'a, E> {
 
 pub struct PublishObjectClosure<VM: crate::vm::VMBinding> {
     _mmtk: &'static MMTK<VM>,
-    edge_buffer: std::collections::VecDeque<VM::VMEdge>,
+    slot_buffer: std::collections::VecDeque<VM::VMSlot>,
     #[cfg(feature = "debug_publish_object")]
     mutator_id: u32,
     #[cfg(feature = "debug_thread_local_gc_copying")]
@@ -197,7 +196,7 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
     ) -> Self {
         PublishObjectClosure {
             _mmtk: mmtk,
-            edge_buffer: std::collections::VecDeque::new(),
+            slot_buffer: std::collections::VecDeque::new(),
             #[cfg(feature = "debug_publish_object")]
             mutator_id,
             #[cfg(feature = "debug_thread_local_gc_copying")]
@@ -215,12 +214,13 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
         #[cfg(feature = "debug_thread_local_gc_copying")]
         let mut number_of_bytes_published = 0;
 
-        while !self.edge_buffer.is_empty() {
-            let slot = self.edge_buffer.pop_front().unwrap();
+        while !self.slot_buffer.is_empty() {
+            let slot = self.slot_buffer.pop_front().unwrap();
             let object = slot.load();
-            if object.is_null() {
+            if object.is_none() {
                 continue;
             }
+            let object = object.unwrap();
             if !crate::util::metadata::public_bit::is_public::<VM>(object) {
                 // set public bit on the object
                 #[cfg(feature = "debug_publish_object")]
@@ -265,15 +265,15 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
     }
 }
 
-impl<VM: crate::vm::VMBinding> EdgeVisitor<VM::VMEdge> for PublishObjectClosure<VM> {
+impl<VM: crate::vm::VMBinding> SlotVisitor<VM::VMSlot> for PublishObjectClosure<VM> {
     #[cfg(not(feature = "debug_publish_object"))]
-    fn visit_edge(&mut self, edge: VM::VMEdge) {
-        self.edge_buffer.push_back(edge);
+    fn visit_slot(&mut self, slot: VM::VMSlot) {
+        self.slot_buffer.push_back(slot);
     }
 
     #[cfg(feature = "debug_publish_object")]
-    fn visit_edge(&mut self, _object: ObjectReference, edge: VM::VMEdge) {
-        self.edge_buffer.push_back(edge);
+    fn visit_slot(&mut self, _object: ObjectReference, slot: VM::VMSlot) {
+        self.edge_buffer.push_back(slot);
     }
 }
 
@@ -281,7 +281,7 @@ impl<VM: crate::vm::VMBinding> Drop for PublishObjectClosure<VM> {
     #[inline(always)]
     fn drop(&mut self) {
         assert!(
-            self.edge_buffer.is_empty(),
+            self.slot_buffer.is_empty(),
             "There are edges left over. Closure is not done correctly."
         );
     }

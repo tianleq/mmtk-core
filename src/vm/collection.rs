@@ -68,7 +68,7 @@ pub trait Collection<VM: VMBinding> {
     /// * `tls`: The thread pointer of the mutator.
     fn scan_mutator(
         tls: VMMutatorThread,
-        object_graph_traversal_func: impl ObjectGraphTraversal<VM::VMEdge>,
+        object_graph_traversal_func: impl ObjectGraphTraversal<VM::VMSlot>,
     );
 
     // #[cfg(feature = "thread_local_gc")]

@@ -297,7 +297,7 @@ impl<VM: VMBinding> crate::plan::generational::global::GenerationalPlanExt<VM> f
                     );
                     self.immix
                         .immix_space
-                        .trace_object_without_moving(queue, object, worker)
+                        .trace_object_without_moving(queue, object)
                 };
 
                 return object;

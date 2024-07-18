@@ -184,7 +184,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessRegionModBuf<E> {
             // Collect all the entries in all the slices
             let mut slots = vec![];
             for slice in &self.modbuf {
-                for slot in slice.iter_edges() {
+                for slot in slice.iter_slots() {
                     slots.push(slot);
                 }
             }

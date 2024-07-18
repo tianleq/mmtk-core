@@ -81,9 +81,9 @@ fn validate_features() {
     assert!(Block::LINES / 2 <= u8::MAX as usize - 2);
 }
 
-#[cfg(feature = "thread_local_gc_copying")]
-pub(crate) static LOCAL_GC_COPY_RESERVE_PAGES: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+// #[cfg(feature = "thread_local_gc_copying")]
+// pub(crate) static LOCAL_GC_COPY_RESERVE_PAGES: std::sync::atomic::AtomicUsize =
+//     std::sync::atomic::AtomicUsize::new(0);
 
 #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
 lazy_static! {

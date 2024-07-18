@@ -329,7 +329,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     // for the outer condition is met.
     #[allow(clippy::collapsible_if)]
     pub fn trace_object_impl(&self, object: ObjectReference) -> ThreadlocalTracedObjectType {
-        debug_assert!(!object.is_null());
         #[cfg(feature = "vo_bit")]
         debug_assert!(
             crate::util::metadata::vo_bit::is_vo_bit_set::<VM>(object),

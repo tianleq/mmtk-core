@@ -4,7 +4,7 @@ use crate::plan::PlanThreadlocalTraceObject;
 use crate::plan::ThreadlocalTracedObjectType::*;
 use crate::policy::gc_work::TraceKind;
 use crate::util::*;
-use crate::vm::edge_shape::Edge;
+use crate::vm::slot::Slot;
 use crate::vm::*;
 use crate::*;
 use std::collections::VecDeque;
@@ -206,12 +206,12 @@ where
     phantom: PhantomData<Closure>,
 }
 
-impl<VM, Closure> ObjectGraphTraversal<VM::VMEdge> for ThreadlocalObjectGraphTraversal<VM, Closure>
+impl<VM, Closure> ObjectGraphTraversal<VM::VMSlot> for ThreadlocalObjectGraphTraversal<VM, Closure>
 where
     VM: VMBinding,
     Closure: ThreadlocalObjectGraphTraversalClosure<VM>,
 {
-    fn traverse_from_roots(&mut self, root_slots: Vec<VM::VMEdge>) {
+    fn traverse_from_roots(&mut self, root_slots: Vec<VM::VMSlot>) {
         Closure::new(self.mmtk, self.tls, Some(root_slots), self.worker).do_closure();
     }
 }
@@ -235,14 +235,14 @@ where
     }
 }
 
-pub trait ThreadlocalObjectGraphTraversalClosure<VM: VMBinding>: EdgeVisitor<VM::VMEdge> {
+pub trait ThreadlocalObjectGraphTraversalClosure<VM: VMBinding>: SlotVisitor<VM::VMSlot> {
     fn do_closure(&mut self);
     fn do_object_closure(&mut self, object: ObjectReference) -> ObjectReference;
     fn do_object_tracing(&mut self, object: ObjectReference) -> ObjectReference;
     fn new(
         mmtk: &'static MMTK<VM>,
         tls: VMMutatorThread,
-        root_slots: Option<Vec<VM::VMEdge>>,
+        root_slots: Option<Vec<VM::VMSlot>>,
         worker: Option<*mut GCWorker<VM>>,
     ) -> Self;
 }
@@ -254,7 +254,7 @@ pub struct PlanThreadlocalObjectGraphTraversalClosure<
 > {
     plan: &'static P,
     tls: VMMutatorThread,
-    edge_buffer: VecDeque<VM::VMEdge>,
+    slot_buffer: VecDeque<VM::VMSlot>,
     #[cfg(feature = "debug_publish_object")]
     source_buffer: VecDeque<ObjectReference>,
     worker: Option<*mut GCWorker<VM>>,
@@ -269,7 +269,7 @@ where
     fn new(
         mmtk: &'static MMTK<VM>,
         tls: VMMutatorThread,
-        root_slots: Option<Vec<VM::VMEdge>>,
+        root_slots: Option<Vec<VM::VMSlot>>,
         worker: Option<*mut GCWorker<VM>>,
     ) -> Self {
         let mut edge_buffer = VecDeque::with_capacity(4096);
@@ -289,7 +289,7 @@ where
         Self {
             plan: mmtk.get_plan().downcast_ref::<P>().unwrap(),
             tls,
-            edge_buffer,
+            slot_buffer: edge_buffer,
             #[cfg(feature = "debug_publish_object")]
             source_buffer,
             worker,
@@ -304,14 +304,15 @@ where
         );
         let mutator = VM::VMActivePlan::mutator(self.tls);
 
-        while !self.edge_buffer.is_empty() {
-            let slot = self.edge_buffer.pop_front().unwrap();
+        while !self.slot_buffer.is_empty() {
+            let slot = self.slot_buffer.pop_front().unwrap();
             #[cfg(feature = "debug_publish_object")]
             let _source = self.source_buffer.pop_front().unwrap();
-            let object = slot.load();
-            if object.is_null() {
+            let _object = slot.load();
+            if _object.is_none() {
                 continue;
             }
+            let object = _object.unwrap();
             #[cfg(not(feature = "debug_publish_object"))]
             let new_object =
                 match self
@@ -390,7 +391,6 @@ where
     }
 
     fn do_object_closure(&mut self, object: ObjectReference) -> ObjectReference {
-        debug_assert!(!object.is_null(), "object should not be null");
         let mutator = VM::VMActivePlan::mutator(self.tls);
 
         debug_assert!(self.worker.is_none());
@@ -403,7 +403,7 @@ where
             {
                 Scanned(new_object) => {
                     debug_assert!(
-                        object.is_live(),
+                        object.is_live::<VM>(),
                         "object: {:?} is supposed to be alive.",
                         object
                     );
@@ -489,19 +489,21 @@ where
 }
 
 impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind>
-    EdgeVisitor<VM::VMEdge> for PlanThreadlocalObjectGraphTraversalClosure<VM, P, KIND>
+    SlotVisitor<VM::VMSlot> for PlanThreadlocalObjectGraphTraversalClosure<VM, P, KIND>
 {
     #[cfg(not(feature = "debug_publish_object"))]
-    fn visit_edge(&mut self, edge: VM::VMEdge) {
-        if !edge.load().is_null() {
-            self.edge_buffer.push_back(edge);
+    fn visit_slot(&mut self, slot: VM::VMSlot) {
+        if let Some(_) = slot.load() {
+            self.slot_buffer.push_back(slot);
         }
     }
 
     #[cfg(feature = "debug_publish_object")]
-    fn visit_edge(&mut self, object: ObjectReference, edge: VM::VMEdge) {
-        self.source_buffer.push_back(object);
-        self.edge_buffer.push_back(edge);
+    fn visit_slot(&mut self, object: ObjectReference, slot: VM::VMSlot) {
+        if let Some(_) = slot.load() {
+            self.source_buffer.push_back(object);
+            self.edge_buffer.push_back(slot);
+        }
     }
 }
 
@@ -511,7 +513,7 @@ impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIN
     #[inline(always)]
     fn drop(&mut self) {
         assert!(
-            self.edge_buffer.is_empty(),
+            self.slot_buffer.is_empty(),
             "There are edges left over. Closure is not done correctly."
         );
     }
@@ -559,7 +561,7 @@ where
                 // public object is untouched, so nothing needs to be done
                 continue;
             }
-            if reff.is_live() {
+            if reff.is_live::<VM>() {
                 // live object indicates that the object has already been traced/scanned during transitive closure phase
                 // so no need to do the closure again
                 let object = closure.do_object_tracing(f.get_reference());

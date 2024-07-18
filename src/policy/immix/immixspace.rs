@@ -222,7 +222,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
         worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
         if KIND == TRACE_KIND_TRANSITIVE_PIN {
-            self.trace_object_without_moving(queue, object, worker)
+            self.trace_object_without_moving(queue, object)
         } else if KIND == TRACE_KIND_DEFRAG {
             if Block::containing::<VM>(object).is_defrag_source() {
                 debug_assert!(self.in_defrag());
@@ -239,7 +239,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
                     false,
                 )
             } else {
-                self.trace_object_without_moving(queue, object, worker)
+                self.trace_object_without_moving(queue, object)
             }
         } else if KIND == TRACE_KIND_FAST {
             #[cfg(feature = "thread_local_gc")]
@@ -247,7 +247,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
                 crate::policy::immix::NEVER_MOVE_OBJECTS,
                 "Moving thread-local gc is incompatible with non-moving global gc"
             );
-            self.trace_object_without_moving(queue, object, worker)
+            self.trace_object_without_moving(queue, object)
         } else {
             unreachable!()
         }
@@ -777,7 +777,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self,
         queue: &mut impl ObjectQueue,
         object: ObjectReference,
-        _worker: &mut crate::scheduler::GCWorker<VM>,
     ) -> ObjectReference {
         #[cfg(feature = "vo_bit")]
         vo_bit::helper::on_trace_object::<VM>(object);

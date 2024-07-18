@@ -502,7 +502,7 @@ pub trait ObjectModel<VM: VMBinding> {
         true
     }
 
-    fn null_slot() -> VM::VMEdge;
+    fn null_slot() -> VM::VMSlot;
 }
 
 pub mod specs {

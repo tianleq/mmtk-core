@@ -1084,8 +1084,6 @@ impl SideMetadataContext {
         total
     }
 
-    pub fn reset(&self) {}
-
     // ** NOTE: **
     //  Regardless of the number of bits in a metadata unit, we always represent its content as a word.
 
@@ -1128,7 +1126,7 @@ impl SideMetadataContext {
     /// # Arguments
     /// * `start` - The starting address of the source data.
     /// * `size` - The size of the source data (in bytes).
-    /// * `no_reserve` - whether to invoke mmap with a noreserve flag (we use this flag to quanrantine address range)
+    /// * `no_reserve` - whether to invoke mmap with a noreserve flag (we use this flag to quarantine address range)
     fn map_metadata_internal(&self, start: Address, size: usize, no_reserve: bool) -> Result<()> {
         for spec in self.global.iter() {
             match try_mmap_contiguous_metadata_space(start, size, spec, no_reserve) {
@@ -1141,15 +1139,17 @@ impl SideMetadataContext {
         let mut lsize: usize = 0;
 
         for spec in self.local.iter() {
-            // For local side metadata, we always have to reserve address space for all
-            // local metadata required by all policies in MMTk to be able to calculate a constant offset for each local metadata at compile-time
-            // (it's like assigning an ID to each policy).
-            // As the plan is chosen at run-time, we will never know which subset of policies will be used during run-time.
-            // We can't afford this much address space in 32-bits.
+            // For local side metadata, we always have to reserve address space for all local
+            // metadata required by all policies in MMTk to be able to calculate a constant offset
+            // for each local metadata at compile-time (it's like assigning an ID to each policy).
+            //
+            // As the plan is chosen at run-time, we will never know which subset of policies will
+            // be used during run-time. We can't afford this much address space in 32-bits.
             // So, we switch to the chunk-based approach for this specific case.
             //
-            // The global metadata is different in that for each plan, we can calculate its constant base addresses at compile-time.
-            // Using the chunk-based approach will need the same address space size as the current not-chunked approach.
+            // The global metadata is different in that for each plan, we can calculate its constant
+            // base addresses at compile-time. Using the chunk-based approach will need the same
+            // address space size as the current not-chunked approach.
             #[cfg(target_pointer_width = "64")]
             {
                 match try_mmap_contiguous_metadata_space(start, size, spec, no_reserve) {
@@ -1195,13 +1195,13 @@ impl SideMetadataContext {
         debug_assert!(size % BYTES_IN_PAGE == 0);
 
         for spec in self.global.iter() {
-            ensure_munmap_contiguos_metadata_space(start, size, spec);
+            ensure_munmap_contiguous_metadata_space(start, size, spec);
         }
 
         for spec in self.local.iter() {
             #[cfg(target_pointer_width = "64")]
             {
-                ensure_munmap_contiguos_metadata_space(start, size, spec);
+                ensure_munmap_contiguous_metadata_space(start, size, spec);
             }
             #[cfg(target_pointer_width = "32")]
             {

@@ -343,6 +343,16 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
         true
     }
 
+    /// Return whether the current GC may move any object.  The VM binding can make use of this
+    /// information and choose to or not to update some data structures that record the addresses
+    /// of objects.
+    ///
+    /// This function is callable during a GC.  From the VM binding's point of view, the information
+    /// of whether the current GC moves object or not is available since `Collection::stop_mutators`
+    /// is called, and remains available until (but not including) `resume_mutators` at which time
+    /// the current GC has just finished.
+    fn current_gc_may_move_object(&self) -> bool;
+
     /// An object is firstly reached by a sanity GC. So the object is reachable
     /// in the current GC, and all the GC work has been done for the object (such as
     /// tracing and releasing). A plan can implement this to
@@ -1067,7 +1077,7 @@ pub trait PlanTraceObject<VM: VMBinding> {
     ///
     /// Arguments:
     /// * `trace`: the current transitive closure
-    /// * `object`: the object to trace. This is a non-nullable object reference.
+    /// * `object`: the object to trace.
     /// * `worker`: the GC worker that is tracing this object.
     fn trace_object<Q: ObjectQueue, const KIND: TraceKind>(
         &self,

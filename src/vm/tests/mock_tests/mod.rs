@@ -29,10 +29,10 @@ mod mock_test_allocator_info;
 mod mock_test_barrier_slow_path_assertion;
 #[cfg(feature = "is_mmtk_object")]
 mod mock_test_conservatism;
-mod mock_test_edges;
 #[cfg(target_os = "linux")]
 mod mock_test_handle_mmap_conflict;
 mod mock_test_handle_mmap_oom;
+mod mock_test_init_fork;
 mod mock_test_is_in_mmtk_spaces;
 mod mock_test_issue139_allocate_non_multiple_of_min_alignment;
 mod mock_test_issue867_allocate_unrealistically_large_object;
@@ -43,6 +43,7 @@ mod mock_test_malloc_ms;
 mod mock_test_mmtk_julia_pr_143;
 #[cfg(feature = "nogc_lock_free")]
 mod mock_test_nogc_lock_free;
+mod mock_test_slots;
 #[cfg(target_pointer_width = "64")]
 mod mock_test_vm_layout_compressed_pointer;
 mod mock_test_vm_layout_default;

@@ -38,8 +38,10 @@ impl<VM: VMBinding> TreadMill<VM> {
 
     pub fn add_to_treadmill(&self, object: ObjectReference, nursery: bool) {
         if nursery {
+            trace!("Adding {} to nursery", object);
             self.alloc_nursery.lock().unwrap().insert(object);
         } else {
+            trace!("Adding {} to to_space", object);
             self.to_space.lock().unwrap().insert(object);
         }
     }
@@ -99,10 +101,10 @@ impl<VM: VMBinding> TreadMill<VM> {
 
     pub fn flip(&mut self, full_heap: bool) {
         swap(&mut self.alloc_nursery, &mut self.collect_nursery);
-        // println!("an <-> cn");
+        trace!("Flipped alloc_nursery and collect_nursery");
         if full_heap {
             swap(&mut self.from_space, &mut self.to_space);
-            // println!("fs <-> ts");
+            trace!("Flipped from_space and to_space");
         }
     }
 }

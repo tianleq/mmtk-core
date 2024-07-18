@@ -1,7 +1,7 @@
 //! This module contains code useful for tracing,
 //! i.e. visiting the reachable objects by traversing all or part of an object graph.
 
-use crate::scheduler::gc_work::{EdgeOf, ProcessEdgesWork};
+use crate::scheduler::gc_work::{ProcessEdgesWork, SlotOf};
 use crate::scheduler::{GCWorker, WorkBucketStage};
 use crate::util::ObjectReference;
 #[cfg(feature = "debug_thread_local_gc_copying")]
@@ -9,8 +9,8 @@ use crate::util::VMMutatorThread;
 use crate::vm::edge_shape::Edge;
 #[cfg(feature = "debug_thread_local_gc_copying")]
 use crate::vm::ActivePlan;
-use crate::vm::EdgeVisitor;
 use crate::vm::Scanning;
+use crate::vm::SlotVisitor;
 use crate::MMTK;
 
 /// This trait represents an object queue to enqueue objects during tracing.
@@ -84,11 +84,11 @@ impl ObjectQueue for VectorQueue<ObjectReference> {
     }
 }
 
-/// A transitive closure visitor to collect the edges from objects.
-/// It maintains a buffer for the edges, and flushes edges to a new work packet
+/// A transitive closure visitor to collect the slots from objects.
+/// It maintains a buffer for the slots, and flushes slots to a new work packet
 /// if the buffer is full or if the type gets dropped.
 pub struct ObjectsClosure<'a, E: ProcessEdgesWork> {
-    buffer: VectorQueue<EdgeOf<E>>,
+    buffer: VectorQueue<SlotOf<E>>,
     #[cfg(feature = "debug_publish_object")]
     sources: VectorQueue<ObjectReference>,
     pub(crate) worker: &'a mut GCWorker<E::VM>,
@@ -137,13 +137,14 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
     }
 }
 
-impl<'a, E: ProcessEdgesWork> EdgeVisitor<EdgeOf<E>> for ObjectsClosure<'a, E> {
+impl<'a, E: ProcessEdgesWork> SlotVisitor<SlotOf<E>> for ObjectsClosure<'a, E> {
     #[cfg(not(feature = "debug_publish_object"))]
-    fn visit_edge(&mut self, slot: EdgeOf<E>) {
+    fn visit_slot(&mut self, slot: SlotOf<E>) {
         #[cfg(debug_assertions)]
         {
+            use crate::vm::slot::Slot;
             trace!(
-                "(ObjectsClosure) Visit edge {:?} (pointing to {})",
+                "(ObjectsClosure) Visit slot {:?} (pointing to {:?})",
                 slot,
                 slot.load()
             );

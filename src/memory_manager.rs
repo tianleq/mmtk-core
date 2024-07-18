@@ -16,7 +16,7 @@ use crate::mmtk::MMTK;
 use crate::plan::AllocationSemantics;
 use crate::plan::{Mutator, MutatorContext};
 use crate::scheduler::WorkBucketStage;
-use crate::scheduler::{GCController, GCWork, GCWorker};
+use crate::scheduler::{GCWork, GCWorker};
 use crate::util::alloc::allocators::AllocatorSelector;
 use crate::util::alloc::BumpAllocator;
 use crate::util::alloc::ImmixAllocator;
@@ -25,7 +25,7 @@ use crate::util::constants::{LOG_BYTES_IN_PAGE, MIN_OBJECT_SIZE};
 use crate::util::heap::layout::vm_layout::vm_layout;
 use crate::util::opaque_pointer::*;
 use crate::util::{Address, ObjectReference};
-use crate::vm::edge_shape::MemorySlice;
+use crate::vm::slot::MemorySlice;
 use crate::vm::ActivePlan;
 use crate::vm::ReferenceGlue;
 use crate::vm::Scanning;
@@ -236,10 +236,28 @@ pub fn post_alloc<VM: VMBinding>(
 /// * `src`: The modified source object.
 /// * `slot`: The location of the field to be modified.
 /// * `target`: The target for the write operation.
+///
+/// # Deprecated
+///
+/// This function needs to be redesigned.  Its current form has multiple issues.
+///
+/// -   It is only able to write non-null object references into the slot.  But dynamic language
+///     VMs may write non-reference values, such as tagged small integers, special values such as
+///     `null`, `undefined`, `true`, `false`, etc. into a field that previous contains an object
+///     reference.
+/// -   It relies on `slot.store` to write `target` into the slot, but `slot.store` is designed for
+///     forwarding references when an object is moved by GC, and is supposed to preserve tagged
+///     type information, the offset (if it is an interior pointer), etc.  A write barrier is
+///     associated to an assignment operation, which usually updates such information instead.
+///
+/// We will redesign a more general subsuming write barrier to address those problems and replace
+/// the current `object_reference_write`.  Before that happens, VM bindings should use
+/// `object_reference_write_pre` and `object_reference_write_post` instead.
+#[deprecated = "Use `object_reference_write_pre` and `object_reference_write_post` instead, until this function is redesigned"]
 pub fn object_reference_write<VM: VMBinding>(
     mutator: &mut Mutator<VM>,
     src: ObjectReference,
-    slot: VM::VMEdge,
+    slot: VM::VMSlot,
     target: ObjectReference,
 ) {
     mutator.barrier().object_reference_write(src, slot, target);
@@ -259,12 +277,14 @@ pub fn object_reference_write<VM: VMBinding>(
 /// * `mutator`: The mutator for the current thread.
 /// * `src`: The modified source object.
 /// * `slot`: The location of the field to be modified.
-/// * `target`: The target for the write operation.
+/// * `target`: The target for the write operation.  `None` if the slot did not hold an object
+///   reference before the write operation.  For example, the slot may be holding a `null`
+///   reference, a small integer, or special values such as `true`, `false`, `undefined`, etc.
 pub fn object_reference_write_pre<VM: VMBinding>(
     mutator: &mut Mutator<VM>,
     src: ObjectReference,
-    slot: VM::VMEdge,
-    target: ObjectReference,
+    slot: VM::VMSlot,
+    target: Option<ObjectReference>,
 ) {
     mutator
         .barrier()
@@ -285,12 +305,14 @@ pub fn object_reference_write_pre<VM: VMBinding>(
 /// * `mutator`: The mutator for the current thread.
 /// * `src`: The modified source object.
 /// * `slot`: The location of the field to be modified.
-/// * `target`: The target for the write operation.
+/// * `target`: The target for the write operation.  `None` if the slot no longer hold an object
+///   reference after the write operation.  This may happen when writing a `null` reference, a small
+///   integers, or a special value such as`true`, `false`, `undefined`, etc., into the slot.
 pub fn object_reference_write_post<VM: VMBinding>(
     mutator: &mut Mutator<VM>,
     src: ObjectReference,
-    slot: VM::VMEdge,
-    target: ObjectReference,
+    slot: VM::VMSlot,
+    target: Option<ObjectReference>,
 ) {
     mutator
         .barrier()
@@ -300,7 +322,7 @@ pub fn object_reference_write_post<VM: VMBinding>(
 /// The *subsuming* memory region copy barrier by MMTk.
 /// This is called when the VM tries to copy a piece of heap memory to another.
 /// The data within the slice does not necessarily to be all valid pointers,
-/// but the VM binding will be able to filter out non-reference values on edge iteration.
+/// but the VM binding will be able to filter out non-reference values on slot iteration.
 ///
 /// For VMs that performs a heap memory copy operation, for example OpenJDK's array copy operation, the binding needs to
 /// call `memory_region_copy*` APIs. Same as `object_reference_write*`, the binding can choose either the subsuming barrier,
@@ -325,7 +347,7 @@ pub fn memory_region_copy<VM: VMBinding>(
 /// *before* it performs memory copy.
 /// This is called when the VM tries to copy a piece of heap memory to another.
 /// The data within the slice does not necessarily to be all valid pointers,
-/// but the VM binding will be able to filter out non-reference values on edge iteration.
+/// but the VM binding will be able to filter out non-reference values on slot iteration.
 ///
 /// For VMs that performs a heap memory copy operation, for example OpenJDK's array copy operation, the binding needs to
 /// call `memory_region_copy*` APIs. Same as `object_reference_write*`, the binding can choose either the subsuming barrier,
@@ -350,7 +372,7 @@ pub fn memory_region_copy_pre<VM: VMBinding>(
 /// *after* it performs memory copy.
 /// This is called when the VM tries to copy a piece of heap memory to another.
 /// The data within the slice does not necessarily to be all valid pointers,
-/// but the VM binding will be able to filter out non-reference values on edge iteration.
+/// but the VM binding will be able to filter out non-reference values on slot iteration.
 ///
 /// For VMs that performs a heap memory copy operation, for example OpenJDK's array copy operation, the binding needs to
 /// call `memory_region_copy*` APIs. Same as `object_reference_write*`, the binding can choose either the subsuming barrier,
@@ -445,6 +467,7 @@ pub fn free_with_size<VM: VMBinding>(mmtk: &MMTK<VM>, addr: Address, old_size: u
 /// Get the current active malloc'd bytes. Here MMTk only accounts for bytes that are done through those 'counted malloc' functions.
 #[cfg(feature = "malloc_counted_size")]
 pub fn get_malloc_bytes<VM: VMBinding>(mmtk: &MMTK<VM>) -> usize {
+    use std::sync::atomic::Ordering;
     mmtk.state.malloc_bytes.load(Ordering::SeqCst)
 }
 
@@ -468,53 +491,18 @@ pub fn gc_poll<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
     }
 }
 
-/// Run the main loop for the GC controller thread. This method does not return.
-///
-/// Arguments:
-/// * `tls`: The thread that will be used as the GC controller.
-/// * `gc_controller`: The execution context of the GC controller threa.
-///   It is the `GCController` passed to `Collection::spawn_gc_thread`.
-/// * `mmtk`: A reference to an MMTk instance.
-pub fn start_control_collector<VM: VMBinding>(
-    _mmtk: &'static MMTK<VM>,
-    tls: VMWorkerThread,
-    gc_controller: &mut GCController<VM>,
-) {
-    gc_controller.run(tls);
-}
-
-/// Run the main loop of a GC worker. This method does not return.
-///
-/// Arguments:
-/// * `tls`: The thread that will be used as the GC worker.
-/// * `worker`: The execution context of the GC worker thread.
-///   It is the `GCWorker` passed to `Collection::spawn_gc_thread`.
-/// * `mmtk`: A reference to an MMTk instance.
+/// Wrapper for [`crate::scheduler::GCWorker::run`].
 pub fn start_worker<VM: VMBinding>(
     mmtk: &'static MMTK<VM>,
     tls: VMWorkerThread,
-    worker: &mut GCWorker<VM>,
+    worker: Box<GCWorker<VM>>,
 ) {
     worker.run(tls, mmtk);
 }
 
-/// Initialize the scheduler and GC workers that are required for doing garbage collections.
-/// This is a mandatory call for a VM during its boot process once its thread system
-/// is ready. This should only be called once. This call will invoke Collection::spawn_gc_thread()
-/// to create GC threads.
-///
-/// Arguments:
-/// * `mmtk`: A reference to an MMTk instance.
-/// * `tls`: The thread that wants to enable the collection. This value will be passed back to the VM in
-///   Collection::spawn_gc_thread() so that the VM knows the context.
+/// Wrapper for [`crate::mmtk::MMTK::initialize_collection`].
 pub fn initialize_collection<VM: VMBinding>(mmtk: &'static MMTK<VM>, tls: VMThread) {
-    assert!(
-        !mmtk.state.is_initialized(),
-        "MMTk collection has been initialized (was initialize_collection() already called before?)"
-    );
-    mmtk.scheduler.spawn_gc_threads(mmtk, tls);
-    mmtk.state.initialized.store(true, Ordering::SeqCst);
-    probe!(mmtk, collection_initialized);
+    mmtk.initialize_collection(tls);
 }
 
 /// Process MMTk run-time options. Returns true if the option is processed successfully.
@@ -562,6 +550,7 @@ pub fn free_bytes<VM: VMBinding>(mmtk: &MMTK<VM>) -> usize {
 /// to call this method is at the end of a GC (e.g. when the runtime is about to resume threads).
 #[cfg(feature = "count_live_bytes_in_gc")]
 pub fn live_bytes_in_last_gc<VM: VMBinding>(mmtk: &MMTK<VM>) -> usize {
+    use std::sync::atomic::Ordering;
     mmtk.state.live_bytes_in_last_gc.load(Ordering::SeqCst)
 }
 
@@ -598,8 +587,8 @@ pub fn handle_user_collection_request<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMut
 ///
 /// Arguments:
 /// * `object`: The object reference to query.
-pub fn is_live_object(object: ObjectReference) -> bool {
-    object.is_live()
+pub fn is_live_object<VM: VMBinding>(object: ObjectReference) -> bool {
+    object.is_live::<VM>()
 }
 
 /// Check if `addr` is the address of an object reference to an MMTk object.
@@ -616,7 +605,6 @@ pub fn is_live_object(object: ObjectReference) -> bool {
 ///             It is the byte granularity of the valid object (VO) bit.
 /// 3.  Return false otherwise.  This function never panics.
 ///
-/// Case 2 means **this function is imprecise for misaligned addresses**.
 /// This function uses the "valid object (VO) bits" side metadata, i.e. a bitmap.
 /// For space efficiency, each bit of the bitmap governs a small region of memory.
 /// The size of a region is currently defined as the [minimum object size](crate::util::constants::MIN_OBJECT_SIZE),
@@ -625,13 +613,8 @@ pub fn is_live_object(object: ObjectReference) -> bool {
 /// The alignment of a region is also the region size.
 /// If a VO bit is `1`, the bitmap cannot tell which address within the 4-byte or 8-byte region
 /// is the valid object reference.
-/// Therefore, if the input `addr` is not properly aligned, but is close to a valid object
-/// reference, this function may still return true.
-///
-/// For the reason above, the VM **must check if `addr` is properly aligned** before calling this
-/// function.  For most VMs, valid object references are always aligned to the word size, so
-/// checking `addr.is_aligned_to(BYTES_IN_WORD)` should usually work.  If you are paranoid, you can
-/// always check against [`crate::util::is_mmtk_object::VO_BIT_REGION_SIZE`].
+/// Therefore, if this method returns true, the binding can compute the object reference by
+/// aligning the address to [`crate::util::ObjectReference::ALIGNMENT`].
 ///
 /// This function is useful for conservative root scanning.  The VM can iterate through all words in
 /// a stack, filter out zeros, misaligned words, obviously out-of-range words (such as addresses
@@ -679,9 +662,6 @@ pub fn is_mmtk_object(addr: Address) -> bool {
 /// * `object`: The object reference to query.
 pub fn is_in_mmtk_spaces<VM: VMBinding>(object: ObjectReference) -> bool {
     use crate::mmtk::SFT_MAP;
-    if object.is_null() {
-        return false;
-    }
     SFT_MAP
         .get_checked(object.to_address::<VM>())
         .is_in_space(object)

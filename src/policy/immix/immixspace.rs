@@ -109,6 +109,8 @@ pub struct ImmixSpaceArgs {
     /// instance contain young objects, their VO bits need to be updated during this GC.  Currently
     /// only StickyImmix is affected.  GenImmix allocates young objects in a separete CopySpace
     /// nursery and its VO bits can be cleared in bulk.
+    // Currently only used when "vo_bit" is enabled.  Using #[cfg(...)] to eliminate dead code warning.
+    #[cfg(feature = "vo_bit")]
     pub mixed_age: bool,
 }
 
@@ -194,6 +196,9 @@ impl<VM: VMBinding> Space<VM> for ImmixSpace<VM> {
     fn get_page_resource(&self) -> &dyn PageResource<VM> {
         &self.pr
     }
+    fn maybe_get_page_resource_mut(&mut self) -> Option<&mut dyn PageResource<VM>> {
+        Some(&mut self.pr)
+    }
     fn common(&self) -> &CommonSpace<VM> {
         &self.common
     }
@@ -216,7 +221,6 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
         copy: Option<CopySemantics>,
         worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
-        debug_assert!(!object.is_null());
         if KIND == TRACE_KIND_TRANSITIVE_PIN {
             self.trace_object_without_moving(queue, object, worker)
         } else if KIND == TRACE_KIND_DEFRAG {
@@ -573,12 +577,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
     }
 
-    /// Release for the immix space. This is called when a GC finished.
-    /// Return whether this GC was a defrag GC, as a plan may want to know this.
-    pub fn release(&mut self, major_gc: bool) -> bool {
-        let did_defrag = self.defrag.in_defrag();
+    /// Release for the immix space.
+    pub fn release(&mut self, major_gc: bool) {
         if major_gc {
-            // Update line_unavail_state for hole searching afte this GC.
+            // Update line_unavail_state for hole searching after this GC.
             if !super::BLOCK_ONLY {
                 self.line_unavail_state.store(
                     self.line_mark_state.load(Ordering::Acquire),
@@ -594,12 +596,17 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         // Sweep chunks and blocks
         let work_packets = self.generate_sweep_tasks();
         self.scheduler().work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
-        if super::DEFRAG {
-            self.defrag.release(self);
-        }
 
         self.lines_consumed.store(0, Ordering::Relaxed);
+    }
 
+    /// This is called when a GC finished.
+    /// Return whether this GC was a defrag GC, as a plan may want to know this.
+    pub fn end_of_gc(&mut self) -> bool {
+        let did_defrag = self.defrag.in_defrag();
+        if super::DEFRAG {
+            self.defrag.reset_in_defrag();
+        }
         // {
         //     use std::{fs::OpenOptions, io::Write};
         //     use std::time::UNIX_EPOCH;
@@ -1059,7 +1066,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             //     Block::containing::<VM>(object).is_defrag_source(),
             // ));
             queue.enqueue(new_object);
-            debug_assert!(new_object.is_live());
+            debug_assert!(new_object.is_live::<VM>());
             self.unlog_object_if_needed(new_object);
             new_object
         }
@@ -2073,7 +2080,7 @@ struct SweepChunk<VM: VMBinding> {
 }
 
 impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         // This work packet is only generated during global gc
         #[cfg(feature = "debug_thread_local_gc_copying")]
         use crate::util::GCStatistics;
@@ -2081,57 +2088,58 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
         #[cfg(feature = "debug_thread_local_gc_copying")]
         let mut gc_stats = GCStatistics::default();
 
+        assert_eq!(self.space.chunk_map.get(self.chunk), ChunkState::Allocated);
+
         let mut histogram = self.space.defrag.new_histogram();
-        if self.space.chunk_map.get(self.chunk) == ChunkState::Allocated {
-            let line_mark_state = if super::BLOCK_ONLY {
-                None
-            } else {
-                Some(self.space.line_mark_state.load(Ordering::Acquire))
-            };
-            // number of allocated blocks.
-            let mut allocated_blocks = 0;
-            // Iterate over all allocated blocks in this chunk.
-            for block in self
-                .chunk
-                .iter_region::<Block>()
-                .filter(|block| block.get_state() != BlockState::Unallocated)
-            {
-                if !block.sweep(
-                    self.space,
-                    &mut histogram,
-                    line_mark_state,
-                    #[cfg(feature = "debug_thread_local_gc_copying")]
-                    &mut gc_stats,
-                ) {
-                    // Block is live. Increment the allocated block count.
-                    allocated_blocks += 1;
-                } else {
-                    // self.space.blocks_freed.fetch_add(1, Ordering::SeqCst);
-                }
-                #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
-                {
-                    if block.is_block_published() {
-                        // public block
-                        debug_assert!(
-                            !block.are_lines_private(),
-                            "public block: {:?} contains private lines after global gc",
-                            block
-                        );
+        let line_mark_state = if super::BLOCK_ONLY {
+            None
+        } else {
+            Some(self.space.line_mark_state.load(Ordering::Acquire))
+        };
+        // Hints for clearing side forwarding bits.
+        let is_moving_gc = mmtk.get_plan().current_gc_may_move_object();
+        let is_defrag_gc = self.space.defrag.in_defrag();
+        // number of allocated blocks.
+        let mut allocated_blocks = 0;
+        // Iterate over all allocated blocks in this chunk.
+        for block in self
+            .chunk
+            .iter_region::<Block>()
+            .filter(|block| block.get_state() != BlockState::Unallocated)
+        {
+            // Clear side forwarding bits.
+            // In the beginning of the next GC, no side forwarding bits shall be set.
+            // In this way, we can omit clearing forwarding bits when copying object.
+            // See `GCWorkerCopyContext::post_copy`.
+            // Note, `block.sweep()` overwrites `DEFRAG_STATE_TABLE` with the number of holes,
+            // but we need it to know if a block is a defrag source.
+            // We clear forwarding bits before `block.sweep()`.
+            if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC {
+                if is_moving_gc {
+                    let objects_may_move = if is_defrag_gc {
+                        // If it is a defrag GC, we only clear forwarding bits for defrag sources.
+                        block.is_defrag_source()
                     } else {
-                        // private block
-                        debug_assert!(
-                            block.are_lines_private(),
-                            "private block: {:?} contains public lines after global gc",
-                            block
-                        );
+                        // Otherwise, it must be a nursery GC of StickyImmix with copying nursery.
+                        // We don't have information about which block contains moved objects,
+                        // so we have to clear forwarding bits for all blocks.
+                        true
+                    };
+                    if objects_may_move {
+                        side.bzero_metadata(block.start(), Block::BYTES);
                     }
                 }
             }
 
-            // Set this chunk as free if there is not live blocks.
-            if allocated_blocks == 0 {
-                self.space.chunk_map.set(self.chunk, ChunkState::Free)
+            if !block.sweep(self.space, &mut histogram, line_mark_state) {
+                // Block is live. Increment the allocated block count.
+                allocated_blocks += 1;
             }
+        }
+        probe!(mmtk, sweep_chunk, allocated_blocks);
+        // Set this chunk as free if there is not live blocks.
+        if allocated_blocks == 0 {
+            self.space.chunk_map.set(self.chunk, ChunkState::Free)
         }
         #[cfg(feature = "debug_thread_local_gc_copying")]
         {

@@ -1,9 +1,13 @@
-arch=`rustc --print cfg | grep target_arch | cut -f2 -d"\""`
-os=`rustc --print cfg | grep target_os | cut -f2 -d"\""`
+# Note: cargo-rustc is influenced by the environment variable CARGO_BUILD_TARGET
+# which is specified in minimal-tests-core.yml
+arch=`cargo rustc -- --print cfg | grep target_arch | cut -f2 -d"\""`
+os=`cargo rustc -- --print cfg | grep target_os | cut -f2 -d"\""`
 
 project_root=$(dirname "$0")/../..
 
 cargo_toml=$project_root/Cargo.toml
+
+dummyvm_toml=$project_root/docs/dummyvm/Cargo.toml
 
 # Repeat a command for all the features. Requires the command as one argument (with double quotes)
 for_all_features() {

@@ -137,6 +137,10 @@ impl<VM: VMBinding> Space<VM> for MallocSpace<VM> {
         unreachable!()
     }
 
+    fn maybe_get_page_resource_mut(&mut self) -> Option<&mut dyn PageResource<VM>> {
+        None
+    }
+
     fn common(&self) -> &CommonSpace<VM> {
         unreachable!()
     }
@@ -404,8 +408,6 @@ impl<VM: VMBinding> MallocSpace<VM> {
         queue: &mut Q,
         object: ObjectReference,
     ) -> ObjectReference {
-        debug_assert!(!object.is_null());
-
         assert!(
             self.in_space(object),
             "Cannot mark an object {} that was not alloced by malloc.",
@@ -495,6 +497,8 @@ impl<VM: VMBinding> MallocSpace<VM> {
 
         self.scheduler.work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
     }
+
+    pub fn end_of_gc(&mut self) {}
 
     pub fn sweep_chunk(&self, chunk_start: Address) {
         // Call the relevant sweep function depending on the location of the mark bits

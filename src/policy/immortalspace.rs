@@ -89,6 +89,9 @@ impl<VM: VMBinding> Space<VM> for ImmortalSpace<VM> {
     fn get_page_resource(&self) -> &dyn PageResource<VM> {
         &self.pr
     }
+    fn maybe_get_page_resource_mut(&mut self) -> Option<&mut dyn PageResource<VM>> {
+        Some(&mut self.pr)
+    }
     fn common(&self) -> &CommonSpace<VM> {
         &self.common
     }
@@ -219,7 +222,6 @@ impl<VM: VMBinding> ImmortalSpace<VM> {
         queue: &mut Q,
         object: ObjectReference,
     ) -> ObjectReference {
-        debug_assert!(!object.is_null());
         #[cfg(feature = "vo_bit")]
         debug_assert!(
             crate::util::metadata::vo_bit::is_vo_bit_set::<VM>(object),

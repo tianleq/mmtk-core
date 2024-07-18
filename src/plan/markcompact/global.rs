@@ -112,9 +112,9 @@ impl<VM: VMBinding> Plan for MarkCompact<VM> {
             scheduler.work_buckets[WorkBucketStage::SoftRefClosure]
                 .add(SoftRefProcessing::<MarkingProcessEdges<VM>>::new());
             scheduler.work_buckets[WorkBucketStage::WeakRefClosure]
-                .add(WeakRefProcessing::<MarkingProcessEdges<VM>>::new());
+                .add(WeakRefProcessing::<VM>::new());
             scheduler.work_buckets[WorkBucketStage::PhantomRefClosure]
-                .add(PhantomRefProcessing::<MarkingProcessEdges<VM>>::new());
+                .add(PhantomRefProcessing::<VM>::new());
 
             use crate::util::reference_processor::RefForwarding;
             scheduler.work_buckets[WorkBucketStage::RefForwarding]
@@ -178,6 +178,10 @@ impl<VM: VMBinding> Plan for MarkCompact<VM> {
         _object: crate::util::ObjectReference,
         #[cfg(feature = "debug_thread_local_gc_copying")] _tls: crate::util::VMMutatorThread,
     ) {
+    }
+
+    fn current_gc_may_move_object(&self) -> bool {
+        true
     }
 }
 

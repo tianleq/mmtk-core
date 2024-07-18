@@ -1,3 +1,86 @@
+0.26.0 (2024-07-01)
+===
+
+## What's Changed
+
+### Policy
+* Clear side forwarding bits properly by @wks in https://github.com/mmtk/mmtk-core/pull/1138
+* Fix mark bit clearing in PrepareChunkMap by @wks in https://github.com/mmtk/mmtk-core/pull/1148
+* Let MarkSweepSpace use BlockPageResource by @wks in https://github.com/mmtk/mmtk-core/pull/1150
+* Add SweepChunk to native MarkSweepSpace by @wks in https://github.com/mmtk/mmtk-core/pull/1158
+
+### API
+* Rename edge to slot by @wks in https://github.com/mmtk/mmtk-core/pull/1134
+
+### Documentation
+* Fix broken link and stale descriptions in doc by @wks in https://github.com/mmtk/mmtk-core/pull/1139
+* API migration guide. by @wks in https://github.com/mmtk/mmtk-core/pull/1133
+* Add back `DummyVM` as a part of the porting guide. Minor changes to MMTk initialization in the porting guide. by @qinsoon in https://github.com/mmtk/mmtk-core/pull/1142
+* Fix broken link to mmtk.h by @wks in https://github.com/mmtk/mmtk-core/pull/1149
+
+### Misc
+* Fix clippy warnings for Rust 1.79 by @wks in https://github.com/mmtk/mmtk-core/pull/1151
+* Display number of slots in timeline visualization by @wks in https://github.com/mmtk/mmtk-core/pull/1154
+
+**Full Changelog**: https://github.com/mmtk/mmtk-core/compare/v0.25.0...v0.26.0
+
+0.25.0 (2024-05-17)
+===
+
+## What's Changed
+
+### Plan
+* Allow roots to be pinned for StickyImmix nursery collections by @k-sareen in https://github.com/mmtk/mmtk-core/pull/1108
+* Check `FULL_NURSERY_GC` for StickyImmix as well by @k-sareen in https://github.com/mmtk/mmtk-core/pull/1124
+
+### Policy
+* Remove data race for marksweep block lists by @qinsoon in https://github.com/mmtk/mmtk-core/pull/1112
+
+### Scheduler
+* Remove coordinator and support forking by @wks in https://github.com/mmtk/mmtk-core/pull/1067
+
+### API
+* Allow nursery size to be proportional to the heap size by @qinsoon in https://github.com/mmtk/mmtk-core/pull/1087
+* Remove NULL ObjectReference by @wks in https://github.com/mmtk/mmtk-core/pull/1064
+* Fix write barrier parameter type by @wks in https://github.com/mmtk/mmtk-core/pull/1130
+* Allow querying if the current GC may move objects. by @wks in https://github.com/mmtk/mmtk-core/pull/1128
+
+### CI
+* Use host toolchain and explicit target in CI script by @wks in https://github.com/mmtk/mmtk-core/pull/1109
+* Fix ignores in merge check by @qinsoon in https://github.com/mmtk/mmtk-core/pull/1117
+* Fix the openjdk test name in merge check by @qinsoon in https://github.com/mmtk/mmtk-core/pull/1119
+
+### Misc
+* Bump dependencies after version 0.24 by @wks in https://github.com/mmtk/mmtk-core/pull/1105
+* Don't use `PROT_EXEC` with `mmap` on macos by @eileencodes in https://github.com/mmtk/mmtk-core/pull/1110
+* Rename associated types in GCWorkContext by @wks in https://github.com/mmtk/mmtk-core/pull/1116
+* Add missing pinning metadata to mock_vm by @wks in https://github.com/mmtk/mmtk-core/pull/1121
+* Use to_address for SFT access by @wks in https://github.com/mmtk/mmtk-core/pull/1122
+* Ensure reference objects are either traced or cleared by @wks in https://github.com/mmtk/mmtk-core/pull/1126
+* Dump process map on `mmap` failure and fix typos by @k-sareen in https://github.com/mmtk/mmtk-core/pull/1127
+* Fix compiler errors and warnings for Rust 1.78.0 by @wks in https://github.com/mmtk/mmtk-core/pull/1132
+* Remove fl_map and refactor FreeListPageResoure by @wks in https://github.com/mmtk/mmtk-core/pull/953
+
+## New Contributors
+* @eileencodes made their first contribution in https://github.com/mmtk/mmtk-core/pull/1110
+
+**Full Changelog**: https://github.com/mmtk/mmtk-core/compare/v0.24.0...v0.25.0
+
+0.24.0 (2024-04-08)
+===
+
+## What's Changed
+
+### Misc
+* Check and fix broken links in docs by @qinsoon in https://github.com/mmtk/mmtk-core/pull/1085
+* Allow binding to implement GC trigger by @qinsoon in https://github.com/mmtk/mmtk-core/pull/1083
+* Resolve issues for unit tests on 32 bits by @qinsoon in https://github.com/mmtk/mmtk-core/pull/1095
+* Use SFTDenseChunkMap on 64bits when vm_space is enabled by @qinsoon in https://github.com/mmtk/mmtk-core/pull/1094
+* Fix warnings with the stable Rust toolchain by @wks in https://github.com/mmtk/mmtk-core/pull/1099
+* Use proper logging for the treadmill by @wks in https://github.com/mmtk/mmtk-core/pull/1101
+
+**Full Changelog**: https://github.com/mmtk/mmtk-core/compare/v0.23.0...v0.24.0
+
 0.23.0 (2024-02-09)
 ===
 

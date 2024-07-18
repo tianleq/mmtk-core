@@ -1,7 +1,7 @@
 //! Read/Write barrier implementations.
 
 use crate::util::metadata::public_bit::{is_public, set_public_bit};
-use crate::vm::edge_shape::{Edge, MemorySlice};
+use crate::vm::slot::{MemorySlice, Slot};
 use crate::vm::ObjectModel;
 use crate::MMTK;
 use crate::{
@@ -55,20 +55,20 @@ pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
     fn object_reference_write(
         &mut self,
         src: ObjectReference,
-        slot: VM::VMEdge,
+        slot: VM::VMSlot,
         target: ObjectReference,
     ) {
-        self.object_reference_write_pre(src, slot, target);
+        self.object_reference_write_pre(src, slot, Some(target));
         slot.store(target);
-        self.object_reference_write_post(src, slot, target);
+        self.object_reference_write_post(src, slot, Some(target));
     }
 
     /// Full pre-barrier for object reference write
     fn object_reference_write_pre(
         &mut self,
         _src: ObjectReference,
-        _slot: VM::VMEdge,
-        _target: ObjectReference,
+        _slot: VM::VMSlot,
+        _target: Option<ObjectReference>,
     ) {
     }
 
@@ -76,8 +76,8 @@ pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
     fn object_reference_write_post(
         &mut self,
         _src: ObjectReference,
-        _slot: VM::VMEdge,
-        _target: ObjectReference,
+        _slot: VM::VMSlot,
+        _target: Option<ObjectReference>,
     ) {
     }
 
@@ -87,7 +87,7 @@ pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
         &mut self,
         _src: ObjectReference,
         _slot: VM::VMEdge,
-        _target: ObjectReference,
+        _target: Option<ObjectReference>,
     ) {
     }
 
@@ -173,8 +173,8 @@ pub trait BarrierSemantics: 'static + Send {
     fn object_reference_write_slow(
         &mut self,
         src: ObjectReference,
-        slot: <Self::VM as VMBinding>::VMEdge,
-        target: ObjectReference,
+        slot: <Self::VM as VMBinding>::VMSlot,
+        target: Option<ObjectReference>,
     );
 
     /// Slow-path call for mempry slice copy operations. For example, array-copy operations.
@@ -257,8 +257,8 @@ impl<S: BarrierSemantics> Barrier<S::VM> for ObjectBarrier<S> {
     fn object_reference_write_post(
         &mut self,
         src: ObjectReference,
-        slot: <S::VM as VMBinding>::VMEdge,
-        target: ObjectReference,
+        slot: <S::VM as VMBinding>::VMSlot,
+        target: Option<ObjectReference>,
     ) {
         if self.object_is_unlogged(src) {
             self.object_reference_write_slow(src, slot, target);
@@ -268,8 +268,8 @@ impl<S: BarrierSemantics> Barrier<S::VM> for ObjectBarrier<S> {
     fn object_reference_write_slow(
         &mut self,
         src: ObjectReference,
-        slot: <S::VM as VMBinding>::VMEdge,
-        target: ObjectReference,
+        slot: <S::VM as VMBinding>::VMSlot,
+        target: Option<ObjectReference>,
     ) {
         if self.log_object(src) {
             self.semantics

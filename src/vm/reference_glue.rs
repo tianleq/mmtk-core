@@ -66,7 +66,7 @@ use crate::scheduler::gc_work::ProcessEdgesWork;
 /// the type as a tuple of `(object, finalize method)`, and register different finalizer methods to MMTk
 /// for the same object.
 /// The implementation should mark theird method implementations as inline for performance.
-pub trait Finalizable: std::fmt::Debug + Send {
+pub trait Finalizable: std::fmt::Debug + Send + Copy {
     /// Load the object reference.
     fn get_reference(&self) -> ObjectReference;
     /// Store the object reference.

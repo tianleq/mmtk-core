@@ -56,6 +56,18 @@ impl<F: Finalizable> FinalizableProcessor<F> {
         finalizable.keep_alive::<E>(e);
     }
 
+    #[cfg(feature = "thread_local_gc")]
+    pub fn scan_thread_local<E>(&mut self, e: &mut E, candidates: &mut [F])
+    where
+        E: ProcessEdgesWork,
+    {
+        for mut f in candidates {
+            let reff: ObjectReference = f.get_reference();
+            debug_assert!(reff.is_live(), "object: {:?} should be live", reff);
+            FinalizableProcessor::<F>::forward_finalizable_reference(e, &mut f);
+        }
+    }
+
     pub fn scan<E: ProcessEdgesWork>(&mut self, tls: VMWorkerThread, e: &mut E, nursery: bool) {
         let start = if nursery { self.nursery_index } else { 0 };
 
@@ -65,6 +77,7 @@ impl<F: Finalizable> FinalizableProcessor<F> {
         // But we have to iterate through candidates after closure.
         self.candidates.append(&mut self.ready_for_finalize);
         debug_assert!(self.ready_for_finalize.is_empty());
+
         for mut f in self.candidates.drain(start..).collect::<Vec<F>>() {
             let reff: ObjectReference = f.get_reference();
 
@@ -84,7 +97,6 @@ impl<F: Finalizable> FinalizableProcessor<F> {
             // So we simply push the object to the ready_for_finalize queue, and mark them as live objects later.
             self.ready_for_finalize.push(f);
         }
-
         // Keep the finalizable objects alive.
         self.forward_finalizable(e, nursery);
 
@@ -164,6 +176,8 @@ pub struct Finalization<E: ProcessEdgesWork>(PhantomData<E>);
 
 impl<E: ProcessEdgesWork> GCWork<E::VM> for Finalization<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
+        use crate::vm::ActivePlan;
+
         let mut finalizable_processor = mmtk.finalizable_processor.lock().unwrap();
         debug!(
             "Finalization, {} objects in candidates, {} objects ready to finalize",
@@ -182,6 +196,22 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for Finalization<E> {
             WorkBucketStage::FinalRefClosure,
         );
         w.set_worker(worker);
+        #[cfg(feature = "thread_local_gc")]
+        for mutator in <E::VM as VMBinding>::VMActivePlan::mutators() {
+            let local_reday_for_finalization = mutator
+                .finalizable_candidates
+                .iter()
+                .map(|f| *f)
+                .filter(|f| !f.get_reference().is_live());
+            finalizable_processor.add_ready_for_finalize_objects(local_reday_for_finalization);
+            // get rid of dead objects from local finalizable list
+            mutator
+                .finalizable_candidates
+                .retain(|f| f.get_reference().is_live());
+
+            // make sure local finalizable objects are up-to-date
+            finalizable_processor.scan_thread_local(&mut w, &mut mutator.finalizable_candidates);
+        }
         finalizable_processor.scan(worker.tls, &mut w, is_nursery_gc(mmtk.get_plan()));
         debug!(
             "Finished finalization, {} objects in candidates, {} objects ready to finalize",

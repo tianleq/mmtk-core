@@ -103,19 +103,30 @@ impl<C: GCWorkContext> GCWork<C::VM> for Prepare<C> {
             for mutator in <C::VM as VMBinding>::VMActivePlan::mutators() {
                 #[cfg(feature = "thread_local_gc")]
                 {
-                    // move finalizable candidates from local buffer to the global buffer
+                    let candidates =
+                        mutator
+                            .finalizable_candidates
+                            .iter()
+                            .map(|v| *v)
+                            .filter(|f| {
+                                crate::util::metadata::public_bit::is_public::<C::VM>(
+                                    f.get_reference(),
+                                )
+                            });
+
+                    // move global finalizable candidates from local buffer to the global buffer
                     mmtk.finalizable_processor
                         .lock()
                         .unwrap()
-                        .add_candidates(mutator.finalizable_candidates.drain(0..));
+                        .add_candidates(candidates);
+
+                    mutator.finalizable_candidates.retain(|f| {
+                        !crate::util::metadata::public_bit::is_public::<C::VM>(f.get_reference())
+                    });
                 }
-                {
-                    mmtk.scheduler.work_buckets[WorkBucketStage::Prepare].add(PrepareMutator::<
-                        C::VM,
-                    >::new(
-                        mutator
-                    ));
-                }
+
+                mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
+                    .add(PrepareMutator::<C::VM>::new(mutator));
             }
         }
 

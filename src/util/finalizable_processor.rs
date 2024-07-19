@@ -137,11 +137,7 @@ impl<F: Finalizable> FinalizableProcessor<F> {
         // We removed objects from candidates. Reset nursery_index
         self.nursery_index = 0;
 
-        let mut result = vec![];
-        for f in ret {
-            result.push(f);
-        }
-        result
+        ret
     }
 
     pub fn get_finalizers_for(&mut self, object: ObjectReference) -> Vec<F> {

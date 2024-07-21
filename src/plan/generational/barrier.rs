@@ -108,4 +108,14 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>> BarrierSem
         self.modbuf.push(obj);
         self.modbuf.is_full().then(|| self.flush_modbuf());
     }
+
+    fn object_array_copy_slow(
+        &mut self,
+        _src_base: ObjectReference,
+        _dst_base: ObjectReference,
+        _src: <Self::VM as VMBinding>::VMMemorySlice,
+        _dst: <Self::VM as VMBinding>::VMMemorySlice,
+    ) {
+        unreachable!()
+    }
 }

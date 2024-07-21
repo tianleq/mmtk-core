@@ -39,6 +39,9 @@ pub(crate) use plan_constraints::DEFAULT_PLAN_CONSTRAINTS;
 mod tracing;
 pub use tracing::{ObjectQueue, ObjectsClosure, VectorObjectQueue, VectorQueue};
 
+#[cfg(feature = "public_bit")]
+pub use tracing::PublishObjectClosure;
+
 /// Generational plans (with a copying nursery)
 mod generational;
 /// Sticky plans (using sticky marks for generational behaviors without a copying nursery)

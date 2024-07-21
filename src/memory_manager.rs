@@ -882,3 +882,48 @@ pub fn add_work_packets<VM: VMBinding>(
 ) {
     mmtk.scheduler.work_buckets[bucket].bulk_add(packets)
 }
+
+#[cfg(feature = "public_bit")]
+pub fn mmtk_set_public_bit<VM: VMBinding>(_mmtk: &'static MMTK<VM>, object: ObjectReference) {
+    crate::util::metadata::public_bit::set_public_bit::<VM>(object);
+    _mmtk.get_plan().publish_object(object);
+}
+
+#[cfg(feature = "public_bit")]
+pub fn mmtk_publish_object<VM: VMBinding>(
+    _mmtk: &'static MMTK<VM>,
+    _object: Option<ObjectReference>,
+) {
+    use crate::vm::Scanning;
+
+    if let Some(object) = _object {
+        if crate::util::metadata::public_bit::is_public::<VM>(object) {
+            return;
+        }
+
+        let mut closure: crate::plan::PublishObjectClosure<VM> =
+            crate::plan::PublishObjectClosure::<VM>::new(
+                _mmtk,
+                #[cfg(feature = "debug_publish_object")]
+                u32::MAX,
+            );
+
+        mmtk_set_public_bit(_mmtk, object);
+        // Publish all the descendants
+        VM::VMScanning::scan_object(
+            VMWorkerThread(VMThread::UNINITIALIZED),
+            object,
+            &mut closure,
+        );
+        closure.do_closure();
+    }
+}
+
+#[cfg(feature = "public_bit")]
+pub fn mmtk_is_object_published<VM: VMBinding>(_object: Option<ObjectReference>) -> bool {
+    if let Some(object) = _object {
+        crate::util::metadata::public_bit::is_public::<VM>(object)
+    } else {
+        false
+    }
+}

@@ -348,6 +348,9 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         side_metadata_sanity_checker
             .verify_metadata_context(std::any::type_name::<Self>(), &self.common().metadata)
     }
+
+    #[cfg(feature = "public_bit")]
+    fn publish_object(&self, _object: ObjectReference) {}
 }
 
 /// Print the VM map for a space.

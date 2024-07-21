@@ -134,3 +134,61 @@ impl<'a, E: ProcessEdgesWork> Drop for ObjectsClosure<'a, E> {
         self.flush();
     }
 }
+
+#[cfg(feature = "public_bit")]
+pub struct PublishObjectClosure<VM: crate::vm::VMBinding> {
+    _mmtk: &'static crate::MMTK<VM>,
+    slot_buffer: std::collections::VecDeque<VM::VMSlot>,
+}
+
+#[cfg(feature = "public_bit")]
+impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
+    pub fn new(mmtk: &'static crate::MMTK<VM>) -> Self {
+        PublishObjectClosure {
+            _mmtk: mmtk,
+            slot_buffer: std::collections::VecDeque::new(),
+        }
+    }
+
+    pub fn do_closure(&mut self) {
+        use crate::vm::Scanning;
+
+        while !self.slot_buffer.is_empty() {
+            let slot = self.slot_buffer.pop_front().unwrap();
+            let object = crate::vm::slot::Slot::load(&slot);
+            if object.is_none() {
+                continue;
+            }
+            let object = object.unwrap();
+            if !crate::util::metadata::public_bit::is_public::<VM>(object) {
+                // set public bit on the object
+                crate::util::metadata::public_bit::set_public_bit::<VM>(object);
+
+                self._mmtk.get_plan().publish_object(object);
+                VM::VMScanning::scan_object(
+                    crate::util::VMWorkerThread(crate::util::VMThread::UNINITIALIZED),
+                    object,
+                    self,
+                );
+            }
+        }
+    }
+}
+
+#[cfg(feature = "public_bit")]
+impl<VM: crate::vm::VMBinding> SlotVisitor<VM::VMSlot> for PublishObjectClosure<VM> {
+    fn visit_slot(&mut self, slot: VM::VMSlot) {
+        self.slot_buffer.push_back(slot);
+    }
+}
+
+#[cfg(feature = "public_bit")]
+impl<VM: crate::vm::VMBinding> Drop for PublishObjectClosure<VM> {
+    #[inline(always)]
+    fn drop(&mut self) {
+        assert!(
+            self.slot_buffer.is_empty(),
+            "There are edges left over. Closure is not done correctly."
+        );
+    }
+}

@@ -104,6 +104,22 @@ impl Block {
     pub const MARK_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_MARK;
 
+    /// Block level public table (side)
+    #[cfg(feature = "public_bit")]
+    pub const METADATA_TABLE: SideMetadataSpec =
+        crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_METADATA;
+
+    //       public bit
+    //       |
+    // 00000000
+    //        |
+    //        dirty bit
+    //
+    #[cfg(feature = "public_bit")]
+    pub const PUBLIC_BIT: u8 = 0b10;
+    #[cfg(feature = "public_bit")]
+    pub const DIRTY_BIT: u8 = 0b01;
+
     /// Get the chunk containing the block.
     pub fn chunk(&self) -> Chunk {
         Chunk::from_unaligned_address(self.0)
@@ -171,6 +187,8 @@ impl Block {
     /// Deinitalize a block before releasing.
     pub fn deinit(&self) {
         self.set_state(BlockState::Unallocated);
+        #[cfg(feature = "public_bit")]
+        crate::util::metadata::public_bit::bzero_public_bit(self.start(), Self::BYTES);
     }
 
     pub fn start_line(&self) -> Line {
@@ -188,6 +206,13 @@ impl Block {
         RegionIterator::<Line>::new(self.start_line(), self.end_line())
     }
 
+    #[cfg(feature = "public_bit")]
+    pub fn reset_metadata(&self) {
+        Self::METADATA_TABLE.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
+        // Also rest all lines within the block
+        Line::LINE_PUBLICATION_TABLE.bzero_metadata(self.start(), Self::BYTES);
+    }
+
     /// Sweep this block.
     /// Return true if the block is swept.
     pub fn sweep<VM: VMBinding>(
@@ -202,6 +227,9 @@ impl Block {
                 BlockState::Unmarked => {
                     #[cfg(feature = "vo_bit")]
                     vo_bit::helper::on_region_swept::<VM, _>(self, false);
+
+                    #[cfg(feature = "public_bit")]
+                    self.reset_metadata();
 
                     // If the pin bit is not on the side, we cannot bulk zero.
                     // We shouldn't need to clear it here in that case, since the pin bit
@@ -257,6 +285,9 @@ impl Block {
             if marked_lines == 0 {
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_region_swept::<VM, _>(self, false);
+
+                #[cfg(feature = "public_bit")]
+                self.reset_metadata();
 
                 // Release the block if non of its lines are marked.
                 space.release_block(*self);
@@ -315,6 +346,20 @@ impl Block {
                 }
             }
         }
+    }
+
+    #[cfg(feature = "public_bit")]
+    pub fn publish(&self, dirty: bool) -> bool {
+        let val = if dirty {
+            Self::DIRTY_BIT | Self::PUBLIC_BIT
+        } else {
+            Self::PUBLIC_BIT
+        };
+
+        let prev_value =
+            Self::METADATA_TABLE.fetch_or_atomic::<u8>(self.start(), val, Ordering::SeqCst);
+
+        (prev_value & Self::PUBLIC_BIT) == 0
     }
 }
 

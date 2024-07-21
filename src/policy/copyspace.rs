@@ -182,6 +182,8 @@ impl<VM: VMBinding> CopySpace<VM> {
             // Clear VO bits because all objects in the space are dead.
             #[cfg(feature = "vo_bit")]
             crate::util::metadata::vo_bit::bzero_vo_bit(start, size);
+            #[cfg(feature = "public_bit")]
+            crate::util::metadata::public_bit::bzero_public_bit(start, size);
         }
 
         unsafe {
@@ -239,6 +241,10 @@ impl<VM: VMBinding> CopySpace<VM> {
 
             #[cfg(feature = "vo_bit")]
             crate::util::metadata::vo_bit::set_vo_bit::<VM>(new_object);
+            #[cfg(feature = "public_bit")]
+            if crate::util::metadata::public_bit::is_public::<VM>(object) {
+                crate::util::metadata::public_bit::set_public_bit::<VM>(new_object);
+            }
 
             trace!("Forwarding pointer");
             queue.enqueue(new_object);

@@ -42,6 +42,8 @@ pub const IMMIX_CONSTRAINTS: PlanConstraints = PlanConstraints {
     // Max immix object size is half of a block.
     max_non_los_default_alloc_bytes: crate::policy::immix::MAX_IMMIX_OBJECT_SIZE,
     needs_prepare_mutator: false,
+    #[cfg(feature = "public_bit")]
+    barrier: crate::BarrierSelector::PublicObjectMarkingBarrier,
     ..PlanConstraints::default()
 };
 
@@ -123,6 +125,14 @@ impl<VM: VMBinding> Plan for Immix<VM> {
 
     fn common(&self) -> &CommonPlan<VM> {
         &self.common
+    }
+
+    fn publish_object(&self, object: crate::util::ObjectReference) {
+        if self.immix_space.in_space(object) {
+            self.immix_space.publish_object(object);
+        } else {
+            self.common().publish_object(object);
+        }
     }
 }
 

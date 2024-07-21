@@ -325,6 +325,9 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
             space.verify_side_metadata_sanity(&mut side_metadata_sanity_checker);
         })
     }
+
+    #[cfg(feature = "public_bit")]
+    fn publish_object(&self, _object: ObjectReference) {}
 }
 
 impl_downcast!(Plan assoc VM);
@@ -560,6 +563,37 @@ impl<VM: VMBinding> BasePlan<VM> {
 
         space_full || stress_force_gc || heap_full
     }
+
+    #[cfg(feature = "public_bit")]
+    pub fn publish_object(&self, _object: ObjectReference) {
+        #[cfg(feature = "code_space")]
+        if self.code_space.in_space(_object) {
+            trace!("publish_object: object in code space");
+            self.code_space.publish_object(_object);
+            return;
+        }
+
+        #[cfg(feature = "code_space")]
+        if self.code_lo_space.in_space(_object) {
+            trace!("publish_object: object in large code space");
+            self.code_lo_space.publish_object(_object);
+            return;
+        }
+
+        #[cfg(feature = "ro_space")]
+        if self.ro_space.in_space(_object) {
+            trace!("publish_object: object in ro_space space");
+            self.ro_space.publish_object(_object);
+            return;
+        }
+
+        #[cfg(feature = "vm_space")]
+        if self.vm_space.in_space(_object) {
+            trace!("publish_object: object in boot space");
+            self.vm_space.publish_object(_object);
+            return;
+        }
+    }
 }
 
 /**
@@ -651,6 +685,30 @@ impl<VM: VMBinding> CommonPlan<VM> {
 
     pub fn get_nonmoving(&self) -> &ImmortalSpace<VM> {
         &self.nonmoving
+    }
+
+    #[cfg(feature = "public_bit")]
+    pub fn publish_object(&self, object: ObjectReference) {
+        if self.immortal.in_space(object) {
+            trace!("publish_object: object in immortal space");
+            self.immortal.publish_object(object);
+            return;
+        }
+        if self.los.in_space(object) {
+            trace!("publish_object: object in los");
+            self.los.publish_object(
+                object,
+                #[cfg(feature = "debug_thread_local_gc_copying")]
+                _tls,
+            );
+            return;
+        }
+        if self.nonmoving.in_space(object) {
+            trace!("publish_object: object in nonmoving space");
+            self.nonmoving.publish_object(object);
+            return;
+        }
+        self.base.publish_object(object);
     }
 }
 

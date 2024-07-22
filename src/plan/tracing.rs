@@ -164,6 +164,7 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
                 // set public bit on the object
                 crate::util::metadata::public_bit::set_public_bit::<VM>(object);
 
+                #[cfg(feature = "thread_local_gc")]
                 self._mmtk.get_plan().publish_object(object);
                 VM::VMScanning::scan_object(
                     crate::util::VMWorkerThread(crate::util::VMThread::UNINITIALIZED),

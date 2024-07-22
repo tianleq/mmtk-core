@@ -35,7 +35,7 @@ impl Line {
     pub const MARK_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_LINE_MARK;
 
-    #[cfg(feature = "public_bit")]
+    #[cfg(feature = "thread_local_gc")]
     /// Line level public table (side)
     pub const LINE_PUBLICATION_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_LINE_PUBLICATION;
@@ -66,7 +66,7 @@ impl Line {
         unsafe { Self::MARK_TABLE.load::<u8>(self.start()) == state }
     }
 
-    #[cfg(not(feature = "public_bit"))]
+    #[cfg(not(feature = "thread_local_gc"))]
     /// Mark all lines the object is spanned to.
     pub fn mark_lines_for_object<VM: VMBinding>(object: ObjectReference, state: u8) -> usize {
         debug_assert!(!super::BLOCK_ONLY);
@@ -88,21 +88,21 @@ impl Line {
         marked_lines
     }
 
-    #[cfg(feature = "public_bit")]
+    #[cfg(feature = "thread_local_gc")]
     /// Mark all lines the object is spanned to.
     pub fn mark_lines_for_object<VM: VMBinding>(object: ObjectReference, state: u8) -> usize {
         Self::mark_lines_for_object_impl::<VM>(object, state);
         0
     }
 
-    #[cfg(feature = "public_bit")]
+    #[cfg(feature = "thread_local_gc")]
     pub fn publish_lines_of_object<VM: VMBinding>(object: ObjectReference, state: u8) {
         // mark line as public
 
         Self::mark_lines_for_object_impl::<VM>(object, state);
     }
 
-    #[cfg(feature = "public_bit")]
+    #[cfg(feature = "thread_local_gc")]
     fn mark_lines_for_object_impl<VM: VMBinding>(
         object: ObjectReference,
         state: u8,

@@ -326,7 +326,7 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
         })
     }
 
-    #[cfg(feature = "public_bit")]
+    #[cfg(feature = "thread_local_gc")]
     fn publish_object(&self, _object: ObjectReference) {}
 }
 
@@ -564,7 +564,7 @@ impl<VM: VMBinding> BasePlan<VM> {
         space_full || stress_force_gc || heap_full
     }
 
-    #[cfg(feature = "public_bit")]
+    #[cfg(feature = "thread_local_gc")]
     pub fn publish_object(&self, _object: ObjectReference) {
         #[cfg(feature = "code_space")]
         if self.code_space.in_space(_object) {
@@ -687,7 +687,7 @@ impl<VM: VMBinding> CommonPlan<VM> {
         &self.nonmoving
     }
 
-    #[cfg(feature = "public_bit")]
+    #[cfg(feature = "thread_local_gc")]
     pub fn publish_object(&self, object: ObjectReference) {
         if self.immortal.in_space(object) {
             trace!("publish_object: object in immortal space");

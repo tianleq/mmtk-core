@@ -181,16 +181,19 @@ impl<VM: VMBinding> Space<VM> for ImmixSpace<VM> {
     }
 
     #[cfg(feature = "public_bit")]
-    fn publish_object(&self, object: ObjectReference) {
-        // Mark block and lines
-        if !super::BLOCK_ONLY {
-            let state = self.line_mark_state.load(Ordering::Acquire);
+    fn publish_object(&self, _object: ObjectReference) {
+        #[cfg(feature = "thread_local_gc")]
+        {
+            // Mark block and lines
+            if !super::BLOCK_ONLY {
+                let state = self.line_mark_state.load(Ordering::Acquire);
 
-            Line::publish_lines_of_object::<VM>(object, state);
+                Line::publish_lines_of_object::<VM>(_object, state);
+            }
+            let block = Block::containing::<VM>(_object);
+            // This funciton is always called by a mutator, so alway set the dirty bit
+            block.publish(true);
         }
-        let block = Block::containing::<VM>(object);
-        // This funciton is always called by a mutator, so alway set the dirty bit
-        block.publish(true);
     }
 }
 
@@ -256,9 +259,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     fn side_metadata_specs() -> Vec<SideMetadataSpec> {
         metadata::extract_side_metadata(&if super::BLOCK_ONLY {
             vec![
-                #[cfg(feature = "public_bit")]
+                #[cfg(feature = "thread_local_gc")]
                 MetadataSpec::OnSide(Block::METADATA_TABLE),
-                #[cfg(feature = "public_bit")]
+                #[cfg(feature = "thread_local_gc")]
                 MetadataSpec::OnSide(Line::LINE_PUBLICATION_TABLE),
                 MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
                 MetadataSpec::OnSide(Block::MARK_TABLE),
@@ -271,9 +274,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             ]
         } else {
             vec![
-                #[cfg(feature = "public_bit")]
+                #[cfg(feature = "thread_local_gc")]
                 MetadataSpec::OnSide(Block::METADATA_TABLE),
-                #[cfg(feature = "public_bit")]
+                #[cfg(feature = "thread_local_gc")]
                 MetadataSpec::OnSide(Line::LINE_PUBLICATION_TABLE),
                 MetadataSpec::OnSide(Line::MARK_TABLE),
                 MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),

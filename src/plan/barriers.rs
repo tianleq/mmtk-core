@@ -446,6 +446,7 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
 
         metadata::public_bit::set_public_bit::<VM>(value);
 
+        #[cfg(feature = "thread_local_gc")]
         self.mmtk.get_plan().publish_object(value);
         VM::VMScanning::scan_object(VMWorkerThread(VMThread::UNINITIALIZED), value, &mut closure);
         closure.do_closure();

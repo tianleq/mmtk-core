@@ -105,7 +105,7 @@ impl Block {
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_MARK;
 
     /// Block level public table (side)
-    #[cfg(feature = "public_bit")]
+    #[cfg(feature = "thread_local_gc")]
     pub const METADATA_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_METADATA;
 
@@ -115,9 +115,9 @@ impl Block {
     //        |
     //        dirty bit
     //
-    #[cfg(feature = "public_bit")]
+    #[cfg(feature = "thread_local_gc")]
     pub const PUBLIC_BIT: u8 = 0b10;
-    #[cfg(feature = "public_bit")]
+    #[cfg(feature = "thread_local_gc")]
     pub const DIRTY_BIT: u8 = 0b01;
 
     /// Get the chunk containing the block.
@@ -206,7 +206,7 @@ impl Block {
         RegionIterator::<Line>::new(self.start_line(), self.end_line())
     }
 
-    #[cfg(feature = "public_bit")]
+    #[cfg(feature = "thread_local_gc")]
     pub fn reset_metadata(&self) {
         Self::METADATA_TABLE.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
         // Also rest all lines within the block
@@ -228,7 +228,7 @@ impl Block {
                     #[cfg(feature = "vo_bit")]
                     vo_bit::helper::on_region_swept::<VM, _>(self, false);
 
-                    #[cfg(feature = "public_bit")]
+                    #[cfg(feature = "thread_local_gc")]
                     self.reset_metadata();
 
                     // If the pin bit is not on the side, we cannot bulk zero.
@@ -286,7 +286,7 @@ impl Block {
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_region_swept::<VM, _>(self, false);
 
-                #[cfg(feature = "public_bit")]
+                #[cfg(feature = "thread_local_gc")]
                 self.reset_metadata();
 
                 // Release the block if non of its lines are marked.
@@ -348,7 +348,7 @@ impl Block {
         }
     }
 
-    #[cfg(feature = "public_bit")]
+    #[cfg(feature = "thread_local_gc")]
     pub fn publish(&self, dirty: bool) -> bool {
         let val = if dirty {
             Self::DIRTY_BIT | Self::PUBLIC_BIT

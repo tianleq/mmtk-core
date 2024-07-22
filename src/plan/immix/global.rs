@@ -127,6 +127,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         &self.common
     }
 
+    #[cfg(feature = "thread_local_gc")]
     fn publish_object(&self, object: crate::util::ObjectReference) {
         if self.immix_space.in_space(object) {
             self.immix_space.publish_object(object);

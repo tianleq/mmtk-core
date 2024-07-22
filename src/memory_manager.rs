@@ -886,6 +886,7 @@ pub fn add_work_packets<VM: VMBinding>(
 #[cfg(feature = "public_bit")]
 pub fn mmtk_set_public_bit<VM: VMBinding>(_mmtk: &'static MMTK<VM>, object: ObjectReference) {
     crate::util::metadata::public_bit::set_public_bit::<VM>(object);
+    #[cfg(feature = "thread_local_gc")]
     _mmtk.get_plan().publish_object(object);
 }
 

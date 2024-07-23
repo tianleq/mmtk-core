@@ -33,6 +33,7 @@ pub(crate) const GLOBAL_SIDE_METADATA_BASE_OFFSET: SideMetadataOffset =
 pub const VO_BIT_SIDE_METADATA_ADDR: Address =
     crate::util::metadata::vo_bit::VO_BIT_SIDE_METADATA_ADDR;
 
+#[cfg(feature = "public_bit")]
 pub const PUBLIC_SIDE_METADATA_ADDR: Address =
     crate::util::metadata::public_bit::PUBLIC_SIDE_METADATA_ADDR;
 

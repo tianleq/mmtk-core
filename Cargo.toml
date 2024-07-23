@@ -64,7 +64,7 @@ name = "main"
 harness = false
 
 [features]
-default = ["public_bit"]
+default = []
 
 public_bit = []
 thread_local_gc = ["public_bit"]

@@ -139,14 +139,32 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         &mut self,
         refer: ObjectReference,
         _bytes: usize,
-        allocator: AllocationSemantics,
+        semantics: AllocationSemantics,
     ) {
         unsafe {
             self.allocators
-                .get_allocator_mut(self.config.allocator_mapping[allocator])
+                .get_allocator_mut(self.config.allocator_mapping[semantics])
         }
         .get_space()
-        .initialize_object_metadata(refer, true)
+        .initialize_object_metadata(refer, true);
+
+        // Large object allocation always go through the slow-path, so it is fine to
+        // do the following book-keeping in post_alloc(only executed in slow-path)
+        #[cfg(feature = "thread_local_gc")]
+        {
+            use crate::util::alloc::LargeObjectAllocator;
+
+            if semantics == AllocationSemantics::Los {
+                // store los objects into a local set
+                let allocator = unsafe {
+                    self.allocators
+                        .get_allocator_mut(self.config.allocator_mapping[semantics])
+                        .downcast_mut::<LargeObjectAllocator<VM>>()
+                        .unwrap()
+                };
+                allocator.add_los_objects(refer);
+            }
+        }
     }
 
     fn get_tls(&self) -> VMMutatorThread {

@@ -244,6 +244,15 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         }
     }
 
+    #[cfg(feature = "thread_local_gc")]
+    pub fn thread_local_sweep_large_object(&self, object: ObjectReference) {
+        #[cfg(feature = "vo_bit")]
+        crate::util::metadata::vo_bit::unset_vo_bit::<VM>(object);
+
+        self.pr
+            .release_pages(get_super_page(object.to_object_start::<VM>()));
+    }
+
     /// Allocate an object
     pub fn allocate_pages(&self, tls: VMThread, pages: usize) -> Address {
         self.acquire(tls, pages)

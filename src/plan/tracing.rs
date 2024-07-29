@@ -9,8 +9,10 @@ use crate::util::VMMutatorThread;
 use crate::vm::slot::Slot;
 #[cfg(feature = "debug_thread_local_gc_copying")]
 use crate::vm::ActivePlan;
+#[cfg(feature = "public_bit")]
 use crate::vm::Scanning;
 use crate::vm::SlotVisitor;
+#[cfg(feature = "public_bit")]
 use crate::MMTK;
 
 /// This trait represents an object queue to enqueue objects during tracing.
@@ -179,6 +181,7 @@ impl<'a, E: ProcessEdgesWork> Drop for ObjectsClosure<'a, E> {
     }
 }
 
+#[cfg(feature = "public_bit")]
 pub struct PublishObjectClosure<VM: crate::vm::VMBinding> {
     _mmtk: &'static MMTK<VM>,
     slot_buffer: std::collections::VecDeque<VM::VMSlot>,
@@ -188,6 +191,7 @@ pub struct PublishObjectClosure<VM: crate::vm::VMBinding> {
     tls: VMMutatorThread,
 }
 
+#[cfg(feature = "public_bit")]
 impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
     pub fn new(
         mmtk: &'static MMTK<VM>,
@@ -265,6 +269,7 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
     }
 }
 
+#[cfg(feature = "public_bit")]
 impl<VM: crate::vm::VMBinding> SlotVisitor<VM::VMSlot> for PublishObjectClosure<VM> {
     #[cfg(not(feature = "debug_publish_object"))]
     fn visit_slot(&mut self, slot: VM::VMSlot) {
@@ -277,6 +282,7 @@ impl<VM: crate::vm::VMBinding> SlotVisitor<VM::VMSlot> for PublishObjectClosure<
     }
 }
 
+#[cfg(feature = "public_bit")]
 impl<VM: crate::vm::VMBinding> Drop for PublishObjectClosure<VM> {
     #[inline(always)]
     fn drop(&mut self) {

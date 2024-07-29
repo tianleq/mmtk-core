@@ -1,7 +1,9 @@
 use super::SemiSpace;
 #[cfg(not(feature = "public_bit"))]
 use crate::plan::barriers::NoBarrier;
+#[cfg(feature = "public_bit")]
 use crate::plan::barriers::PublicObjectMarkingBarrier;
+#[cfg(feature = "public_bit")]
 use crate::plan::barriers::PublicObjectMarkingBarrierSemantics;
 #[cfg(feature = "thread_local_gc_copying")]
 use crate::plan::mutator_context::generic_thread_local_alloc_copy;

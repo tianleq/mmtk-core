@@ -1,18 +1,22 @@
 //! Read/Write barrier implementations.
-
+#[cfg(feature = "public_bit")]
 use crate::util::metadata::public_bit::{is_public, set_public_bit};
 use crate::vm::slot::{MemorySlice, Slot};
 use crate::vm::ObjectModel;
-use crate::MMTK;
+
 use crate::{
     util::{metadata::MetadataSpec, *},
-    vm::Scanning,
     vm::VMBinding,
 };
 use atomic::Ordering;
 use downcast_rs::Downcast;
 
+#[cfg(feature = "public_bit")]
 use super::tracing::PublishObjectClosure;
+#[cfg(feature = "public_bit")]
+use crate::vm::Scanning;
+#[cfg(feature = "public_bit")]
+use crate::MMTK;
 
 /// BarrierSelector describes which barrier to use.
 ///
@@ -292,16 +296,19 @@ impl<S: BarrierSemantics> Barrier<S::VM> for ObjectBarrier<S> {
     }
 }
 
+#[cfg(feature = "public_bit")]
 pub struct PublicObjectMarkingBarrier<S: BarrierSemantics> {
     semantics: S,
 }
 
+#[cfg(feature = "public_bit")]
 impl<S: BarrierSemantics> PublicObjectMarkingBarrier<S> {
     pub fn new(semantics: S) -> Self {
         Self { semantics }
     }
 }
 
+#[cfg(feature = "public_bit")]
 impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
     #[inline(always)]
     fn object_reference_write_pre(
@@ -430,6 +437,7 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
     }
 }
 
+#[cfg(feature = "public_bit")]
 pub struct PublicObjectMarkingBarrierSemantics<VM: VMBinding> {
     mmtk: &'static MMTK<VM>,
     #[cfg(feature = "debug_publish_object")]
@@ -438,6 +446,7 @@ pub struct PublicObjectMarkingBarrierSemantics<VM: VMBinding> {
     tls: VMMutatorThread,
 }
 
+#[cfg(feature = "public_bit")]
 impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
     pub fn new(
         mmtk: &'static MMTK<VM>,
@@ -492,6 +501,7 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
     }
 }
 
+#[cfg(feature = "public_bit")]
 impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM> {
     type VM = VM;
 

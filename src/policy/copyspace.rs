@@ -183,31 +183,13 @@ impl<VM: VMBinding> CopySpace<VM> {
             #[cfg(feature = "vo_bit")]
             crate::util::metadata::vo_bit::bzero_vo_bit(start, size);
             #[cfg(feature = "public_bit")]
-            self.reset_public_bit();
+            crate::util::metadata::public_bit::bzero_public_bit(start, size);
         }
 
         unsafe {
             self.pr.reset();
         }
         self.from_space.store(false, Ordering::SeqCst);
-    }
-
-    #[cfg(feature = "public_bit")]
-    fn reset_public_bit(&self) {
-        // let current_chunk = unsafe { self.pr.get_current_chunk() };
-        // if self.common.contiguous {
-        //     crate::util::metadata::public_bit::bzero_public_bit(
-        //         self.common.start,
-        //         current_chunk + crate::util::heap::layout::vm_layout_constants::BYTES_IN_CHUNK
-        //             - self.common.start,
-        //     );
-        // } else {
-        //     panic!("bulk clearing public bit is not supported in discontiguous setting");
-        // }
-
-        for (start, size) in self.pr.iterate_allocated_regions() {
-            crate::util::metadata::public_bit::bzero_public_bit(start, size);
-        }
     }
 
     fn is_from_space(&self) -> bool {

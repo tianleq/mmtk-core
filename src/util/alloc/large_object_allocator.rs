@@ -10,8 +10,10 @@ use crate::util::{conversions, opaque_pointer::*};
 use crate::util::{Address, ObjectReference};
 use crate::vm::VMBinding;
 
-#[cfg(feature = "thread_local_gc")]
+#[cfg(all(feature = "thread_local_gc", debug_assertions))]
 const LOS_OBJECT_OWNER_BYTES: usize = 8;
+#[cfg(all(feature = "thread_local_gc", not(debug_assertions)))]
+const LOS_OBJECT_OWNER_BYTES: usize = 0;
 
 /// An allocator that only allocates at page granularity.
 /// This is intended for large objects.
@@ -148,6 +150,7 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
         // We may get a null ptr from alloc due to the VM being OOM
         if !cell.is_zero() {
             let rtn = allocator::align_allocation::<VM>(cell, align, offset);
+            #[cfg(feature = "public_bit")]
             debug_assert!(
                 !crate::util::metadata::public_bit::is_public_object(rtn),
                 "public bit is not cleared properly"

@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use super::allocator::{align_allocation_no_fill, fill_alignment_gap, AllocatorContext};
 use super::BumpPointer;
-#[cfg(feature = "thread_local_gc")]
 use crate::policy::immix::block::Block;
 #[cfg(feature = "thread_local_gc")]
 use crate::policy::immix::block::BlockState;
@@ -1089,7 +1088,12 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
     /// Search for recyclable lines.
     fn acquire_recyclable_lines(&mut self, size: usize, align: usize, offset: usize) -> bool {
-        while self.line.is_some() || self.acquire_recyclable_block(1) {
+        while self.line.is_some()
+            || self.acquire_recyclable_block(
+                #[cfg(feature = "thread_local_gc")]
+                1,
+            )
+        {
             let line = self.line.unwrap();
 
             if let Some((start_line, end_line)) =

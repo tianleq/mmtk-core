@@ -618,7 +618,7 @@ impl Block {
             let mut holes = 0;
             let mut prev_line_is_marked = true;
             let line_mark_state = line_mark_state.unwrap();
-            #[cfg(feature = "thread_local_gc_copying")]
+
             let mut is_block_public = false;
             #[cfg(feature = "thread_local_gc_copying")]
             let mut max_hole_size: u8 = 0;

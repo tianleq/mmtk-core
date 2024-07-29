@@ -1,6 +1,7 @@
 use std::borrow::BorrowMut;
 
 use super::Immix;
+#[cfg(feature = "public_bit")]
 use crate::plan::barriers::{PublicObjectMarkingBarrier, PublicObjectMarkingBarrierSemantics};
 use crate::plan::mutator_context::create_allocator_mapping;
 use crate::plan::mutator_context::create_space_mapping;
@@ -206,7 +207,7 @@ pub fn create_immix_mutator<VM: VMBinding>(
         ),
     ));
     #[cfg(not(feature = "public_bit"))]
-    let barrier = Box::new(NoBarrier);
+    let barrier = Box::new(crate::plan::barriers::NoBarrier);
     Mutator {
         allocators: Allocators::<VM>::new(mutator_tls, mutator_id, mmtk, &config.space_mapping),
         barrier,

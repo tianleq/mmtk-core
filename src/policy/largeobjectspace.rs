@@ -616,7 +616,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         }
     }
 
-    #[cfg(feature = "thread_local_gc")]
+    #[cfg(all(feature = "thread_local_gc", debug_assertions))]
     pub fn get_object_owner(&self, object: ObjectReference) -> u32 {
         unsafe {
             let mutator_id =

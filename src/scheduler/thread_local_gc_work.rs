@@ -9,7 +9,6 @@ use crate::vm::*;
 use crate::*;
 use std::collections::VecDeque;
 use std::marker::PhantomData;
-use std::sync::atomic::AtomicBool;
 
 pub const THREAD_LOCAL_GC_ACTIVE: u32 = 1;
 pub const THREAD_LOCAL_GC_INACTIVE: u32 = 0;

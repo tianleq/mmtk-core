@@ -897,7 +897,9 @@ options! {
     transparent_hugepages: bool                  [env_var: true, command_line: true]  [|v: &bool| !v || cfg!(target_os = "linux")] = false,
 
     /// max local heap
-    max_local_heap:        ThreadlocalHeapSize   [env_var: true, command_line: true] [|v: &ThreadlocalHeapSize| v.size > 0] = ThreadlocalHeapSize {size: 1 << 20}
+    max_local_heap:        ThreadlocalHeapSize   [env_var: true, command_line: true] [|v: &ThreadlocalHeapSize| v.size > 0] = ThreadlocalHeapSize {size: 1 << 20},
+    /// max number of concurrent local gc
+    max_concurrent_local_gc: u32               [env_var: true, command_line: true]  [always_valid] = crate::scheduler::thread_local_gc_work::DEFAULT_MAX_CONCURRENT_LOCAL_GC
 }
 
 #[cfg(test)]

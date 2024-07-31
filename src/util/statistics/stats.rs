@@ -233,7 +233,7 @@ impl Stats {
         if !self.get_gathering_stats() {
             return;
         }
-        self.thread_local_gc_total_time.lock().unwrap().start();
+        // self.thread_local_gc_total_time.lock().unwrap().start();
         self.thread_local_gc_count.fetch_add(1, Ordering::SeqCst);
     }
 
@@ -242,7 +242,7 @@ impl Stats {
         if !self.get_gathering_stats() {
             return;
         }
-        self.thread_local_gc_total_time.lock().unwrap().stop();
+        // self.thread_local_gc_total_time.lock().unwrap().stop();
     }
 
     pub fn print_stats<VM: VMBinding>(&self, mmtk: &'static MMTK<VM>) {

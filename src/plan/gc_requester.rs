@@ -5,8 +5,7 @@ use crate::vm::VMBinding;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-/// GC requester.  This object allows other threads to request (trigger) GC,
-/// and the GC coordinator thread waits for GC requests using this object.
+/// This data structure lets mutators trigger GC.
 pub struct GCRequester<VM: VMBinding> {
     /// Set by mutators to trigger GC.  It is atomic so that mutators can check if GC has already
     /// been requested efficiently in `poll` without acquiring any mutex.
@@ -31,6 +30,8 @@ impl<VM: VMBinding> GCRequester<VM> {
         }
 
         if !self.request_flag.swap(true, Ordering::Relaxed) {
+            // `GCWorkScheduler::request_schedule_collection` needs to hold a mutex to communicate
+            // with GC workers, which is expensive for functions like `poll`.  We use the atomic
             // flag `request_flag` to elide the need to acquire the mutex in subsequent calls.
             self.scheduler.request_schedule_collection();
         }

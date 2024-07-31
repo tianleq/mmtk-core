@@ -183,14 +183,6 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         .get_space();
         space.initialize_object_metadata(refer, true);
 
-        #[cfg(not(feature = "thread_local_gc"))]
-        {
-            #[cfg(feature = "debug_publish_object")]
-            {
-                let metadata: usize = usize::try_from(self.mutator_id).unwrap();
-            }
-        }
-
         // Large object allocation always go through the slow-path, so it is fine to
         // do the following book-keeping in post_alloc(only executed in slow-path)
         #[cfg(feature = "thread_local_gc")]

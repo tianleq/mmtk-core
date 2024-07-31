@@ -111,7 +111,7 @@ impl<VM: VMBinding> GCTrigger<VM> {
                 }
             }
             #[cfg(feature = "thread_local_gc_copying_stats")]
-            warn!(
+            info!(
                 "[POLL] {}{} ({}/{} pages {} pages reserved for collection) | overflow: {}",
                 if let Some(space) = space {
                     format!("{}: ", space.get_name())

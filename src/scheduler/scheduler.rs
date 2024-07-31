@@ -545,7 +545,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         };
         let elapsed = start_time.elapsed();
 
-        info!(
+        warn!(
             "End of GC ({}/{} pages, took {} ms)",
             mmtk.get_plan().get_reserved_pages(),
             mmtk.get_plan().get_total_pages(),

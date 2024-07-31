@@ -473,6 +473,7 @@ impl<VM: VMBinding> MMTK<VM> {
 
     #[cfg(feature = "thread_local_gc")]
     pub fn handle_thread_local_collection(&self, tls: VMMutatorThread, mmtk: &'static MMTK<VM>) {
+        use crate::scheduler::thread_local_gc_work::LOCAL_GC_ACTIVE;
         use crate::vm::Collection;
 
         if self.gc_requester.request_thread_local_gc(tls) {
@@ -485,6 +486,9 @@ impl<VM: VMBinding> MMTK<VM> {
             .execute();
             mmtk.stats.end_local_gc();
         } else {
+            // clear the flag, otherwise, no local gc can be triggered afterwards
+            debug_assert!(LOCAL_GC_ACTIVE.load(Ordering::Relaxed));
+            LOCAL_GC_ACTIVE.store(false, Ordering::Relaxed);
             // A global gc has already been triggered, so cannot do local gc,
             // instead, block and wait for global gc to finish
             VM::VMCollection::block_for_gc(tls);

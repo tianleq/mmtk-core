@@ -1010,27 +1010,6 @@ pub fn mmtk_publish_object<VM: VMBinding>(
     } else {
         return;
     }
-    // if _object.is_null() || crate::util::metadata::public_bit::is_public::<VM>(_object) {
-    //     return;
-    // }
-
-    // let mut closure: crate::plan::PublishObjectClosure<VM> =
-    //     crate::plan::PublishObjectClosure::<VM>::new(
-    //         _mmtk,
-    //         #[cfg(feature = "debug_publish_object")]
-    //         u32::MAX,
-    //         #[cfg(feature = "debug_thread_local_gc_copying")]
-    //         _tls,
-    //     );
-
-    // mmtk_set_public_bit(_mmtk, _object, _tls);
-    // // Publish all the descendants
-    // VM::VMScanning::scan_object(
-    //     VMWorkerThread(VMThread::UNINITIALIZED),
-    //     _object,
-    //     &mut closure,
-    // );
-    // closure.do_closure();
 }
 
 #[cfg(feature = "public_bit")]
@@ -1065,19 +1044,6 @@ pub fn mmtk_request_thread_local_gc<VM: VMBinding>(
     } else {
         false
     }
-
-    // let required = mmtk
-    //     .get_plan()
-    //     .thread_local_collection_required(false, None, tls);
-    // if required {
-    //     // Local gc is required, continue if there is ongoing local gc
-    //     match LOCAL_GC_ACTIVE.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst) {
-    //         Ok(_) => true,
-    //         Err(_) => false,
-    //     }
-    // } else {
-    //     required
-    // }
 }
 
 #[cfg(feature = "thread_local_gc")]

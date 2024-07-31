@@ -181,11 +181,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         .downcast_ref::<crate::util::alloc::ImmixAllocator<VM>>()
         .unwrap();
         if immix_allocator.local_reusable_blocks.len() >= DEFRAG_MUTATOR_THRESHOLD {
-            println!(
-                "mutator: {}, local reusable blocks: {}",
-                mutator.mutator_id,
-                immix_allocator.local_reusable_blocks.len()
-            );
             true
         } else {
             false

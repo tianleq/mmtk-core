@@ -340,6 +340,8 @@ impl<VM: VMBinding> StickyImmix<VM> {
                 // In StickyImmix, both young and old objects are allocated in the ImmixSpace.
                 #[cfg(feature = "vo_bit")]
                 mixed_age: true,
+                #[cfg(feature = "thread_local_gc_copying")]
+                max_local_copy_reserve: 0,
             },
         );
         Self {

@@ -813,7 +813,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
     #[cfg(feature = "thread_local_gc_copying")]
     pub fn thread_local_gc_reserve_pages(&mut self) {
-        let number_of_clean_blocks = 4;
+        let number_of_clean_blocks =
+            usize::from(self.space.get_max_thread_local_gc_copy_reserve_blocks());
         debug_assert!(
             VM::VMActivePlan::is_mutator(self.tls),
             "only mutator doing local gc should call thread_local_gc_reserve_pages"

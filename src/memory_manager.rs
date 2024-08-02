@@ -1036,21 +1036,15 @@ pub fn mmtk_request_thread_local_gc<VM: VMBinding>(
     let required = mmtk
         .get_plan()
         .thread_local_collection_required(false, None, tls);
-    // if required {
-    //     match LOCAL_GC_ACTIVE.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst) {
-    //         Ok(_) => true,
-    //         Err(_) => false,
-    //     }
-    // } else {
-    //     false
-    // }
+
     if required {
         let count = ACTIVE_LOCAL_GC_COUNTER.fetch_add(1, Ordering::SeqCst);
-        if count < *mmtk.get_options().max_concurrent_local_gc {
+        if count < mmtk.get_options().get_max_concurrent_local_gc() {
             return true;
         } else {
             // alreay reach max concurrent local gc, simply continue
             ACTIVE_LOCAL_GC_COUNTER.fetch_sub(1, Ordering::SeqCst);
+
             return false;
         }
     }

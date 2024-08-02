@@ -489,6 +489,7 @@ impl<VM: VMBinding> MMTK<VM> {
             // reset the counter, otherwise, local gc may not be triggered afterwards
             debug_assert_ne!(ACTIVE_LOCAL_GC_COUNTER.load(Ordering::SeqCst), 0);
             ACTIVE_LOCAL_GC_COUNTER.fetch_sub(1, Ordering::SeqCst);
+
             // A global gc has already been triggered, so cannot do local gc,
             // instead, block and wait for global gc to finish
             VM::VMCollection::block_for_gc(tls);

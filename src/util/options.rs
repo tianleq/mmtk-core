@@ -305,6 +305,16 @@ impl Options {
     pub fn get_thread_local_heap_size(&self) -> usize {
         self.max_local_heap.size
     }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn get_max_concurrent_local_gc(&self) -> u32 {
+        *self.max_concurrent_local_gc
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn get_max_local_copy_reserve(&self) -> u8 {
+        *self.max_local_copy_reserve
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -899,7 +909,8 @@ options! {
     /// max local heap
     max_local_heap:        ThreadlocalHeapSize   [env_var: true, command_line: true] [|v: &ThreadlocalHeapSize| v.size > 0] = ThreadlocalHeapSize {size: 1 << 20},
     /// max number of concurrent local gc
-    max_concurrent_local_gc: u32               [env_var: true, command_line: true]  [always_valid] = crate::scheduler::thread_local_gc_work::DEFAULT_MAX_CONCURRENT_LOCAL_GC
+    max_concurrent_local_gc: u32               [env_var: true, command_line: true]  [always_valid] = crate::scheduler::thread_local_gc_work::DEFAULT_MAX_CONCURRENT_LOCAL_GC,
+    max_local_copy_reserve:  u8               [env_var: true, command_line: true]  [always_valid] = crate::scheduler::thread_local_gc_work::DEFAULT_MAX_LOCAL_COPY_RESERVE
 }
 
 #[cfg(test)]

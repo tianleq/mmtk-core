@@ -54,15 +54,6 @@ impl<VM: VMBinding> ExecuteThreadlocalCollection<VM> {
         mutator.local_allocation_size = 0;
         // local gc has finished,
         ACTIVE_LOCAL_GC_COUNTER.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-        // match LOCAL_GC_ACTIVE.compare_exchange(
-        //     true,
-        //     false,
-        //     atomic::Ordering::SeqCst,
-        //     atomic::Ordering::SeqCst,
-        // ) {
-        //     Err(_) => panic!("LOCAL_GC_ACTIVE is broken"),
-        //     _ => (),
-        // };
     }
 }
 
@@ -599,3 +590,4 @@ where
 pub(crate) static ACTIVE_LOCAL_GC_COUNTER: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(0);
 pub(crate) static DEFAULT_MAX_CONCURRENT_LOCAL_GC: u32 = 3;
+pub(crate) static DEFAULT_MAX_LOCAL_COPY_RESERVE: u8 = 4;

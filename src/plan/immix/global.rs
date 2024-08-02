@@ -450,11 +450,14 @@ impl<VM: VMBinding> Plan for Immix<VM> {
 
 impl<VM: VMBinding> Immix<VM> {
     pub fn new(args: CreateGeneralPlanArgs<VM>) -> Self {
+        #[cfg(feature = "thread_local_gc_copying")]
+        let max_local_copy_reserve = args.options.get_max_local_copy_reserve();
         let plan_args = CreateSpecificPlanArgs {
             global_args: args,
             constraints: &IMMIX_CONSTRAINTS,
             global_side_metadata_specs: SideMetadataContext::new_global_specs(&[]),
         };
+
         Self::new_with_args(
             plan_args,
             ImmixSpaceArgs {
@@ -462,6 +465,8 @@ impl<VM: VMBinding> Immix<VM> {
                 unlog_object_when_traced: false,
                 #[cfg(feature = "vo_bit")]
                 mixed_age: false,
+                #[cfg(feature = "thread_local_gc_copying")]
+                max_local_copy_reserve,
             },
         )
     }
@@ -598,14 +603,6 @@ impl<VM: VMBinding> Immix<VM> {
             end_of_thread_local_gc.execute(mmtk);
         }
     }
-
-    // #[cfg(feature = "thread_local_gc")]
-    // fn get_thread_local_collection_reserved_pages(&self) -> usize {
-    //     #[cfg(feature = "thread_local_gc_copying")]
-    //     return self.immix_space.thread_local_gc_copy_reserve_pages();
-    //     #[cfg(not(feature = "thread_local_gc_copying"))]
-    //     return 0;
-    // }
 }
 
 #[cfg(feature = "thread_local_gc")]

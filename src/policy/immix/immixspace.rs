@@ -112,6 +112,9 @@ pub struct ImmixSpaceArgs {
     // Currently only used when "vo_bit" is enabled.  Using #[cfg(...)] to eliminate dead code warning.
     #[cfg(feature = "vo_bit")]
     pub mixed_age: bool,
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub max_local_copy_reserve: u8,
 }
 
 unsafe impl<VM: VMBinding> Sync for ImmixSpace<VM> {}
@@ -275,15 +278,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
             true
         } else if KIND == TRACE_KIND_FAST || KIND == TRACE_KIND_TRANSITIVE_PIN {
             false
-        }
-        // else if KIND == TRACE_THREAD_LOCAL_FAST {
-        //     false
-        // } else if KIND == TRACE_THREAD_LOCAL_DEFRAG {
-        //     true
-        // } else if KIND == TRACE_THREAD_LOCAL_COPY {
-        //     true
-        // }
-        else {
+        } else {
             unreachable!()
         }
     }
@@ -475,23 +470,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.defrag.in_defrag()
     }
 
-    // #[cfg(feature = "thread_local_gc_copying")]
-    // pub fn thread_local_gc_copy_reserve_pages(&self) -> usize {
-    //     use super::LOCAL_GC_COPY_RESERVE_PAGES;
-    //     LOCAL_GC_COPY_RESERVE_PAGES.load(Ordering::SeqCst)
-    // }
-
-    // #[cfg(feature = "thread_local_gc_copying")]
-    // pub fn public_object_reserved_pages(&self) -> usize {
-    //     let bytes_copied = self.bytes_copied.load(Ordering::Relaxed);
-    //     let bytes_published = self.bytes_published.load(Ordering::SeqCst);
-    //     if bytes_copied != 0 {
-    //         bytes_copied / crate::util::constants::BYTES_IN_PAGE
-    //     } else {
-    //         bytes_published / crate::util::constants::BYTES_IN_PAGE
-    //     }
-    // }
-
     /// Get work packet scheduler
     fn scheduler(&self) -> &GCWorkScheduler<VM> {
         &self.scheduler
@@ -536,16 +514,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                         .store(Line::RESET_MARK_STATE, Ordering::Release);
                 }
             }
-        }
-
-        #[cfg(feature = "thread_local_gc_copying")]
-        {
-            // self.bytes_published.store(0, Ordering::SeqCst);
-            // self.blocks_acquired_for_evacuation
-            //     .store(0, Ordering::Relaxed);
-            // self.blocks_freed.store(0, Ordering::Relaxed);
-            // reset local copy reserve, it will be recalculated at the end of the gc
-            // crate::policy::immix::LOCAL_GC_COPY_RESERVE_PAGES.store(0, Ordering::Relaxed);
         }
 
         #[cfg(feature = "thread_local_gc_copying")]
@@ -817,14 +785,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             } else {
                 block.set_state(BlockState::Marked);
             }
-
-            // #[cfg(feature = "thread_local_gc_copying")]
-            // if crate::util::metadata::public_bit::is_public::<VM>(object) {
-            //     self.bytes_published.fetch_add(
-            //         VM::VMObjectModel::get_current_size(object),
-            //         Ordering::SeqCst,
-            //     );
-            // }
 
             // Visit node
             queue.enqueue(object);
@@ -1808,6 +1768,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             available_lines,
             sparse_block,
         )
+    }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub fn get_max_thread_local_gc_copy_reserve_blocks(&self) -> u8 {
+        self.space_args.max_local_copy_reserve
     }
 }
 

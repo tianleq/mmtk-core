@@ -33,7 +33,6 @@ use crate::{
     MMTK,
 };
 use atomic::Ordering;
-use std::sync::atomic::AtomicBool;
 use std::sync::{atomic::AtomicU8, atomic::AtomicUsize, Arc};
 
 pub(crate) const TRACE_KIND_FAST: TraceKind = 0;
@@ -67,8 +66,8 @@ pub struct ImmixSpace<VM: VMBinding> {
     // pub(crate) bytes_published: AtomicUsize,
     #[cfg(feature = "thread_local_gc_copying")]
     pub sparse_reusable_blocks: ReusableBlockPool,
-    #[cfg(feature = "thread_local_gc_copying")]
-    pub local_reserved_blocks_exhausted: AtomicBool,
+    // #[cfg(feature = "thread_local_gc_copying")]
+    // pub local_reserved_blocks_exhausted: AtomicBool,
     // #[cfg(feature = "thread_local_gc_copying")]
     // pub(super) bytes_copied: AtomicUsize,
     // #[cfg(feature = "thread_local_gc_copying")]
@@ -417,8 +416,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             // bytes_published: AtomicUsize::new(0),
             #[cfg(feature = "thread_local_gc_copying")]
             sparse_reusable_blocks: ReusableBlockPool::new(scheduler.num_workers()),
-            #[cfg(feature = "thread_local_gc_copying")]
-            local_reserved_blocks_exhausted: AtomicBool::new(false),
+            // #[cfg(feature = "thread_local_gc_copying")]
+            // local_reserved_blocks_exhausted: AtomicBool::new(false),
             // #[cfg(feature = "thread_local_gc_copying")]
             // bytes_copied: AtomicUsize::new(0),
             // #[cfg(feature = "thread_local_gc_copying")]
@@ -1173,9 +1172,19 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
             ThreadlocalTracedObjectType::Scanned(object)
         } else {
+            let local_copy_reserve_exhausted = unsafe {
+                mutator
+                    .allocators
+                    .get_allocator_mut(
+                        mutator.config.allocator_mapping[crate::AllocationSemantics::Default],
+                    )
+                    .downcast_mut::<ImmixAllocator<VM>>()
+                    .unwrap()
+            }
+            .local_copy_reserve_exhausted;
             // actually forward and copy the object if it is not pinned
             // and we have sufficient space in our copy allocator
-            let new_object = if self.local_reserved_blocks_exhausted.load(Ordering::Acquire) {
+            let new_object = if local_copy_reserve_exhausted {
                 self.thread_local_attempt_mark(object, self.mark_state);
                 block.set_state(BlockState::Marked);
                 // set the ditry bit

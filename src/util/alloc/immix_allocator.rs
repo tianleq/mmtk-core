@@ -75,8 +75,11 @@ pub struct ImmixAllocator<VM: VMBinding> {
     /// [`Space`](src/policy/space/Space) instance associated with this allocator instance.
     space: &'static ImmixSpace<VM>,
     context: Arc<AllocatorContext<VM>>,
+    #[cfg(not(feature = "thread_local_gc"))]
     /// *unused*
     pub hot: bool,
+    #[cfg(feature = "thread_local_gc")]
+    pub local_copy_reserve_exhausted: bool,
     /// Is this a copy allocator?
     copy: bool,
     /// Bump pointer for large objects
@@ -405,9 +408,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         #[cfg(feature = "thread_local_gc_copying")]
         {
             self.copy = true;
-            self.space
-                .local_reserved_blocks_exhausted
-                .store(false, atomic::Ordering::Relaxed);
+            // self.space
+            //     .local_reserved_blocks_exhausted
+            //     .store(false, atomic::Ordering::Relaxed);
+            self.local_copy_reserve_exhausted = false;
         }
 
         // move local reusable blocks to local blocks
@@ -994,7 +998,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             space: _space,
             context,
             bump_pointer: BumpPointer::default(),
+            #[cfg(not(feature = "thread_local_gc"))]
             hot: false,
+            #[cfg(feature = "thread_local_gc")]
+            local_copy_reserve_exhausted: false,
             copy,
             large_bump_pointer: BumpPointer::default(),
             request_for_large: false,
@@ -1657,9 +1664,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             {
                 debug_assert!(self.copy && VM::VMActivePlan::is_mutator(self.tls));
                 if self.local_free_blocks.is_empty() {
-                    self.space
-                        .local_reserved_blocks_exhausted
-                        .store(true, atomic::Ordering::Release);
+                    // self.space
+                    //     .local_reserved_blocks_exhausted
+                    //     .store(true, atomic::Ordering::Release);
+                    self.local_copy_reserve_exhausted = true;
                 }
             }
 

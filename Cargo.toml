@@ -137,6 +137,8 @@ thread_local_gc_ibm_style = ["thread_local_gc", "immix_non_moving"]
 #Enable ibm style thread local gc
 thread_local_gc_copying = ["thread_local_gc"]
 
+sparse_immix_block = []
+
 debug_thread_local_gc_copying = ["thread_local_gc_copying"]
 
 thread_local_gc_copying_stats = ["thread_local_gc_copying"]

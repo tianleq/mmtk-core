@@ -134,7 +134,7 @@ impl Block {
     pub const HOLE_SIZE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_HOLE_SIZE; // no need to clear/reset the hole size, as stale value should never be read.
 
-    #[cfg(feature = "thread_local_gc_copying")]
+    #[cfg(feature = "sparse_immix_block")]
     pub const SPARSE_BLOCK_THRESHOLD: u8 = 120;
 
     /// Get the chunk containing the block.
@@ -241,7 +241,7 @@ impl Block {
         Self::METADATA_TABLE.fetch_or_atomic::<u8>(self.start(), Self::DIRTY_BIT, Ordering::SeqCst);
     }
 
-    #[cfg(feature = "thread_local_gc_copying")]
+    #[cfg(feature = "sparse_immix_block")]
     pub fn is_block_sparse(&self) -> bool {
         // (Self::METADATA_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst) & Self::SPARSE_BIT)
         //     == Self::SPARSE_BIT
@@ -290,7 +290,7 @@ impl Block {
     }
 
     #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
-    pub fn all_public_lines_marked_and_free_lines_unmarked(&self, state: u8) {
+    pub fn all_public_lines_marked(&self, state: u8) {
         if !self.is_block_published() {
             // trivially true for private block
             return;
@@ -304,15 +304,16 @@ impl Block {
                     );
                 }
             } else {
+                // The following no longer holds, private objects may be left in place
                 // free lines should not be marked
-                if line.is_marked(state) {
-                    panic!(
-                        "public block: {:?}|owner: {:?} -> free line: {:?} is marked",
-                        self,
-                        self.owner(),
-                        line
-                    );
-                }
+                // if line.is_marked(state) {
+                //     panic!(
+                //         "public block: {:?}|owner: {:?} -> free line: {:?} is marked",
+                //         self,
+                //         self.owner(),
+                //         line
+                //     );
+                // }
             }
         }
     }
@@ -467,19 +468,23 @@ impl Block {
                                 "private block: {:?} contains public line: {:?} after a local gc",
                                 self, line
                             );
+                            // The following is no longer the case, private objects may be left in place
+
                             // public lines should not be marked as private objects are strictly evacuated
-                            debug_assert!(
-                                !line.is_marked(line_mark_state),
-                                "public line is marked in a local gc"
-                            );
+                            // debug_assert!(
+                            //     !line.is_marked(line_mark_state),
+                            //     "public line is marked in a local gc"
+                            // );
                         } else {
+                            // The following is no longer the case, private objects may be left in place
+
                             // line is not public, then it must be either marked and in a private block, or unmarked
-                            debug_assert!(
-                                !is_published || !line.is_marked(line_mark_state),
-                                "public block: {:?} contains marked private line: {:?} after a local gc",
-                                self,
-                                line
-                            );
+                            // debug_assert!(
+                            //     !is_published || !line.is_marked(line_mark_state),
+                            //     "public block: {:?} contains marked private line: {:?} after a local gc",
+                            //     self,
+                            //     line
+                            // );
                         }
                     }
                 }
@@ -712,8 +717,10 @@ impl Block {
                     self.set_state(BlockState::Reusable {
                         unavailable_lines: marked_lines as _,
                     });
-                    #[cfg(feature = "thread_local_gc_copying")]
+                    #[cfg(feature = "sparse_immix_block")]
                     let is_block_sparse = max_hole_size >= Self::SPARSE_BLOCK_THRESHOLD;
+                    #[cfg(not(feature = "sparse_immix_block"))]
+                    let is_block_sparse = false;
                     #[cfg(feature = "thread_local_gc_copying")]
                     self.set_hole_size(max_hole_size);
 

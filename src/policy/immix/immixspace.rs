@@ -1181,7 +1181,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     .downcast_mut::<ImmixAllocator<VM>>()
                     .unwrap()
             }
-            .thread_local_copy_reserve_exhausted();
+            .thread_local_copy_reserve_exhausted(VM::VMObjectModel::get_size_when_copied(object));
             // actually forward and copy the object if it is not pinned
             // and we have sufficient space in our copy allocator
             let new_object = if local_copy_reserve_exhausted {

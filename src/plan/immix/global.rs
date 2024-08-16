@@ -14,6 +14,7 @@ use crate::plan::PlanThreadlocalTraceObject;
 use crate::plan::ThreadlocalTracedObjectType;
 #[cfg(feature = "thread_local_gc")]
 use crate::policy::gc_work::PolicyThreadlocalTraceObject;
+use crate::policy::immix::block::Block;
 use crate::policy::immix::ImmixSpaceArgs;
 use crate::policy::immix::{TRACE_KIND_DEFRAG, TRACE_KIND_FAST};
 use crate::policy::space::Space;
@@ -219,8 +220,13 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         let mut reserved = defrag_headroom;
         #[cfg(feature = "thread_local_gc_copying")]
         {
-            reserved +=
-                self.options().get_thread_local_heap_size() / crate::util::constants::BYTES_IN_PAGE;
+            let options = self.options();
+            reserved += std::cmp::max(
+                options.get_thread_local_heap_size() / crate::util::constants::BYTES_IN_PAGE,
+                options.get_max_concurrent_local_gc() as usize
+                    * options.get_max_local_copy_reserve() as usize
+                    * Block::PAGES as usize,
+            );
         }
         return reserved;
     }

@@ -733,16 +733,22 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     }
 
     #[cfg(feature = "thread_local_gc_copying")]
-    pub fn thread_local_copy_reserve_exhausted(&mut self) -> bool {
+    pub fn thread_local_copy_reserve_exhausted(&mut self, size: usize) -> bool {
         debug_assert!(self.copy && VM::VMActivePlan::is_mutator(self.tls));
         if self.local_copy_reserve_exhausted {
             return true;
         } else {
-            if self.local_free_blocks.is_empty()
-                && (self.bump_pointer.limit - self.bump_pointer.cursor < Line::BYTES << 1)
-            {
-                self.local_copy_reserve_exhausted = true;
-                return true;
+            if self.local_free_blocks.is_empty() {
+                let bump_pointer = if size > Line::BYTES {
+                    // overflow alloc looks at large cursor and large limit
+                    self.large_bump_pointer
+                } else {
+                    self.bump_pointer
+                };
+                if bump_pointer.cursor + size > bump_pointer.limit {
+                    self.local_copy_reserve_exhausted = true;
+                    return true;
+                }
             }
             false
         }

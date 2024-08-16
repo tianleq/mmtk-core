@@ -484,7 +484,6 @@ impl<VM: VMBinding> MMTK<VM> {
                 start_time: std::time::Instant::now(),
             }
             .execute();
-            mmtk.stats.end_local_gc();
         } else {
             // reset the counter, otherwise, local gc may not be triggered afterwards
             debug_assert_ne!(ACTIVE_LOCAL_GC_COUNTER.load(Ordering::SeqCst), 0);
@@ -532,8 +531,8 @@ impl<VM: VMBinding> MMTK<VM> {
     }
 
     pub fn request_starting(&self) {
-        self.stats.request_starting();
         self.handle_user_collection_request(VMMutatorThread(VMThread::UNINITIALIZED), true, true);
+        self.stats.request_starting();
     }
 
     pub fn request_finished(&self) {

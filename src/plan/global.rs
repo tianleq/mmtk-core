@@ -397,12 +397,6 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
 
     #[cfg(feature = "debug_thread_local_gc_copying")]
     fn collect_local_gc_stats(&self, _tls: VMMutatorThread) {}
-
-    #[cfg(feature = "thread_local_gc_copying_stats")]
-    fn print_local_heap_stats(&self, _mutator: &mut crate::Mutator<Self::VM>) {}
-
-    #[cfg(feature = "thread_local_gc_copying_stats")]
-    fn print_global_heap_stats(&self) {}
 }
 
 impl_downcast!(Plan assoc VM);
@@ -920,11 +914,6 @@ impl<VM: VMBinding> CommonPlan<VM> {
             return;
         }
         self.base.publish_object(object);
-    }
-
-    #[cfg(feature = "thread_local_gc_copying_stats")]
-    pub fn print_heap_stats(&self) -> usize {
-        self.los.print_los_stats()
     }
 }
 

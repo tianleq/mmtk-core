@@ -58,8 +58,6 @@ pub struct Stats {
     requests_time: Arc<Mutex<Timer>>,
     #[cfg(feature = "thread_local_gc")]
     thread_local_gc_count: AtomicUsize,
-    #[cfg(feature = "thread_local_gc")]
-    thread_local_gc_total_time: Arc<Mutex<Timer>>,
 }
 
 impl Stats {
@@ -88,27 +86,16 @@ impl Stats {
             MonotoneNanoTime {},
         )));
         let requests_time = Arc::new(Mutex::new(LongCounter::new(
-            "time.requests".to_string(),
+            "requests_time".to_string(),
             shared.clone(),
             false,
             false,
             false,
-            MonotoneNanoTime {},
-        )));
-
-        #[cfg(feature = "thread_local_gc")]
-        let thread_local_gc_total_time = Arc::new(Mutex::new(LongCounter::new(
-            "time.threadlocal".to_string(),
-            shared.clone(),
-            false,
-            false,
-            true,
             MonotoneNanoTime {},
         )));
 
         counters.push(t.clone());
         counters.push(requests_time.clone());
-        // counters.push(thread_local_gc_total_time.clone());
 
         // Read from the MMTK option for a list of perf events we want to
         // measure, and create corresponding counters
@@ -134,8 +121,6 @@ impl Stats {
             requests_time,
             #[cfg(feature = "thread_local_gc")]
             thread_local_gc_count: AtomicUsize::new(0),
-            #[cfg(feature = "thread_local_gc")]
-            thread_local_gc_total_time,
         }
     }
 
@@ -233,17 +218,11 @@ impl Stats {
         if !self.get_gathering_stats() {
             return;
         }
-        // self.thread_local_gc_total_time.lock().unwrap().start();
         self.thread_local_gc_count.fetch_add(1, Ordering::SeqCst);
     }
 
     #[cfg(feature = "thread_local_gc")]
-    pub fn end_local_gc(&self) {
-        if !self.get_gathering_stats() {
-            return;
-        }
-        // self.thread_local_gc_total_time.lock().unwrap().stop();
-    }
+    pub fn end_local_gc(&self) {}
 
     pub fn print_stats<VM: VMBinding>(&self, mmtk: &'static MMTK<VM>) {
         println!(
@@ -254,13 +233,6 @@ impl Stats {
         print!("{}\t", self.get_phase() / 2);
 
         print!("{}\t", self.thread_local_gc_count.load(Ordering::SeqCst));
-        print!(
-            "{}\t",
-            self.thread_local_gc_total_time
-                .lock()
-                .unwrap()
-                .get_total(None)
-        );
 
         let counter = self.counters.lock().unwrap();
         for iter in &(*counter) {
@@ -289,7 +261,6 @@ impl Stats {
     pub fn print_column_names(&self, scheduler_stat: &HashMap<String, String>) {
         print!("GC\t");
         print!("LOCAL_GC\t");
-        print!("time.threadlocal\t");
         let counter = self.counters.lock().unwrap();
         for iter in &(*counter) {
             let c = iter.lock().unwrap();

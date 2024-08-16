@@ -685,12 +685,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             u32::try_from(mutator_id).unwrap()
         }
     }
-
-    #[cfg(feature = "thread_local_gc_copying_stats")]
-    pub fn print_los_stats(&self) -> usize {
-        // println!("{:?}", self.live_pages.load(Ordering::SeqCst));
-        self.live_pages.load(Ordering::SeqCst)
-    }
 }
 
 fn get_super_page(cell: Address) -> Address {

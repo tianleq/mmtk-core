@@ -425,9 +425,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         #[cfg(feature = "thread_local_gc_copying")]
         {
             self.copy = true;
-            // self.space
-            //     .local_reserved_blocks_exhausted
-            //     .store(false, atomic::Ordering::Relaxed);
             self.local_copy_reserve_exhausted = false;
         }
 
@@ -735,6 +732,22 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         }
     }
 
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub fn thread_local_copy_reserve_exhausted(&mut self) -> bool {
+        debug_assert!(self.copy && VM::VMActivePlan::is_mutator(self.tls));
+        if self.local_copy_reserve_exhausted {
+            return true;
+        } else {
+            if self.local_free_blocks.is_empty()
+                && (self.bump_pointer.limit - self.bump_pointer.cursor < Line::BYTES << 1)
+            {
+                self.local_copy_reserve_exhausted = true;
+                return true;
+            }
+            false
+        }
+    }
+
     fn alloc_impl(
         &mut self,
         size: usize,
@@ -759,16 +772,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             );
 
             if get_maximum_aligned_size::<VM>(size, align) > Line::BYTES {
-                #[cfg(feature = "thread_local_gc_copying_stats")]
-                {
-                    self.hot = true;
-                }
                 // Size larger than a line: do large allocation
                 let rtn = self.overflow_alloc(size, align, offset); // overflow_allow will never use reusable blocks
-                #[cfg(feature = "thread_local_gc_copying_stats")]
-                {
-                    self.hot = false;
-                }
+
                 rtn
             } else {
                 // Size smaller than a line: fit into holes
@@ -1625,12 +1631,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                             block.taint();
                             // mutator phase only
                             if !self.copy {
-                                // let local_heap_in_pages = Block::PAGES
-                                //     * (self.local_blocks.len() + self.local_reusable_blocks.len());
-
-                                // crate::policy::immix::LOCAL_GC_COPY_RESERVE_PAGES
-                                //     .fetch_max(local_heap_in_pages, atomic::Ordering::SeqCst);
-
                                 let mutator = VM::VMActivePlan::mutator(
                                     crate::util::VMMutatorThread(self.tls),
                                 );
@@ -1675,12 +1675,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             #[cfg(feature = "thread_local_gc_copying")]
             {
                 debug_assert!(self.copy && VM::VMActivePlan::is_mutator(self.tls));
-                if self.local_free_blocks.is_empty() {
-                    // self.space
-                    //     .local_reserved_blocks_exhausted
-                    //     .store(true, atomic::Ordering::Release);
-                    self.local_copy_reserve_exhausted = true;
-                }
+                // if self.local_free_blocks.is_empty() {
+                //     self.local_copy_reserve_exhausted = true;
+                // }
             }
 
             block.init(self.copy);

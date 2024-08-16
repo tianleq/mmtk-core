@@ -1181,7 +1181,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     .downcast_mut::<ImmixAllocator<VM>>()
                     .unwrap()
             }
-            .local_copy_reserve_exhausted;
+            .thread_local_copy_reserve_exhausted();
             // actually forward and copy the object if it is not pinned
             // and we have sufficient space in our copy allocator
             let new_object = if local_copy_reserve_exhausted {
@@ -1728,55 +1728,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             // object has not been forwarded yet, the public bit read before is still valid
             is_published
         }
-    }
-
-    #[cfg(feature = "thread_local_gc_copying_stats")]
-    pub fn print_immixspace_stats(&self) -> (usize, usize, usize, usize, usize, usize) {
-        // let mut free_blocks = 0;
-        let mut reusable_block = 0;
-        let mut allocated_block = 0;
-        let mut global_reusable_block = 0;
-        let mut published_block = 0;
-        let mut available_lines = 0;
-        let mut sparse_block = 0;
-        for chunk in self.chunk_map.all_chunks() {
-            let blocks = chunk.iter_region::<Block>();
-            if self.chunk_map.get(chunk) == ChunkState::Free {
-                // free_blocks += blocks.count();
-                continue;
-            } else {
-                for block in blocks {
-                    match block.get_state() {
-                        BlockState::Unallocated => (),
-                        BlockState::Reusable { unavailable_lines } => {
-                            available_lines += Block::LINES - unavailable_lines as usize;
-                            reusable_block += 1;
-                            if block.is_block_published() {
-                                global_reusable_block += 1;
-                            }
-                            if block.is_block_sparse() {
-                                sparse_block += 1;
-                            }
-                        }
-                        _ => {
-                            allocated_block += 1;
-                            if block.is_block_published() {
-                                published_block += 1;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        (
-            reusable_block,
-            global_reusable_block,
-            allocated_block,
-            published_block,
-            available_lines,
-            sparse_block,
-        )
     }
 
     #[cfg(feature = "thread_local_gc_copying")]

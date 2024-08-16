@@ -54,46 +54,6 @@ impl<C: GCWorkContext> Prepare<C> {
 
 impl<C: GCWorkContext> GCWork<C::VM> for Prepare<C> {
     fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
-        #[cfg(feature = "debug_thread_local_gc_copying")]
-        {
-            // if mmtk.is_inside_harness() {
-            use std::{fs::OpenOptions, io::Write};
-
-            mmtk.get_plan().collect_gc_stats();
-
-            let mut file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/home/tianleq/misc/global-gc-stats.log")
-                .unwrap();
-            let mut guard = GLOBAL_GC_STATISTICS.lock().unwrap();
-            writeln!(file,
-                "Before Global {} | bytes allocated: {}, bytes_published: {}, blocks_published: {}, live_public_bytes: {}, number_of_global_reusable_blocks: {}, number_of_live_blocks: {}, number_of_live_public_blocks: {}, number_of_los_pages: {}, pages reserved: {}, total_allocation: {}",
-                GLOBAL_GC_ID.load(atomic::Ordering::SeqCst),
-                guard.bytes_allocated,
-                guard.bytes_published,
-                guard.blocks_published,
-                guard.live_public_bytes,
-                guard.number_of_global_reusable_blocks,
-                guard.number_of_live_blocks,
-                guard.number_of_live_public_blocks,
-                guard.number_of_los_pages,
-                mmtk.get_plan().get_collection_reserved_pages(),
-                TOTAL_ALLOCATION_BYTES.load(atomic::Ordering::SeqCst)
-            ).unwrap();
-
-            guard.number_of_live_blocks = 0;
-            guard.number_of_live_public_blocks = 0;
-            guard.number_of_global_reusable_blocks = 0;
-            guard.number_of_local_reusable_blocks = 0;
-            // }
-        }
-
-        #[cfg(feature = "thread_local_gc_copying_stats")]
-        {
-            // Now all mutators have been stopped, it is safe to collect stats
-            mmtk.print_global_heap_stats();
-        }
         trace!("Prepare Global");
         // We assume this is the only running work packet that accesses plan at the point of execution
         let plan_mut: &mut C::PlanType = unsafe { &mut *(self.plan as *const _ as *mut _) };

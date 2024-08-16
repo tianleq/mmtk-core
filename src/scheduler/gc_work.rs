@@ -60,30 +60,38 @@ impl<C: GCWorkContext> GCWork<C::VM> for Prepare<C> {
         plan_mut.prepare(worker.tls);
 
         if plan_mut.constraints().needs_prepare_mutator {
+            #[cfg(not(feature = "thread_local_gc"))]
+            {
+                let prepare_mutator_packets = <C::VM as VMBinding>::VMActivePlan::mutators()
+                    .map(|mutator| Box::new(PrepareMutator::<C::VM>::new(mutator)) as _)
+                    .collect::<Vec<_>>();
+                // Just in case the VM binding is inconsistent about the number of mutators and the actual mutator list.
+                debug_assert_eq!(
+                    prepare_mutator_packets.len(),
+                    <C::VM as VMBinding>::VMActivePlan::number_of_mutators()
+                );
+                mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
+                    .bulk_add(prepare_mutator_packets);
+            }
+            #[cfg(feature = "thread_local_gc")]
             for mutator in <C::VM as VMBinding>::VMActivePlan::mutators() {
-                #[cfg(feature = "thread_local_gc")]
-                {
-                    let candidates =
-                        mutator
-                            .finalizable_candidates
-                            .iter()
-                            .map(|v| *v)
-                            .filter(|f| {
-                                crate::util::metadata::public_bit::is_public::<C::VM>(
-                                    f.get_reference(),
-                                )
-                            });
-
-                    // move global finalizable candidates from local buffer to the global buffer
-                    mmtk.finalizable_processor
-                        .lock()
-                        .unwrap()
-                        .add_candidates(candidates);
-
-                    mutator.finalizable_candidates.retain(|f| {
-                        !crate::util::metadata::public_bit::is_public::<C::VM>(f.get_reference())
+                let candidates = mutator
+                    .finalizable_candidates
+                    .iter()
+                    .map(|v| *v)
+                    .filter(|f| {
+                        crate::util::metadata::public_bit::is_public::<C::VM>(f.get_reference())
                     });
-                }
+
+                // move global finalizable candidates from local buffer to the global buffer
+                mmtk.finalizable_processor
+                    .lock()
+                    .unwrap()
+                    .add_candidates(candidates);
+
+                mutator.finalizable_candidates.retain(|f| {
+                    !crate::util::metadata::public_bit::is_public::<C::VM>(f.get_reference())
+                });
 
                 mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
                     .add(PrepareMutator::<C::VM>::new(mutator));
@@ -159,9 +167,16 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
         plan_mut.release(worker.tls);
 
         #[cfg(not(feature = "thread_local_gc"))]
-        for mutator in <C::VM as VMBinding>::VMActivePlan::mutators() {
-            mmtk.scheduler.work_buckets[WorkBucketStage::Release]
-                .add(ReleaseMutator::<C::VM>::new(mutator));
+        {
+            let release_mutator_packets = <C::VM as VMBinding>::VMActivePlan::mutators()
+                .map(|mutator| Box::new(ReleaseMutator::<C::VM>::new(mutator)) as _)
+                .collect::<Vec<_>>();
+            // Just in case the VM binding is inconsistent about the number of mutators and the actual mutator list.
+            debug_assert_eq!(
+                release_mutator_packets.len(),
+                <C::VM as VMBinding>::VMActivePlan::number_of_mutators()
+            );
+            mmtk.scheduler.work_buckets[WorkBucketStage::Release].bulk_add(release_mutator_packets);
         }
 
         for w in &mmtk.scheduler.worker_group.workers_shared {

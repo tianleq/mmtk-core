@@ -61,6 +61,8 @@ pub trait Counter {
     fn implicitly_start(&self) -> bool;
     /// Get the name of the counter
     fn name(&self) -> &String;
+
+    fn implicit_stop(&self) -> bool;
 }
 
 /// An abstraction over some changing values that we want to measure.

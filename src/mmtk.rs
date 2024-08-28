@@ -467,4 +467,12 @@ impl<VM: VMBinding> MMTK<VM> {
     pub fn get_options(&self) -> &Options {
         &self.options
     }
+
+    pub fn request_starting(&self) {
+        self.stats.request_starting();
+    }
+
+    pub fn request_finished(&self) {
+        self.stats.request_finished();
+    }
 }

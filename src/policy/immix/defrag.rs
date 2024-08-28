@@ -138,7 +138,10 @@ impl Defrag {
         }
 
         self.available_clean_pages_for_defrag.store(
-            available_clean_pages_for_defrag as usize + plan_stats.collection_reserved_pages,
+            std::cmp::max(
+                available_clean_pages_for_defrag as usize,
+                plan_stats.collection_reserved_pages,
+            ),
             Ordering::Release,
         );
     }

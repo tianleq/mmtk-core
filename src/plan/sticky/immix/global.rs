@@ -310,7 +310,7 @@ impl<VM: VMBinding> crate::plan::generational::global::GenerationalPlanExt<VM> f
 
 impl<VM: VMBinding> StickyImmix<VM> {
     pub fn new(args: CreateGeneralPlanArgs<VM>) -> Self {
-        let full_heap_gc_count = args.stats.new_event_counter("majorGC", true, true);
+        let full_heap_gc_count = args.stats.new_event_counter("majorGC", true, true, true);
         let plan_args = CreateSpecificPlanArgs {
             global_args: args,
             constraints: &STICKY_IMMIX_CONSTRAINTS,

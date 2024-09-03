@@ -9,7 +9,6 @@ use crate::util::alloc::Allocator;
 use crate::util::{Address, ObjectReference};
 use crate::util::{VMMutatorThread, VMWorkerThread};
 use crate::vm::VMBinding;
-
 use enum_map::EnumMap;
 
 pub(crate) type SpaceMapping<VM> = Vec<(AllocatorSelector, &'static dyn Space<VM>)>;
@@ -113,6 +112,20 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         offset: usize,
         allocator: AllocationSemantics,
     ) -> Address {
+        #[cfg(feature = "publish_rate_analysis")]
+        {
+            // The following only makes sense when allocation fast path is disabled
+            use crate::{
+                ALLOCATION_COUNT, ALLOCATION_SIZE, REQUEST_SCOPE_ALLOCATION_COUNT,
+                REQUEST_SCOPE_ALLOCATION_SIZE,
+            };
+            use std::sync::atomic::Ordering;
+
+            ALLOCATION_COUNT.fetch_add(1, Ordering::SeqCst);
+            ALLOCATION_SIZE.fetch_add(size, Ordering::SeqCst);
+            REQUEST_SCOPE_ALLOCATION_COUNT.fetch_add(1, Ordering::SeqCst);
+            REQUEST_SCOPE_ALLOCATION_SIZE.fetch_add(size, Ordering::SeqCst);
+        }
         unsafe {
             self.allocators
                 .get_allocator_mut(self.config.allocator_mapping[allocator])

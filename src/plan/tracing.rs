@@ -150,9 +150,33 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
         }
     }
 
-    pub fn do_closure(&mut self) {
+    pub fn do_closure(&mut self, object: ObjectReference) {
         use crate::vm::Scanning;
+        crate::util::metadata::public_bit::set_public_bit::<VM>(object);
 
+        #[cfg(feature = "thread_local_gc")]
+        self.mmtk.get_plan().publish_object(value);
+        VM::VMScanning::scan_object(
+            crate::util::VMWorkerThread(crate::util::VMThread::UNINITIALIZED),
+            object,
+            self,
+        );
+        #[cfg(feature = "publish_rate_analysis")]
+        {
+            use crate::vm::ObjectModel;
+            use crate::PUBLICATION_COUNT;
+            use crate::PUBLICATION_SIZE;
+            use crate::REQUEST_SCOPE_PUBLICATION_COUNT;
+            use crate::REQUEST_SCOPE_PUBLICATION_SIZE;
+
+            let object_size = VM::VMObjectModel::get_current_size(object);
+
+            PUBLICATION_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            PUBLICATION_SIZE.fetch_add(object_size, std::sync::atomic::Ordering::SeqCst);
+            REQUEST_SCOPE_PUBLICATION_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            REQUEST_SCOPE_PUBLICATION_SIZE
+                .fetch_add(object_size, std::sync::atomic::Ordering::SeqCst);
+        }
         while !self.slot_buffer.is_empty() {
             let slot = self.slot_buffer.pop_front().unwrap();
             let object = crate::vm::slot::Slot::load(&slot);
@@ -171,6 +195,23 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
                     object,
                     self,
                 );
+                #[cfg(feature = "publish_rate_analysis")]
+                {
+                    use crate::vm::ObjectModel;
+                    use crate::PUBLICATION_COUNT;
+                    use crate::PUBLICATION_SIZE;
+                    use crate::REQUEST_SCOPE_PUBLICATION_COUNT;
+                    use crate::REQUEST_SCOPE_PUBLICATION_SIZE;
+
+                    let object_size = VM::VMObjectModel::get_current_size(object);
+
+                    PUBLICATION_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    PUBLICATION_SIZE.fetch_add(object_size, std::sync::atomic::Ordering::SeqCst);
+                    REQUEST_SCOPE_PUBLICATION_COUNT
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    REQUEST_SCOPE_PUBLICATION_SIZE
+                        .fetch_add(object_size, std::sync::atomic::Ordering::SeqCst);
+                }
             }
         }
     }

@@ -519,4 +519,12 @@ impl<VM: VMBinding> MMTK<VM> {
             space.enumerate_objects(&mut enumerator);
         })
     }
+
+    pub fn request_starting(&self) {
+        self.stats.request_starting();
+    }
+
+    pub fn request_finished(&self) {
+        self.stats.request_finished();
+    }
 }

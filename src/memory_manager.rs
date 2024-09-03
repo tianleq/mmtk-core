@@ -729,6 +729,19 @@ pub fn add_phantom_candidate<VM: VMBinding>(mmtk: &MMTK<VM>, reff: ObjectReferen
 /// * `tls`: The thread that calls the function (and triggers a collection).
 pub fn harness_begin<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
     mmtk.harness_begin(tls);
+    #[cfg(feature = "publish_rate_analysis")]
+    {
+        use crate::ALLOCATION_COUNT;
+        use crate::ALLOCATION_SIZE;
+        use crate::PUBLICATION_COUNT;
+        use crate::PUBLICATION_SIZE;
+        use std::sync::atomic::Ordering::Release;
+
+        ALLOCATION_COUNT.store(0, Release);
+        ALLOCATION_SIZE.store(0, Release);
+        PUBLICATION_COUNT.store(0, Release);
+        PUBLICATION_SIZE.store(0, Release);
+    }
 }
 
 /// Generic hook to allow benchmarks to be harnessed. We stop collecting
@@ -905,6 +918,23 @@ pub fn mmtk_set_public_bit<VM: VMBinding>(_mmtk: &'static MMTK<VM>, object: Obje
     crate::util::metadata::public_bit::set_public_bit::<VM>(object);
     #[cfg(feature = "thread_local_gc")]
     _mmtk.get_plan().publish_object(object);
+    #[cfg(feature = "publish_rate_analysis")]
+    {
+        use crate::vm::ObjectModel;
+        use crate::PUBLICATION_COUNT;
+        use crate::PUBLICATION_SIZE;
+        use crate::REQUEST_SCOPE_BARRIER_SLOW_PATH_COUNT;
+        use crate::REQUEST_SCOPE_PUBLICATION_COUNT;
+        use crate::REQUEST_SCOPE_PUBLICATION_SIZE;
+
+        let object_size = VM::VMObjectModel::get_current_size(object);
+
+        PUBLICATION_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        PUBLICATION_SIZE.fetch_add(object_size, std::sync::atomic::Ordering::SeqCst);
+        REQUEST_SCOPE_PUBLICATION_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        REQUEST_SCOPE_PUBLICATION_SIZE.fetch_add(object_size, std::sync::atomic::Ordering::SeqCst);
+        REQUEST_SCOPE_BARRIER_SLOW_PATH_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 #[cfg(feature = "public_bit")]
@@ -912,12 +942,15 @@ pub fn mmtk_publish_object<VM: VMBinding>(
     _mmtk: &'static MMTK<VM>,
     _object: Option<ObjectReference>,
 ) {
-    use crate::vm::Scanning;
+    // use crate::vm::Scanning;
 
     if let Some(object) = _object {
         if crate::util::metadata::public_bit::is_public::<VM>(object) {
             return;
         }
+        #[cfg(feature = "publish_rate_analysis")]
+        crate::REQUEST_SCOPE_BARRIER_SLOW_PATH_COUNT
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
         let mut closure: crate::plan::PublishObjectClosure<VM> =
             crate::plan::PublishObjectClosure::<VM>::new(
@@ -926,14 +959,16 @@ pub fn mmtk_publish_object<VM: VMBinding>(
                 u32::MAX,
             );
 
-        mmtk_set_public_bit(_mmtk, object);
-        // Publish all the descendants
-        VM::VMScanning::scan_object(
-            VMWorkerThread(VMThread::UNINITIALIZED),
-            object,
-            &mut closure,
-        );
-        closure.do_closure();
+        // mmtk_set_public_bit(_mmtk, object);
+        // #[cfg(feature = "thread_local_gc")]
+        // _mmtk.get_plan().publish_object(object);
+        // // Publish all the descendants
+        // VM::VMScanning::scan_object(
+        //     VMWorkerThread(VMThread::UNINITIALIZED),
+        //     object,
+        //     &mut closure,
+        // );
+        closure.do_closure(object);
     }
 }
 
@@ -944,4 +979,38 @@ pub fn mmtk_is_object_published<VM: VMBinding>(_object: Option<ObjectReference>)
     } else {
         false
     }
+}
+
+/// Generic hook to allow benchmarks to be harnessed. We do a full heap
+/// GC, and then start recording statistics for MMTk.
+///
+/// Arguments:
+/// * `mmtk`: A reference to an MMTk instance.
+/// * `tls`: The thread that calls the function (and triggers a collection).
+pub fn request_starting<VM: VMBinding>(_mmtk: &'static MMTK<VM>) {
+    #[cfg(feature = "publish_rate_analysis")]
+    {
+        use crate::REQUEST_SCOPE_ALLOCATION_COUNT;
+        use crate::REQUEST_SCOPE_ALLOCATION_SIZE;
+        use crate::REQUEST_SCOPE_BARRIER_SLOW_PATH_COUNT;
+        use crate::REQUEST_SCOPE_PUBLICATION_COUNT;
+        use crate::REQUEST_SCOPE_PUBLICATION_SIZE;
+        use std::sync::atomic::Ordering::Release;
+
+        REQUEST_SCOPE_ALLOCATION_COUNT.store(0, Release);
+        REQUEST_SCOPE_ALLOCATION_SIZE.store(0, Release);
+        REQUEST_SCOPE_PUBLICATION_COUNT.store(0, Release);
+        REQUEST_SCOPE_PUBLICATION_SIZE.store(0, Release);
+        REQUEST_SCOPE_BARRIER_SLOW_PATH_COUNT.store(0, Release);
+    }
+    _mmtk.request_starting();
+}
+
+/// Generic hook to allow benchmarks to be harnessed. We stop collecting
+/// statistics, and print stats values.
+///
+/// Arguments:
+/// * `mmtk`: A reference to an MMTk instance.
+pub fn request_finished<VM: VMBinding>(_mmtk: &'static MMTK<VM>) {
+    _mmtk.request_finished();
 }

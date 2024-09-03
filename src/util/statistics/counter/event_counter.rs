@@ -163,4 +163,8 @@ impl Counter for EventCounter {
     fn name(&self) -> &String {
         &self.name
     }
+
+    fn implicitly_stop(&self) -> bool {
+        self.implicitly_start
+    }
 }

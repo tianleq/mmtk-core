@@ -55,6 +55,7 @@ pub struct Stats {
     pub shared: Arc<SharedStats>,
     counters: Mutex<Vec<Arc<Mutex<dyn Counter + Send>>>>,
     exceeded_phase_limit: AtomicBool,
+    requests_time: Arc<Mutex<Timer>>,
 }
 
 impl Stats {
@@ -78,10 +79,20 @@ impl Stats {
             "time".to_string(),
             shared.clone(),
             true,
+            true,
+            false,
+            MonotoneNanoTime {},
+        )));
+        let requests_time = Arc::new(Mutex::new(LongCounter::new(
+            "requests_time".to_string(),
+            shared.clone(),
+            false,
+            false,
             false,
             MonotoneNanoTime {},
         )));
         counters.push(t.clone());
+        counters.push(requests_time.clone());
         // Read from the MMTK option for a list of perf events we want to
         // measure, and create corresponding counters
         #[cfg(feature = "perf_counter")]
@@ -103,6 +114,7 @@ impl Stats {
             shared,
             counters: Mutex::new(counters),
             exceeded_phase_limit: AtomicBool::new(false),
+            requests_time,
         }
     }
 
@@ -138,6 +150,7 @@ impl Stats {
         &self,
         name: &str,
         implicit_start: bool,
+        implicit_stop: bool,
         merge_phases: bool,
     ) -> Arc<Mutex<Timer>> {
         let mut guard = self.counters.lock().unwrap();
@@ -145,6 +158,7 @@ impl Stats {
             name.to_string(),
             self.shared.clone(),
             implicit_start,
+            implicit_stop,
             merge_phases,
             MonotoneNanoTime {},
         )));
@@ -211,6 +225,45 @@ impl Stats {
         print!("Total time: ");
         self.total_time.lock().unwrap().print_total(None);
         println!(" ms");
+        print!("Requests time: ");
+        self.requests_time.lock().unwrap().print_total(None);
+        println!(" ms");
+        #[cfg(feature = "publish_rate_analysis")]
+        {
+            use crate::REQUEST_SCOPE_ALLOCATION_COUNT;
+            use crate::REQUEST_SCOPE_ALLOCATION_SIZE;
+            use crate::REQUEST_SCOPE_BARRIER_SLOW_PATH_COUNT;
+            use crate::REQUEST_SCOPE_PUBLICATION_COUNT;
+            use crate::REQUEST_SCOPE_PUBLICATION_SIZE;
+
+            let request_scope_allocation_count =
+                REQUEST_SCOPE_ALLOCATION_COUNT.load(std::sync::atomic::Ordering::Acquire);
+            let request_scope_allocation_size =
+                REQUEST_SCOPE_ALLOCATION_SIZE.load(std::sync::atomic::Ordering::Acquire);
+            let request_scope_publication_count =
+                REQUEST_SCOPE_PUBLICATION_COUNT.load(std::sync::atomic::Ordering::Acquire);
+            let request_scope_publication_size =
+                REQUEST_SCOPE_PUBLICATION_SIZE.load(std::sync::atomic::Ordering::Acquire);
+            let request_scop_barrier_slow_path =
+                REQUEST_SCOPE_BARRIER_SLOW_PATH_COUNT.load(Ordering::Acquire);
+            let requests_time = self.requests_time.lock().unwrap().get_total(None);
+
+            println!(
+                "request scope bytes publication rate: {}, {}",
+                request_scope_publication_size as f64 / request_scope_allocation_size as f64,
+                (request_scope_publication_size as f64 / requests_time as f64) * 1e9f64
+            );
+            println!(
+                "request scope objects publication rate: {}, {}",
+                request_scope_publication_count as f64 / request_scope_allocation_count as f64,
+                (request_scope_publication_count as f64 / requests_time as f64) * 1e9f64
+            );
+            println!(
+                "request scope barrier slow path: {}",
+                (request_scop_barrier_slow_path as f64 / requests_time as f64) * 1e9f64,
+            );
+            //
+        }
         println!("------------------------------ End MMTk Statistics -----------------------------")
     }
 
@@ -254,7 +307,10 @@ impl Stats {
     fn stop_all_counters(&self) {
         let counters = self.counters.lock().unwrap();
         for c in &(*counters) {
-            c.lock().unwrap().stop();
+            let mut ctr = c.lock().unwrap();
+            if ctr.implicitly_stop() {
+                ctr.stop();
+            }
         }
         self.shared.set_gathering_stats(false);
     }
@@ -265,5 +321,13 @@ impl Stats {
 
     pub fn get_gathering_stats(&self) -> bool {
         self.shared.get_gathering_stats()
+    }
+
+    pub fn request_starting(&self) {
+        self.requests_time.lock().unwrap().start();
+    }
+
+    pub fn request_finished(&self) {
+        self.requests_time.lock().unwrap().stop();
     }
 }

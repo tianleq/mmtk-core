@@ -349,6 +349,10 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
             !metadata::public_bit::is_public::<S::VM>(target.unwrap()),
             "target check is broken"
         );
+        #[cfg(feature = "publish_rate_analysis")]
+        crate::REQUEST_SCOPE_BARRIER_SLOW_PATH_COUNT
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
         self.semantics
             .object_reference_write_slow(src, slot, target);
     }
@@ -423,6 +427,9 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
             "arraycopy slow path: source array: {:?} is public",
             src_base
         );
+        #[cfg(feature = "publish_rate_analysis")]
+        crate::REQUEST_SCOPE_BARRIER_SLOW_PATH_COUNT
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.semantics
             .object_array_copy_slow(src_base, dst_base, src, dst);
     }
@@ -440,16 +447,11 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
     }
 
     fn trace_public_object(&mut self, _src: ObjectReference, value: ObjectReference) {
-        use crate::vm::Scanning;
+        // use crate::vm::Scanning;
 
         let mut closure = super::tracing::PublishObjectClosure::<VM>::new(self.mmtk);
 
-        metadata::public_bit::set_public_bit::<VM>(value);
-
-        #[cfg(feature = "thread_local_gc")]
-        self.mmtk.get_plan().publish_object(value);
-        VM::VMScanning::scan_object(VMWorkerThread(VMThread::UNINITIALIZED), value, &mut closure);
-        closure.do_closure();
+        closure.do_closure(value);
     }
 }
 

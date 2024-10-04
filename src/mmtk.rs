@@ -583,7 +583,7 @@ impl<VM: VMBinding> MMTK<VM> {
     }
 
     pub fn request_starting(&self) {
-        self.handle_user_collection_request(VMMutatorThread(VMThread::UNINITIALIZED), true, true);
+        // self.handle_user_collection_request(VMMutatorThread(VMThread::UNINITIALIZED), true, true);
         self.stats.request_starting();
     }
 

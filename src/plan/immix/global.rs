@@ -50,6 +50,7 @@ pub struct Immix<VM: VMBinding> {
     #[parent]
     pub common: CommonPlan<VM>,
     last_gc_was_defrag: AtomicBool,
+    defrag_mutator: AtomicBool,
 }
 
 /// The plan constraints for the immix plan.
@@ -171,7 +172,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     fn defrag_mutator_required(&self, tls: VMMutatorThread) -> bool {
         use crate::vm::ActivePlan;
         use std::borrow::Borrow;
-
+        if self.defrag_mutator.load(Ordering::Acquire) == false {
+            return false;
+        }
         let mutator = VM::VMActivePlan::mutator(tls);
         let allocators: &crate::util::alloc::allocators::Allocators<VM> =
             mutator.allocators.borrow();
@@ -182,7 +185,17 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         .downcast_ref::<crate::util::alloc::ImmixAllocator<VM>>()
         .unwrap();
         if immix_allocator.local_reusable_blocks.len() >= DEFRAG_MUTATOR_THRESHOLD {
-            true
+            match self.defrag_mutator.compare_exchange(
+                true,
+                false,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => true,
+                Err(_) => false,
+            }
+
+            // true
         } else {
             false
         }
@@ -389,6 +402,7 @@ impl<VM: VMBinding> Immix<VM> {
             ),
             common: CommonPlan::new(plan_args),
             last_gc_was_defrag: AtomicBool::new(false),
+            defrag_mutator: AtomicBool::new(false),
         };
 
         immix.verify_side_metadata_sanity();

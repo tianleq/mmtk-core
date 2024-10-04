@@ -164,6 +164,18 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             self.copy = false;
         }
 
+        #[cfg(debug_assertions)]
+        {
+            for b in self.local_reusable_blocks.dense.iter() {
+                debug_assert!(
+                    b.is_block_dirty() || b.get_state() == BlockState::Unallocated,
+                    "block: {:?}｜ state: {:?} should be dirty",
+                    b.get_state(),
+                    *b
+                );
+            }
+        }
+
         // clear local reusable block list so that it can be rebuilt
         self.local_blocks
             .extend(self.local_reusable_blocks.dense.drain(..));
@@ -256,6 +268,11 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                                     .line_unavail_state
                                     .load(atomic::Ordering::Acquire),
                                 self.space.line_mark_state.load(atomic::Ordering::Acquire),
+                            );
+                            debug_assert!(
+                                block.is_block_dirty(),
+                                "block: {:?} should be dirty",
+                                block
                             );
                         }
                         #[cfg(feature = "sparse_immix_block")]
@@ -398,6 +415,18 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         debug_assert!(VM::VMActivePlan::is_mutator(self.tls));
         self.copy = true;
 
+        #[cfg(debug_assertions)]
+        {
+            for b in self.local_reusable_blocks.dense.iter() {
+                debug_assert!(
+                    b.is_block_dirty(),
+                    "block: {:?} ｜ state: {:?} should be dirty",
+                    b.get_state(),
+                    *b
+                );
+            }
+        }
+
         // move local reusable blocks to local blocks
         self.local_blocks
             .extend(self.local_reusable_blocks.dense.drain(..));
@@ -406,7 +435,12 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             .extend(self.local_reusable_blocks.sparse.drain(..));
 
         for &block in self.local_blocks.iter() {
-            debug_assert!(block.get_state() == BlockState::Unmarked);
+            debug_assert!(
+                block.get_state() == BlockState::Unmarked,
+                "block: {:?} | state: {:?}",
+                block,
+                block.get_state()
+            );
             // all local blocks should be defrag source
             block.set_as_defrag_source(true);
             // dirty bit will be set again later on blocks containing private objects
@@ -426,6 +460,18 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         {
             self.copy = true;
             self.local_copy_reserve_exhausted = false;
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            for b in self.local_reusable_blocks.dense.iter() {
+                debug_assert!(
+                    b.is_block_dirty(),
+                    "block: {:?} ｜ state: {:?} should be dirty",
+                    b.get_state(),
+                    *b
+                );
+            }
         }
 
         // move local reusable blocks to local blocks
@@ -714,7 +760,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 if block.get_state().is_reusable() {
                     reusable_count += 1;
                 }
-
+                debug_assert!(block.is_block_dirty(), "block: {:?} should be dirty", block);
                 #[cfg(feature = "debug_publish_object")]
                 {
                     assert!(

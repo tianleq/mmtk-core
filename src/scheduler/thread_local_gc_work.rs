@@ -547,7 +547,6 @@ where
         {
             let reff: ObjectReference = f.get_reference();
 
-            trace!("Pop {:?} for finalization in local gc", reff);
             if crate::util::metadata::public_bit::is_public::<VM>(reff) {
                 // public object is untouched, so nothing needs to be done
                 continue;
@@ -562,6 +561,7 @@ where
                     reff,
                     f
                 );
+
                 mutator.finalizable_candidates.push(f);
             } else {
                 // The object is private and dead, so it can be finalized
@@ -573,9 +573,18 @@ where
             let object = closure.do_object_closure(f.get_reference());
             f.set_reference(object)
         });
+        // The following is unsound unless publishing those ready for finalizable objects. The reason is the following:
+        // Once a private ready for finalizable object pushed to the global list, its memory might be reclaimed by
+        // another local gc, leaving a random pointer in the global list.
+
         // Now push all local ready for finalize objects to the global list
-        let mut finalizable_processor = self.mmtk.finalizable_processor.lock().unwrap();
-        finalizable_processor.add_ready_for_finalize_objects(ready_for_finalize);
+        // let mut finalizable_processor = self.mmtk.finalizable_processor.lock().unwrap();
+        // finalizable_processor.add_ready_for_finalize_objects(ready_for_finalize);
+
+        // Instead of pushing to the global list, push it back to local candidates list
+        // this is also semantically correct as local gc cannot trigger finalization
+        // only gc thread can do it
+        mutator.finalizable_candidates.extend(ready_for_finalize);
 
         // Finalization thread is expecting a gc thread to wake it up, since
         // local gc is done by the mutator itself, finalization cannot be done after a

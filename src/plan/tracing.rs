@@ -150,9 +150,18 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
         }
     }
 
-    pub fn do_closure(&mut self, object: ObjectReference) {
+    pub fn do_closure(
+        &mut self,
+        object: ObjectReference,
+        #[cfg(feature = "publish_rate_analysis")] tls: crate::util::VMMutatorThread,
+    ) {
+        #[cfg(feature = "publish_rate_analysis")]
+        use crate::vm::ActivePlan;
         use crate::vm::Scanning;
+
         crate::util::metadata::public_bit::set_public_bit::<VM>(object);
+
+        let mut klass_names = Vec::new();
 
         #[cfg(feature = "thread_local_gc")]
         self.mmtk.get_plan().publish_object(value);
@@ -161,21 +170,28 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
             object,
             self,
         );
+
+        #[cfg(feature = "publish_rate_analysis")]
+        let mut publication_count = 0;
+        #[cfg(feature = "publish_rate_analysis")]
+        let mut publication_size = 0;
+        #[cfg(feature = "publish_rate_analysis")]
+        let mutator_id = if VM::VMActivePlan::is_mutator(tls.0) {
+            VM::VMActivePlan::mutator(tls).mutator_id
+        } else {
+            0
+        };
+
         #[cfg(feature = "publish_rate_analysis")]
         {
             use crate::vm::ObjectModel;
-            use crate::PUBLICATION_COUNT;
-            use crate::PUBLICATION_SIZE;
-            use crate::REQUEST_SCOPE_PUBLICATION_COUNT;
-            use crate::REQUEST_SCOPE_PUBLICATION_SIZE;
 
             let object_size = VM::VMObjectModel::get_current_size(object);
+            publication_count += 1;
+            publication_size += object_size;
 
-            PUBLICATION_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            PUBLICATION_SIZE.fetch_add(object_size, std::sync::atomic::Ordering::SeqCst);
-            REQUEST_SCOPE_PUBLICATION_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            REQUEST_SCOPE_PUBLICATION_SIZE
-                .fetch_add(object_size, std::sync::atomic::Ordering::SeqCst);
+            let klass_name = VM::VMObjectModel::get_object_klass_name(object);
+            klass_names.push(klass_name);
         }
         while !self.slot_buffer.is_empty() {
             let slot = self.slot_buffer.pop_front().unwrap();
@@ -198,21 +214,69 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
                 #[cfg(feature = "publish_rate_analysis")]
                 {
                     use crate::vm::ObjectModel;
-                    use crate::PUBLICATION_COUNT;
-                    use crate::PUBLICATION_SIZE;
-                    use crate::REQUEST_SCOPE_PUBLICATION_COUNT;
-                    use crate::REQUEST_SCOPE_PUBLICATION_SIZE;
 
                     let object_size = VM::VMObjectModel::get_current_size(object);
+                    publication_count += 1;
+                    publication_size += object_size;
 
-                    PUBLICATION_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    PUBLICATION_SIZE.fetch_add(object_size, std::sync::atomic::Ordering::SeqCst);
-                    REQUEST_SCOPE_PUBLICATION_COUNT
-                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    REQUEST_SCOPE_PUBLICATION_SIZE
-                        .fetch_add(object_size, std::sync::atomic::Ordering::SeqCst);
+                    let klass_name = VM::VMObjectModel::get_object_klass_name(object);
+                    klass_names.push(klass_name);
                 }
             }
+        }
+        #[cfg(feature = "publish_rate_analysis")]
+        {
+            use crate::PER_THREAD_PUBLICATION_STATS_MAP;
+            use crate::PUBLICATION_COUNT;
+            use crate::PUBLICATION_SIZE;
+            use crate::PUBLIC_KLASS_MAP;
+            use crate::REQUEST_SCOPE_PUBLICATION_COUNT;
+            use crate::REQUEST_SCOPE_PUBLICATION_SIZE;
+
+            let mut map = PUBLIC_KLASS_MAP.lock().unwrap();
+            for name in klass_names {
+                if map.contains_key(&name) {
+                    *map.get_mut(&name).unwrap() += 1;
+                } else {
+                    map.insert(name, 1);
+                }
+            }
+
+            let mut stats = PER_THREAD_PUBLICATION_STATS_MAP.lock().unwrap();
+            match stats.get_mut(&mutator_id) {
+                Some(s) => {
+                    s.publication_count += publication_count;
+                    s.publication_size += publication_size;
+                    s.request_scope_publication_count += publication_count;
+                    s.request_scope_publication_size += publication_size;
+                }
+                None => {
+                    if mutator_id != 0 {
+                        panic!("should not reach here");
+                    } else {
+                        assert!(mutator_id == 0);
+                        stats.insert(
+                            mutator_id,
+                            crate::PublicationStats {
+                                publication_size: publication_size,
+                                publication_count: publication_count,
+                                request_scope_publication_size: publication_size,
+                                request_scope_publication_count: publication_count,
+                                allocation_size: publication_size,
+                                allocation_count: publication_count,
+                                request_scope_allocation_size: publication_size,
+                                request_scope_allocation_count: publication_count,
+                            },
+                        );
+                    }
+                }
+            }
+            PUBLICATION_COUNT.fetch_add(publication_count, std::sync::atomic::Ordering::SeqCst);
+            PUBLICATION_SIZE.fetch_add(publication_size, std::sync::atomic::Ordering::SeqCst);
+            REQUEST_SCOPE_PUBLICATION_COUNT
+                .fetch_add(publication_count, std::sync::atomic::Ordering::SeqCst);
+            REQUEST_SCOPE_PUBLICATION_SIZE
+                .fetch_add(publication_size, std::sync::atomic::Ordering::SeqCst);
         }
     }
 }

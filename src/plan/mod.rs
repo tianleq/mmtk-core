@@ -37,6 +37,7 @@ pub use plan_constraints::PlanConstraints;
 pub(crate) use plan_constraints::DEFAULT_PLAN_CONSTRAINTS;
 
 mod tracing;
+use portable_atomic::AtomicU32;
 pub use tracing::{ObjectQueue, ObjectsClosure, VectorObjectQueue, VectorQueue};
 
 #[cfg(feature = "public_bit")]
@@ -69,3 +70,5 @@ pub use nogc::NOGC_CONSTRAINTS;
 pub use pageprotect::PP_CONSTRAINTS;
 pub use semispace::SS_CONSTRAINTS;
 pub use sticky::immix::STICKY_IMMIX_CONSTRAINTS;
+
+pub static MUTATOR_ID_GENERATOR: AtomicU32 = AtomicU32::new(1);

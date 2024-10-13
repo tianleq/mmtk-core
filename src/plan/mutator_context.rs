@@ -94,6 +94,8 @@ pub struct Mutator<VM: VMBinding> {
     pub mutator_tls: VMMutatorThread,
     pub(crate) plan: &'static dyn Plan<VM = VM>,
     pub(crate) config: MutatorConfig<VM>,
+    #[cfg(feature = "publish_rate_analysis")]
+    pub mutator_id: u32,
 }
 
 impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
@@ -116,8 +118,8 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         {
             // The following only makes sense when allocation fast path is disabled
             use crate::{
-                ALLOCATION_COUNT, ALLOCATION_SIZE, REQUEST_SCOPE_ALLOCATION_COUNT,
-                REQUEST_SCOPE_ALLOCATION_SIZE,
+                ALLOCATION_COUNT, ALLOCATION_SIZE, PER_THREAD_PUBLICATION_STATS_MAP,
+                REQUEST_SCOPE_ALLOCATION_COUNT, REQUEST_SCOPE_ALLOCATION_SIZE,
             };
             use std::sync::atomic::Ordering;
 
@@ -125,6 +127,31 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
             ALLOCATION_SIZE.fetch_add(size, Ordering::SeqCst);
             REQUEST_SCOPE_ALLOCATION_COUNT.fetch_add(1, Ordering::SeqCst);
             REQUEST_SCOPE_ALLOCATION_SIZE.fetch_add(size, Ordering::SeqCst);
+            let mut stats = PER_THREAD_PUBLICATION_STATS_MAP.lock().unwrap();
+            if stats.contains_key(&self.mutator_id) {
+                let s = stats.get_mut(&self.mutator_id).unwrap();
+                s.allocation_count += 1;
+                s.allocation_size += size;
+                s.request_scope_allocation_count += 1;
+                s.request_scope_allocation_size += size;
+            } else {
+                let mutator_id = self.mutator_id;
+                assert!(mutator_id < 1024);
+
+                stats.insert(
+                    mutator_id,
+                    crate::PublicationStats {
+                        publication_size: 0,
+                        publication_count: 0,
+                        request_scope_publication_size: 0,
+                        request_scope_publication_count: 0,
+                        allocation_size: size,
+                        allocation_count: 1,
+                        request_scope_allocation_size: size,
+                        request_scope_allocation_count: 1,
+                    },
+                );
+            }
         }
         unsafe {
             self.allocators

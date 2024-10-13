@@ -121,7 +121,7 @@ pub struct MMTK<VM: VMBinding> {
     pub(crate) gc_trigger: Arc<GCTrigger<VM>>,
     pub(crate) gc_requester: Arc<GCRequester<VM>>,
     pub(crate) stats: Arc<Stats>,
-    inside_harness: AtomicBool,
+    pub(crate) inside_harness: AtomicBool,
     #[cfg(feature = "sanity")]
     inside_sanity: AtomicBool,
     /// Analysis counters. The feature analysis allows us to periodically stop the world and collect some statistics.

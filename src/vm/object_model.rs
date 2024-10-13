@@ -486,6 +486,8 @@ pub trait ObjectModel<VM: VMBinding> {
     fn is_object_sane(_object: ObjectReference) -> bool {
         true
     }
+
+    fn get_object_klass_name(_object: ObjectReference) -> String;
 }
 
 pub mod specs {

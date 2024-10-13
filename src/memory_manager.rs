@@ -733,14 +733,25 @@ pub fn harness_begin<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
     {
         use crate::ALLOCATION_COUNT;
         use crate::ALLOCATION_SIZE;
+        use crate::PER_THREAD_PUBLICATION_STATS_MAP;
         use crate::PUBLICATION_COUNT;
         use crate::PUBLICATION_SIZE;
+        use crate::PUBLIC_KLASS_MAP;
         use std::sync::atomic::Ordering::Release;
 
         ALLOCATION_COUNT.store(0, Release);
         ALLOCATION_SIZE.store(0, Release);
         PUBLICATION_COUNT.store(0, Release);
         PUBLICATION_SIZE.store(0, Release);
+        PUBLIC_KLASS_MAP.lock().unwrap().clear();
+
+        let mut stats = PER_THREAD_PUBLICATION_STATS_MAP.lock().unwrap();
+        for s in stats.values_mut() {
+            s.allocation_count = 0;
+            s.allocation_size = 0;
+            s.publication_count = 0;
+            s.publication_size = 0;
+        }
     }
 }
 
@@ -751,6 +762,58 @@ pub fn harness_begin<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
 /// * `mmtk`: A reference to an MMTk instance.
 pub fn harness_end<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
     mmtk.harness_end();
+    #[cfg(feature = "publish_rate_analysis")]
+    {
+        use crate::MUTATOR_NAME_MAP;
+        use crate::PER_THREAD_PUBLICATION_STATS_MAP;
+        // use crate::PUBLIC_KLASS_MAP;
+        // use std::io::Write;
+
+        // let mut file = std::fs::OpenOptions::new()
+        //     .create(true)
+        //     .write(true)
+        //     .open("/home/tianleq/misc/tmp/public-klass.csv")
+        //     .unwrap();
+        // let tmp = PUBLIC_KLASS_MAP.lock().unwrap();
+        // let map: std::collections::BTreeMap<&usize, &String> =
+        //     tmp.iter().map(|(k, v)| (v, k)).collect();
+        // for (&count, &name) in &map {
+        //     let content = format!("{name},{count}\n");
+        //     file.write(content.as_bytes()).unwrap();
+        // }
+        // file.write("\n".as_bytes()).unwrap();
+        // file.flush().unwrap();
+        println!(
+            "============================ MMTk Publication Stats ============================"
+        );
+        let mut name_map = MUTATOR_NAME_MAP.lock().unwrap();
+
+        for (mutator_id, stats) in PER_THREAD_PUBLICATION_STATS_MAP.lock().unwrap().iter() {
+            let byte_ratio = stats.request_scope_publication_size as f64
+                / stats.request_scope_allocation_size as f64;
+            let object_ratio = stats.request_scope_publication_count as f64
+                / stats.request_scope_allocation_count as f64;
+            let publication_size = stats.request_scope_publication_size;
+            let allocation_size = stats.request_scope_allocation_size;
+            let name = if name_map.get(&mutator_id).is_some() {
+                name_map.get(&mutator_id).unwrap()
+            } else {
+                "unknown"
+            };
+            let content = format!(
+                "{name},{mutator_id},{byte_ratio},{object_ratio}|{publication_size}, {allocation_size}"
+            );
+            // file.write(content.as_bytes()).unwrap();
+            // file.flush().unwrap();
+            println!("{}", content);
+        }
+        PER_THREAD_PUBLICATION_STATS_MAP.lock().unwrap().clear();
+        name_map.clear();
+        // MUTATOR_NAME_MAP.lock().unwrap().clear();
+        println!(
+            "-------------------------- End MMTk Publication Stats --------------------------"
+        );
+    }
 }
 
 /// Register a finalizable object. MMTk will retain the liveness of
@@ -914,13 +977,19 @@ pub fn add_work_packets<VM: VMBinding>(
 }
 
 #[cfg(feature = "public_bit")]
-pub fn mmtk_set_public_bit<VM: VMBinding>(_mmtk: &'static MMTK<VM>, object: ObjectReference) {
+pub fn mmtk_set_public_bit<VM: VMBinding>(
+    #[cfg(feature = "publish_rate_analysis")] tls: VMMutatorThread,
+    _mmtk: &'static MMTK<VM>,
+    object: ObjectReference,
+) {
     crate::util::metadata::public_bit::set_public_bit::<VM>(object);
     #[cfg(feature = "thread_local_gc")]
     _mmtk.get_plan().publish_object(object);
     #[cfg(feature = "publish_rate_analysis")]
     {
+        use crate::vm::ActivePlan;
         use crate::vm::ObjectModel;
+        use crate::PER_THREAD_PUBLICATION_STATS_MAP;
         use crate::PUBLICATION_COUNT;
         use crate::PUBLICATION_SIZE;
         use crate::REQUEST_SCOPE_BARRIER_SLOW_PATH_COUNT;
@@ -928,17 +997,29 @@ pub fn mmtk_set_public_bit<VM: VMBinding>(_mmtk: &'static MMTK<VM>, object: Obje
         use crate::REQUEST_SCOPE_PUBLICATION_SIZE;
 
         let object_size = VM::VMObjectModel::get_current_size(object);
+        let mutator_id = if VM::VMActivePlan::is_mutator(tls.0) {
+            VM::VMActivePlan::mutator(tls).mutator_id
+        } else {
+            0
+        };
 
         PUBLICATION_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         PUBLICATION_SIZE.fetch_add(object_size, std::sync::atomic::Ordering::SeqCst);
         REQUEST_SCOPE_PUBLICATION_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         REQUEST_SCOPE_PUBLICATION_SIZE.fetch_add(object_size, std::sync::atomic::Ordering::SeqCst);
         REQUEST_SCOPE_BARRIER_SLOW_PATH_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let mut stats = PER_THREAD_PUBLICATION_STATS_MAP.lock().unwrap();
+        let s = stats.get_mut(&mutator_id).unwrap();
+        s.publication_count += 1;
+        s.publication_size += object_size;
+        s.request_scope_publication_count += 1;
+        s.request_scope_publication_size += object_size;
     }
 }
 
 #[cfg(feature = "public_bit")]
 pub fn mmtk_publish_object<VM: VMBinding>(
+    #[cfg(feature = "publish_rate_analysis")] tls: VMMutatorThread,
     _mmtk: &'static MMTK<VM>,
     _object: Option<ObjectReference>,
 ) {
@@ -968,7 +1049,11 @@ pub fn mmtk_publish_object<VM: VMBinding>(
         //     object,
         //     &mut closure,
         // );
-        closure.do_closure(object);
+        closure.do_closure(
+            object,
+            #[cfg(feature = "publish_rate_analysis")]
+            tls,
+        );
     }
 }
 
@@ -981,6 +1066,34 @@ pub fn mmtk_is_object_published<VM: VMBinding>(_object: Option<ObjectReference>)
     }
 }
 
+#[cfg(feature = "publish_rate_analysis")]
+pub fn mmtk_register_mutator_name<VM: VMBinding>(tls: VMMutatorThread) {
+    use crate::{vm::ActivePlan, MUTATOR_NAME_MAP};
+
+    let name = VM::VMActivePlan::get_mutator_name(tls);
+    let mutator = VM::VMActivePlan::mutator(tls);
+    MUTATOR_NAME_MAP
+        .lock()
+        .unwrap()
+        .insert(mutator.mutator_id, name);
+}
+
+#[cfg(feature = "publish_rate_analysis")]
+pub fn mmtk_mutator_exit<VM: VMBinding>(tls: VMMutatorThread, _mmtk: &'static MMTK<VM>) {
+    use crate::{vm::ActivePlan, MUTATOR_NAME_MAP, PER_THREAD_PUBLICATION_STATS_MAP};
+    if _mmtk
+        .inside_harness
+        .load(std::sync::atomic::Ordering::Acquire)
+        == false
+    {
+        let mutator = VM::VMActivePlan::mutator(tls);
+        MUTATOR_NAME_MAP.lock().unwrap().remove(&mutator.mutator_id);
+        PER_THREAD_PUBLICATION_STATS_MAP
+            .lock()
+            .unwrap()
+            .remove(&mutator.mutator_id);
+    }
+}
 /// Generic hook to allow benchmarks to be harnessed. We do a full heap
 /// GC, and then start recording statistics for MMTk.
 ///
@@ -990,6 +1103,7 @@ pub fn mmtk_is_object_published<VM: VMBinding>(_object: Option<ObjectReference>)
 pub fn request_starting<VM: VMBinding>(_mmtk: &'static MMTK<VM>) {
     #[cfg(feature = "publish_rate_analysis")]
     {
+        use crate::PER_THREAD_PUBLICATION_STATS_MAP;
         use crate::REQUEST_SCOPE_ALLOCATION_COUNT;
         use crate::REQUEST_SCOPE_ALLOCATION_SIZE;
         use crate::REQUEST_SCOPE_BARRIER_SLOW_PATH_COUNT;
@@ -1002,6 +1116,14 @@ pub fn request_starting<VM: VMBinding>(_mmtk: &'static MMTK<VM>) {
         REQUEST_SCOPE_PUBLICATION_COUNT.store(0, Release);
         REQUEST_SCOPE_PUBLICATION_SIZE.store(0, Release);
         REQUEST_SCOPE_BARRIER_SLOW_PATH_COUNT.store(0, Release);
+
+        let mut stats = PER_THREAD_PUBLICATION_STATS_MAP.lock().unwrap();
+        for s in stats.values_mut() {
+            s.request_scope_allocation_count = 0;
+            s.request_scope_allocation_size = 0;
+            s.request_scope_publication_count = 0;
+            s.request_scope_publication_size = 0;
+        }
     }
     _mmtk.request_starting();
 }

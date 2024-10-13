@@ -48,5 +48,8 @@ pub fn create_genimmix_mutator<VM: VMBinding>(
         mutator_tls,
         config,
         plan: genimmix,
+        #[cfg(feature = "publish_rate_analysis")]
+        mutator_id: crate::plan::MUTATOR_ID_GENERATOR
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
     }
 }

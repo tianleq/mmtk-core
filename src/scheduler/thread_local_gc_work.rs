@@ -548,7 +548,8 @@ where
             let reff: ObjectReference = f.get_reference();
 
             if crate::util::metadata::public_bit::is_public::<VM>(reff) {
-                // public object is untouched, so nothing needs to be done
+                // public object is untouched, so nothing needs to be done other than adding it back
+                // mutator.finalizable_candidates.push(f);
                 continue;
             }
             if reff.is_live::<VM>() {

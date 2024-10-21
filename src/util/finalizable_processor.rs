@@ -173,6 +173,7 @@ pub struct Finalization<E: ProcessEdgesWork>(PhantomData<E>);
 
 impl<E: ProcessEdgesWork> GCWork<E::VM> for Finalization<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
+        #[cfg(feature = "thread_local_gc")]
         use crate::vm::ActivePlan;
 
         if !*mmtk.options.no_reference_types {
@@ -211,6 +212,12 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for Finalization<E> {
                 .iter()
                 .map(|f| *f)
                 .filter(|f| !f.get_reference().is_live::<E::VM>());
+            // .map(|f| {
+            //     // publish private ready for finalize objects as they will be pushed to the global list
+            //     memory_manager::mmtk_publish_object(mmtk, Some(f.get_reference()));
+            //     f
+            // });
+
             finalizable_processor.add_ready_for_finalize_objects(local_reday_for_finalization);
             // get rid of dead objects from local finalizable list
             mutator
@@ -218,6 +225,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for Finalization<E> {
                 .retain(|f| f.get_reference().is_live::<E::VM>());
 
             // make sure local finalizable objects are up-to-date
+            // This is necessary since defrag mutator might evacuate private objects
             finalizable_processor.scan_thread_local(&mut w, &mut mutator.finalizable_candidates);
         }
         finalizable_processor.scan(worker.tls, &mut w, is_nursery_gc(mmtk.get_plan()));

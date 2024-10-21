@@ -384,7 +384,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 debug_assert!(block.is_block_dirty());
             }
             if self.local_reusable_blocks.len() > 16 {
-                println!(
+                info!(
                     "after gc | mutator: {:?} local reusable blocks: {}",
                     self.mutator_id,
                     self.local_reusable_blocks.len()

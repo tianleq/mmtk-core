@@ -30,6 +30,7 @@ use crate::vm::ActivePlan;
 use crate::vm::ReferenceGlue;
 use crate::vm::Scanning;
 use crate::vm::VMBinding;
+#[cfg(feature = "thread_local_gc")]
 use std::sync::atomic::Ordering;
 
 /// Initialize an MMTk instance. A VM should call this method after creating an [`crate::MMTK`]

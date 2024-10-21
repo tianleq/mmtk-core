@@ -1294,7 +1294,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 ThreadlocalTracedObjectType::Scanned(new_object)
             } else if self.is_marked(object) {
                 debug_assert!(self.defrag.space_exhausted(), "Forwarded object is the same as original object {} even though it should have been copied", object);
-                debug_assert!(block.is_block_dirty(), "block: {:?} should be dirty", block);
+                debug_assert!(
+                    !is_private_object || block.is_block_dirty(),
+                    "block: {:?} should be dirty",
+                    block
+                );
 
                 object_forwarding::clear_forwarding_bits::<VM>(object);
                 ThreadlocalTracedObjectType::Scanned(object)
@@ -1306,7 +1310,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     object_forwarding::clear_forwarding_bits::<VM>(object);
                     block.set_state(BlockState::Marked);
                     // conservatively set the ditry bit
-                    block.taint();
+                    if is_private_object {
+                        block.taint();
+                    }
                     #[cfg(feature = "vo_bit")]
                     vo_bit::helper::on_object_marked::<VM>(object);
                     object

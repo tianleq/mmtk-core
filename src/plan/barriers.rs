@@ -63,7 +63,7 @@ pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
         target: ObjectReference,
     ) {
         self.object_reference_write_pre(src, slot, Some(target));
-        slot.store(target);
+        slot.store(Some(target));
         self.object_reference_write_post(src, slot, Some(target));
     }
 

@@ -6,7 +6,7 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 use std::{fmt::Debug, ops::Range};
 
-use atomic::Atomic;
+use atomic::{Atomic, Ordering};
 
 use crate::util::constants::{BYTES_IN_ADDRESS, LOG_BYTES_IN_ADDRESS};
 use crate::util::{Address, ObjectReference};
@@ -75,7 +75,7 @@ pub trait Slot: Copy + Send + Debug + PartialEq + Eq + Hash {
     /// operations have different semantics, and need to be implemented differently if the VM
     /// supports offsetted or tagged references.
     /// See: <https://github.com/mmtk/mmtk-core/issues/1038>
-    fn store(&self, object: ObjectReference);
+    fn store(&self, object: Option<ObjectReference>);
 
     /// Prefetch the slot so that a subsequent `load` will be faster.
     fn prefetch_load(&self) {
@@ -85,6 +85,28 @@ pub trait Slot: Copy + Send + Debug + PartialEq + Eq + Hash {
     /// Prefetch the slot so that a subsequent `store` will be faster.
     fn prefetch_store(&self) {
         // no-op by default
+    }
+
+    fn compare_exchange(
+        &self,
+        _old_object: Option<ObjectReference>,
+        _new_object: Option<ObjectReference>,
+        _success: Ordering,
+        _failure: Ordering,
+    ) -> Result<Option<ObjectReference>, Option<ObjectReference>> {
+        unimplemented!()
+    }
+
+    fn to_address(&self) -> Address {
+        unimplemented!()
+    }
+
+    fn raw_address(&self) -> Address {
+        unimplemented!()
+    }
+
+    fn from_address(_: Address) -> Self {
+        unimplemented!()
     }
 }
 
@@ -125,8 +147,17 @@ impl Slot for SimpleSlot {
         ObjectReference::from_raw_address(addr)
     }
 
-    fn store(&self, object: ObjectReference) {
-        unsafe { (*self.slot_addr).store(object.to_raw_address(), atomic::Ordering::Relaxed) }
+    fn store(&self, object: Option<ObjectReference>) {
+        unsafe {
+            (*self.slot_addr).store(
+                if let Some(o) = object {
+                    o.to_raw_address()
+                } else {
+                    Address::ZERO
+                },
+                atomic::Ordering::Relaxed,
+            )
+        }
     }
 }
 
@@ -146,7 +177,7 @@ impl Slot for Address {
         ObjectReference::from_raw_address(addr)
     }
 
-    fn store(&self, object: ObjectReference) {
+    fn store(&self, object: Option<ObjectReference>) {
         unsafe { Address::store(*self, object) }
     }
 }

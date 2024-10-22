@@ -13,6 +13,10 @@ pub trait SlotVisitor<SL: Slot> {
     #[cfg(feature = "debug_publish_object")]
     /// Call this function for each edge.
     fn visit_edge(&mut self, object: ObjectReference, slot: SL);
+
+    fn should_discover_references(&self) -> bool {
+        true
+    }
 }
 
 /// This lets us use closures as SlotVisitor.

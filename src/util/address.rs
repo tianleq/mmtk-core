@@ -522,6 +522,8 @@ impl ObjectReference {
     /// you will see an assertion failure in the debug build when constructing an object reference instance.
     pub const ALIGNMENT: usize = crate::util::constants::BYTES_IN_ADDRESS;
 
+    pub const NULL: Option<Self> = None;
+
     /// Cast the object reference to its raw address. This method is mostly for the convinience of a binding.
     ///
     /// MMTk should not make any assumption on the actual location of the address with the object reference.

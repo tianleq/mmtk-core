@@ -376,7 +376,7 @@ where
                 }
             }
             if P::thread_local_may_move_objects::<KIND>() {
-                slot.store(new_object);
+                slot.store(Some(new_object));
             }
         }
     }
@@ -495,6 +495,10 @@ impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIN
             self.source_buffer.push_back(object);
             self.edge_buffer.push_back(slot);
         }
+    }
+    // local gc should treat all weak references as strong references
+    fn should_discover_references(&self) -> bool {
+        false
     }
 }
 

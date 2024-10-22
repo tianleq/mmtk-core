@@ -20,17 +20,21 @@ pub type ThreadId = usize;
 thread_local! {
     /// Current worker's ordinal
     static WORKER_ORDINAL: Atomic<ThreadId> = const { Atomic::new(ThreadId::MAX) };
+    static _WORKER: Atomic<usize> = Atomic::new(0);
+}
+
+lazy_static! {
+    static ref _WORKERS: Mutex<Vec<OpaquePointer>> = Mutex::new(Vec::new());
 }
 
 /// Get current worker ordinal. Return `None` if the current thread is not a worker.
-pub fn current_worker_ordinal() -> ThreadId {
+pub fn current_worker_ordinal() -> Option<ThreadId> {
     let ordinal = WORKER_ORDINAL.with(|x| x.load(Ordering::Relaxed));
-    debug_assert_ne!(
-        ordinal,
-        ThreadId::MAX,
-        "Thread-local variable WORKER_ORDINAL not set yet."
-    );
-    ordinal
+    if ordinal == ThreadId::MAX {
+        None
+    } else {
+        Some(ordinal)
+    }
 }
 
 /// The struct has one instance per worker, but is shared between workers via the scheduler

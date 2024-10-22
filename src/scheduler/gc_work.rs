@@ -777,7 +777,7 @@ pub trait ProcessEdgesWork:
         //         .class_pointer::<Self::VM>()
         // );
         if Self::OVERWRITE_REFERENCE && new_object != object {
-            slot.store(new_object);
+            slot.store(Some(new_object));
         }
     }
 
@@ -867,7 +867,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for E {
         self.process_slots();
         debug!(
             "ProcessEdgesWork executed by GC Thread {}",
-            crate::scheduler::worker::current_worker_ordinal()
+            crate::scheduler::worker::current_worker_ordinal().unwrap()
         );
         if !self.nodes.is_empty() {
             self.flush();
@@ -1242,7 +1242,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
         };
         let new_object = self.trace_object(object);
         if P::may_move_objects::<KIND>() && new_object != object {
-            slot.store(new_object);
+            slot.store(Some(new_object));
         }
     }
 

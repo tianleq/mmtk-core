@@ -397,6 +397,16 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
 
     #[cfg(feature = "debug_thread_local_gc_copying")]
     fn collect_local_gc_stats(&self, _tls: VMMutatorThread) {}
+
+    fn should_process_reference(
+        &self,
+        _reference: ObjectReference,
+        _referent: ObjectReference,
+    ) -> bool {
+        true
+    }
+
+    fn discover_reference(&self, _reference: ObjectReference, _referent: ObjectReference) {}
 }
 
 impl_downcast!(Plan assoc VM);

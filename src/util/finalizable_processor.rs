@@ -211,12 +211,12 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for Finalization<E> {
                 .finalizable_candidates
                 .iter()
                 .map(|f| *f)
-                .filter(|f| !f.get_reference().is_live::<E::VM>());
-            // .map(|f| {
-            //     // publish private ready for finalize objects as they will be pushed to the global list
-            //     memory_manager::mmtk_publish_object(mmtk, Some(f.get_reference()));
-            //     f
-            // });
+                .filter(|f| !f.get_reference().is_live::<E::VM>())
+                .map(|f| {
+                    // publish private ready for finalize objects as they will be pushed to the global list
+                    crate::memory_manager::mmtk_publish_object(mmtk, Some(f.get_reference()));
+                    f
+                });
 
             finalizable_processor.add_ready_for_finalize_objects(local_reday_for_finalization);
             // get rid of dead objects from local finalizable list

@@ -408,23 +408,25 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for VMProcessWeakRefs<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
         trace!("VMProcessWeakRefs");
 
-        let stage = WorkBucketStage::VMRefClosure;
+        // let stage = WorkBucketStage::VMRefClosure;
 
-        let need_to_repeat = {
-            let tracer_factory = ProcessEdgesWorkTracerContext::<E> {
-                stage,
-                phantom_data: PhantomData,
-            };
-            <E::VM as VMBinding>::VMScanning::process_weak_refs(worker, tracer_factory)
-        };
+        // let need_to_repeat = {
+        //     let tracer_factory = ProcessEdgesWorkTracerContext::<E> {
+        //         stage,
+        //         phantom_data: PhantomData,
+        //     };
+        //     <E::VM as VMBinding>::VMScanning::process_weak_refs(worker, tracer_factory)
+        // };
 
-        if need_to_repeat {
-            // Schedule Self as the new sentinel so we'll call `process_weak_refs` again after the
-            // current transitive closure.
-            let new_self = Box::new(Self::new());
+        // if need_to_repeat {
+        //     // Schedule Self as the new sentinel so we'll call `process_weak_refs` again after the
+        //     // current transitive closure.
+        //     let new_self = Box::new(Self::new());
 
-            worker.scheduler().work_buckets[stage].set_sentinel(new_self);
-        }
+        //     worker.scheduler().work_buckets[stage].set_sentinel(new_self);
+        // }
+        <<E::VM as VMBinding>::VMCollection as Collection<E::VM>>::process_weak_refs::<E>(worker);
+        // TODO: Pass a factory/callback to decide what work packet to create.
     }
 }
 

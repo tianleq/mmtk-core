@@ -496,7 +496,7 @@ impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIN
             self.edge_buffer.push_back(slot);
         }
     }
-    // local gc should treat all weak references as strong references
+    // local gc will treat all weak references as strong references
     fn should_discover_references(&self) -> bool {
         false
     }

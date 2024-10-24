@@ -114,7 +114,7 @@ impl<VM: VMBinding> Plan for MarkCompact<VM> {
             scheduler.work_buckets[WorkBucketStage::WeakRefClosure]
                 .add(WeakRefProcessing::<VM>::new());
             scheduler.work_buckets[WorkBucketStage::PhantomRefClosure]
-                .add(PhantomRefProcessing::<VM>::new());
+                .add(PhantomRefProcessing::<MarkingProcessEdges<VM>>::new());
 
             use crate::util::reference_processor::RefForwarding;
             scheduler.work_buckets[WorkBucketStage::RefForwarding]

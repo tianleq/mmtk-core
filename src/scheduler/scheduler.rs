@@ -11,6 +11,7 @@ use crate::global_state::GcStatus;
 use crate::mmtk::MMTK;
 use crate::util::opaque_pointer::*;
 use crate::util::options::AffinityKind;
+use crate::util::reference_processor::PhantomRefProcessing;
 use crate::util::rust_util::array_from_fn;
 use crate::vm::Collection;
 use crate::vm::VMBinding;
@@ -167,23 +168,27 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
 
         // Reference processing
         if !*plan.base().options.no_reference_types {
-            use crate::util::reference_processor::{
-                PhantomRefProcessing, SoftRefProcessing, WeakRefProcessing,
-            };
-            self.work_buckets[WorkBucketStage::SoftRefClosure]
-                .add(SoftRefProcessing::<C::DefaultProcessEdges>::new());
-            self.work_buckets[WorkBucketStage::WeakRefClosure].add(WeakRefProcessing::<VM>::new());
+            // use crate::util::reference_processor::{
+            //     PhantomRefProcessing, SoftRefProcessing, WeakRefProcessing,
+            // };
+            // self.work_buckets[WorkBucketStage::SoftRefClosure]
+            //     .add(SoftRefProcessing::<C::DefaultProcessEdges>::new());
+            // self.work_buckets[WorkBucketStage::WeakRefClosure].add(WeakRefProcessing::<VM>::new());
+
+            // VM-specific weak ref processing
+            self.work_buckets[WorkBucketStage::WeakRefClosure]
+                .add(VMProcessWeakRefs::<C::DefaultProcessEdges>::new());
             self.work_buckets[WorkBucketStage::PhantomRefClosure]
-                .add(PhantomRefProcessing::<VM>::new());
+                .add(PhantomRefProcessing::<C::DefaultProcessEdges>::new());
 
-            use crate::util::reference_processor::RefForwarding;
-            if plan.constraints().needs_forward_after_liveness {
-                self.work_buckets[WorkBucketStage::RefForwarding]
-                    .add(RefForwarding::<C::DefaultProcessEdges>::new());
-            }
+            // use crate::util::reference_processor::RefForwarding;
+            // if plan.constraints().needs_forward_after_liveness {
+            //     self.work_buckets[WorkBucketStage::RefForwarding]
+            //         .add(RefForwarding::<C::DefaultProcessEdges>::new());
+            // }
 
-            use crate::util::reference_processor::RefEnqueue;
-            self.work_buckets[WorkBucketStage::Release].add(RefEnqueue::<VM>::new());
+            // use crate::util::reference_processor::RefEnqueue;
+            // self.work_buckets[WorkBucketStage::Release].add(RefEnqueue::<VM>::new());
         }
 
         // Finalization

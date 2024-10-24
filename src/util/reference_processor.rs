@@ -9,6 +9,7 @@ use crate::scheduler::ProcessEdgesWork;
 use crate::scheduler::WorkBucketStage;
 use crate::util::ObjectReference;
 use crate::util::VMWorkerThread;
+use crate::vm::Collection;
 use crate::vm::ReferenceGlue;
 use crate::vm::VMBinding;
 
@@ -511,27 +512,28 @@ impl<VM: VMBinding> GCWork<VM> for RescanReferences<VM> {
 #[derive(Default)]
 pub(crate) struct SoftRefProcessing<E: ProcessEdgesWork>(PhantomData<E>);
 impl<E: ProcessEdgesWork> GCWork<E::VM> for SoftRefProcessing<E> {
-    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
-        if !mmtk.state.is_emergency_collection() {
-            // Postpone the scanning to the end of the transitive closure from strongly reachable
-            // soft references.
-            let rescan = Box::new(RescanReferences {
-                soft: true,
-                weak: false,
-                phantom_data: PhantomData,
-            });
-            worker.scheduler().work_buckets[WorkBucketStage::SoftRefClosure].set_sentinel(rescan);
+    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
+        // if !mmtk.state.is_emergency_collection() {
+        //     // Postpone the scanning to the end of the transitive closure from strongly reachable
+        //     // soft references.
+        //     let rescan = Box::new(RescanReferences {
+        //         soft: true,
+        //         weak: false,
+        //         phantom_data: PhantomData,
+        //     });
+        //     worker.scheduler().work_buckets[WorkBucketStage::SoftRefClosure].set_sentinel(rescan);
 
-            // Retain soft references.  This will expand the transitive closure.  We create an
-            // instance of `E` for this.
-            let mut w = E::new(vec![], false, mmtk, WorkBucketStage::SoftRefClosure);
-            w.set_worker(worker);
-            mmtk.reference_processors.retain_soft_refs(&mut w, mmtk);
-            w.flush();
-        } else {
-            // Scan soft references immediately without retaining.
-            mmtk.reference_processors.scan_soft_refs(mmtk);
-        }
+        //     // Retain soft references.  This will expand the transitive closure.  We create an
+        //     // instance of `E` for this.
+        //     let mut w = E::new(vec![], false, mmtk, WorkBucketStage::SoftRefClosure);
+        //     w.set_worker(worker);
+        //     mmtk.reference_processors.retain_soft_refs(&mut w, mmtk);
+        //     w.flush();
+        // } else {
+        //     // Scan soft references immediately without retaining.
+        //     mmtk.reference_processors.scan_soft_refs(mmtk);
+        // }
+        <E::VM as VMBinding>::VMCollection::process_soft_refs::<E>(worker);
     }
 }
 impl<E: ProcessEdgesWork> SoftRefProcessing<E> {
@@ -554,13 +556,14 @@ impl<VM: VMBinding> WeakRefProcessing<VM> {
 }
 
 #[derive(Default)]
-pub(crate) struct PhantomRefProcessing<VM: VMBinding>(PhantomData<VM>);
-impl<VM: VMBinding> GCWork<VM> for PhantomRefProcessing<VM> {
-    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        mmtk.reference_processors.scan_phantom_refs(mmtk);
+pub(crate) struct PhantomRefProcessing<E: ProcessEdgesWork>(PhantomData<E>);
+impl<E: ProcessEdgesWork> GCWork<E::VM> for PhantomRefProcessing<E> {
+    fn do_work(&mut self, _worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
+        // mmtk.reference_processors.scan_phantom_refs(mmtk);
+        <E::VM as VMBinding>::VMCollection::process_phantom_refs::<E>(_worker);
     }
 }
-impl<VM: VMBinding> PhantomRefProcessing<VM> {
+impl<E: ProcessEdgesWork> PhantomRefProcessing<E> {
     pub fn new() -> Self {
         Self(PhantomData)
     }

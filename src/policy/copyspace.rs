@@ -6,10 +6,11 @@ use crate::policy::sft::SFT;
 use crate::policy::space::{CommonSpace, Space};
 use crate::scheduler::GCWorker;
 use crate::util::alloc::allocator::AllocatorContext;
-use crate::util::copy::*;
 use crate::util::heap::{MonotonePageResource, PageResource};
 use crate::util::metadata::{extract_side_metadata, MetadataSpec};
+use crate::util::object_enum::ObjectEnumerator;
 use crate::util::object_forwarding;
+use crate::util::{copy::*, object_enum};
 use crate::util::{Address, ObjectReference};
 use crate::vm::*;
 use libc::{mprotect, PROT_EXEC, PROT_NONE, PROT_READ, PROT_WRITE};
@@ -74,8 +75,20 @@ impl<VM: VMBinding> SFT for CopySpace<VM> {
     }
 
     #[cfg(feature = "is_mmtk_object")]
-    fn is_mmtk_object(&self, addr: Address) -> bool {
-        crate::util::metadata::vo_bit::is_vo_bit_set_for_addr::<VM>(addr).is_some()
+    fn is_mmtk_object(&self, addr: Address) -> Option<ObjectReference> {
+        crate::util::metadata::vo_bit::is_vo_bit_set_for_addr::<VM>(addr)
+    }
+
+    #[cfg(feature = "is_mmtk_object")]
+    fn find_object_from_internal_pointer(
+        &self,
+        ptr: Address,
+        max_search_bytes: usize,
+    ) -> Option<ObjectReference> {
+        crate::util::metadata::vo_bit::find_object_from_internal_pointer::<VM>(
+            ptr,
+            max_search_bytes,
+        )
     }
 
     fn sft_trace_object(
@@ -102,6 +115,10 @@ impl<VM: VMBinding> Space<VM> for CopySpace<VM> {
         &self.pr
     }
 
+    fn maybe_get_page_resource_mut(&mut self) -> Option<&mut dyn PageResource<VM>> {
+        Some(&mut self.pr)
+    }
+
     fn common(&self) -> &CommonSpace<VM> {
         &self.common
     }
@@ -116,6 +133,10 @@ impl<VM: VMBinding> Space<VM> for CopySpace<VM> {
 
     fn set_copy_for_sft_trace(&mut self, semantics: Option<CopySemantics>) {
         self.common.copy = semantics;
+    }
+
+    fn enumerate_objects(&self, enumerator: &mut dyn ObjectEnumerator) {
+        object_enum::enumerate_blocks_from_monotonic_page_resource(enumerator, &self.pr);
     }
 }
 
@@ -164,32 +185,28 @@ impl<VM: VMBinding> CopySpace<VM> {
 
     pub fn prepare(&self, from_space: bool) {
         self.from_space.store(from_space, Ordering::SeqCst);
-        // Clear the metadata if we are using side forwarding status table. Otherwise
-        // objects may inherit forwarding status from the previous GC.
-        // TODO: Fix performance.
-        if let MetadataSpec::OnSide(side_forwarding_status_table) =
-            *<VM::VMObjectModel as ObjectModel<VM>>::LOCAL_FORWARDING_BITS_SPEC
-        {
-            side_forwarding_status_table
-                .bzero_metadata(self.common.start, self.pr.cursor() - self.common.start);
-        }
     }
 
     pub fn release(&self) {
-        unsafe {
+        for (start, size) in self.pr.iterate_allocated_regions() {
+            // Clear the forwarding bits if it is on the side.
+            if let MetadataSpec::OnSide(side_forwarding_status_table) =
+                *<VM::VMObjectModel as ObjectModel<VM>>::LOCAL_FORWARDING_BITS_SPEC
+            {
+                side_forwarding_status_table.bzero_metadata(start, size);
+            }
+
+            // Clear VO bits because all objects in the space are dead.
             #[cfg(feature = "vo_bit")]
-            self.reset_vo_bit();
+            crate::util::metadata::vo_bit::bzero_vo_bit(start, size);
+            #[cfg(feature = "public_bit")]
+            crate::util::metadata::public_bit::bzero_public_bit(start, size);
+        }
+
+        unsafe {
             self.pr.reset();
         }
-        self.common.metadata.reset();
         self.from_space.store(false, Ordering::SeqCst);
-    }
-
-    #[cfg(feature = "vo_bit")]
-    unsafe fn reset_vo_bit(&self) {
-        for (start, size) in self.pr.iterate_allocated_regions() {
-            crate::util::metadata::vo_bit::bzero_vo_bit(start, size);
-        }
     }
 
     fn is_from_space(&self) -> bool {
@@ -204,7 +221,6 @@ impl<VM: VMBinding> CopySpace<VM> {
         worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
         trace!("copyspace.trace_object(, {:?}, {:?})", object, semantics,);
-        debug_assert!(!object.is_null());
 
         // If this is not from space, we do not need to trace it (the object has been copied to the tosapce)
         if !self.is_from_space() {
@@ -242,6 +258,10 @@ impl<VM: VMBinding> CopySpace<VM> {
 
             #[cfg(feature = "vo_bit")]
             crate::util::metadata::vo_bit::set_vo_bit::<VM>(new_object);
+            #[cfg(feature = "public_bit")]
+            if crate::util::metadata::public_bit::is_public::<VM>(object) {
+                crate::util::metadata::public_bit::set_public_bit::<VM>(new_object);
+            }
 
             trace!("Forwarding pointer");
             queue.enqueue(new_object);

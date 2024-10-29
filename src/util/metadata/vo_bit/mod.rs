@@ -30,14 +30,14 @@
 //! When the VO bits are available during tracing, if a plan uses evacuation to reclaim space, then
 //! both the from-space copy and the to-space copy of an object will have the VO-bit set.
 //!
-//! *(Note: There are several reasons behind this semantics.  One reason is that an edge may be
-//! visited multiple times during GC.  If an edge is visited twice, we will see it pointing to the
-//! from-space copy during the first visit, but pointing to the to-space copy during the second
-//! visit.  We consider the edge valid if it points to either the from-space or the to-space copy.
-//! If each edge is visited only once, and we see an edge happen to hold a pointer into the
-//! to-space during its only visit, that must a dangling pointer, and error should be reported.
-//! However, it is hard to guarantee each edge is only visited once during tracing because both the
-//! VM and the GC algorithm may break this guarantee.  See:
+//! *(Note: There are several reasons behind this semantics.  One reason is that a slot may be
+//! visited multiple times during GC.  If a slot is visited twice, we will see the object reference
+//! in the slot pointing to the from-space copy during the first visit, but pointing to the to-space
+//! copy during the second visit.  We consider an object reference valid if it points to either the
+//! from-space or the to-space copy.  If each slot is visited only once, and we see a slot happen to
+//! hold a pointer into the to-space during its only visit, that must be a dangling pointer, and
+//! error should be reported.  However, it is hard to guarantee each slot is only visited once
+//! during tracing because both the VM and the GC algorithm may break this guarantee.  See:
 //! [`crate::plan::PlanConstraints::may_trace_duplicate_edges`])*
 
 // FIXME: The entire vo_bit module should only be available if the "vo_bit" feature is enabled.
@@ -100,19 +100,11 @@ pub fn is_vo_bit_set<VM: VMBinding>(object: ObjectReference) -> bool {
 /// Check if an address can be turned directly into an object reference using the VO bit.
 /// If so, return `Some(object)`. Otherwise return `None`.
 pub fn is_vo_bit_set_for_addr<VM: VMBinding>(address: Address) -> Option<ObjectReference> {
-    let potential_object = ObjectReference::from_raw_address(address);
-    let addr = potential_object.to_address::<VM>();
-
-    // If we haven't mapped VO bit for the address, it cannot be an object
-    if !VO_BIT_SIDE_METADATA_SPEC.is_mapped(addr) {
+    // if the address is not aligned, it cannot be an object reference.
+    if !address.is_aligned_to(ObjectReference::ALIGNMENT) {
         return None;
     }
-
-    if VO_BIT_SIDE_METADATA_SPEC.load_atomic::<u8>(addr, Ordering::SeqCst) == 1 {
-        Some(potential_object)
-    } else {
-        None
-    }
+    is_vo_bit_set_inner::<true, VM>(address)
 }
 
 /// Check if an address can be turned directly into an object reference using the VO bit.
@@ -123,16 +115,28 @@ pub fn is_vo_bit_set_for_addr<VM: VMBinding>(address: Address) -> Option<ObjectR
 ///
 /// This is unsafe: check the comment on `side_metadata::load`
 pub unsafe fn is_vo_bit_set_unsafe<VM: VMBinding>(address: Address) -> Option<ObjectReference> {
-    let potential_object = ObjectReference::from_raw_address(address);
-    let addr = potential_object.to_address::<VM>();
+    is_vo_bit_set_inner::<false, VM>(address)
+}
+
+fn is_vo_bit_set_inner<const ATOMIC: bool, VM: VMBinding>(
+    address: Address,
+) -> Option<ObjectReference> {
+    let addr = get_in_object_address_for_potential_object::<VM>(address);
 
     // If we haven't mapped VO bit for the address, it cannot be an object
     if !VO_BIT_SIDE_METADATA_SPEC.is_mapped(addr) {
         return None;
     }
 
-    if VO_BIT_SIDE_METADATA_SPEC.load::<u8>(addr) == 1 {
-        Some(potential_object)
+    let vo_bit = if ATOMIC {
+        VO_BIT_SIDE_METADATA_SPEC.load_atomic::<u8>(addr, Ordering::SeqCst)
+    } else {
+        unsafe { VO_BIT_SIDE_METADATA_SPEC.load::<u8>(addr) }
+    };
+
+    if vo_bit == 1 {
+        let obj = get_object_ref_for_vo_addr::<VM>(addr);
+        Some(obj)
     } else {
         None
     }
@@ -157,4 +161,79 @@ pub fn bcopy_vo_bit_from_mark_bit<VM: VMBinding>(start: Address, size: usize) {
     );
     let side_mark_bit_spec = mark_bit_spec.extract_side_spec();
     VO_BIT_SIDE_METADATA_SPEC.bcopy_metadata_contiguous(start, size, side_mark_bit_spec);
+}
+
+use crate::util::constants::{LOG_BITS_IN_BYTE, LOG_BYTES_IN_ADDRESS};
+
+/// How many data memory bytes does 1 word in the VO bit side metadata represents?
+pub const VO_BIT_WORD_TO_REGION: usize = 1
+    << (VO_BIT_SIDE_METADATA_SPEC.log_bytes_in_region
+        + LOG_BITS_IN_BYTE as usize
+        + LOG_BYTES_IN_ADDRESS as usize
+        - VO_BIT_SIDE_METADATA_SPEC.log_num_of_bits);
+
+/// Bulk check if a VO bit word. Return true if there is any bit set in the word.
+pub fn get_raw_vo_bit_word(addr: Address) -> usize {
+    unsafe { VO_BIT_SIDE_METADATA_SPEC.load_raw_word(addr) }
+}
+
+/// Find the base reference to the object from a potential internal pointer.
+pub fn find_object_from_internal_pointer<VM: VMBinding>(
+    start: Address,
+    search_limit_bytes: usize,
+) -> Option<ObjectReference> {
+    if !start.is_mapped() {
+        return None;
+    }
+
+    if let Some(vo_addr) = unsafe {
+        VO_BIT_SIDE_METADATA_SPEC.find_prev_non_zero_value::<u8>(start, search_limit_bytes)
+    } {
+        is_internal_ptr_from_vo_bit::<VM>(vo_addr, start)
+    } else {
+        None
+    }
+}
+
+/// Turning a potential object reference into its in-object address (the ref_to_address address) where the metadata is set for.
+fn get_in_object_address_for_potential_object<VM: VMBinding>(potential_obj: Address) -> Address {
+    potential_obj.offset(VM::VMObjectModel::IN_OBJECT_ADDRESS_OFFSET)
+}
+
+/// Get the object reference from an aligned address where VO bit is set.
+pub(crate) fn get_object_ref_for_vo_addr<VM: VMBinding>(vo_addr: Address) -> ObjectReference {
+    let addr = vo_addr.offset(-VM::VMObjectModel::IN_OBJECT_ADDRESS_OFFSET);
+    let aligned = addr.align_up(ObjectReference::ALIGNMENT);
+    unsafe { ObjectReference::from_raw_address_unchecked(aligned) }
+}
+
+/// Check if the address could be an internal pointer in the object.
+fn is_internal_ptr<VM: VMBinding>(obj: ObjectReference, internal_ptr: Address) -> bool {
+    let obj_start = obj.to_object_start::<VM>();
+    let obj_size = VM::VMObjectModel::get_current_size(obj);
+    internal_ptr < obj_start + obj_size
+}
+
+/// Check if the address could be an internal pointer based on where VO bit is set.
+pub fn is_internal_ptr_from_vo_bit<VM: VMBinding>(
+    vo_addr: Address,
+    internal_ptr: Address,
+) -> Option<ObjectReference> {
+    // VO bit should be set on the address.
+    debug_assert!(unsafe { is_vo_addr(vo_addr) });
+
+    let obj = get_object_ref_for_vo_addr::<VM>(vo_addr);
+    if is_internal_ptr::<VM>(obj, internal_ptr) {
+        Some(obj)
+    } else {
+        None
+    }
+}
+
+/// Non-atomically check if the VO bit is set for this address.
+///
+/// # Safety
+/// The caller needs to make sure that no one is modifying VO bit.
+pub unsafe fn is_vo_addr(addr: Address) -> bool {
+    VO_BIT_SIDE_METADATA_SPEC.load::<u8>(addr) != 0
 }

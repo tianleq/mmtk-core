@@ -49,6 +49,9 @@ pub fn create_markcompact_mutator<VM: VMBinding>(
         mutator_tls,
         config,
         plan: markcompact,
+        #[cfg(feature = "publish_rate_analysis")]
+        mutator_id: crate::plan::MUTATOR_ID_GENERATOR
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
     }
 }
 

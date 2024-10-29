@@ -55,15 +55,41 @@ pub fn create_immix_mutator<VM: VMBinding>(
 
     #[cfg(feature = "public_bit")]
     let barrier = Box::new(crate::plan::barriers::PublicObjectMarkingBarrier::new(
+        crate::plan::barriers::PublicObjectMarkingBarrierSemantics::new(
+            #[cfg(feature = "publish_rate_analysis")]
+            mutator_tls,
+            mmtk,
+        ),
+    ));
+    #[cfg(not(feature = "public_bit"))]
+    let barrier = Box::new(crate::plan::barriers::NoBarrier);
+
+    #[cfg(feature = "public_bit")]
+    let barrier = Box::new(crate::plan::barriers::PublicObjectMarkingBarrier::new(
+        crate::plan::barriers::PublicObjectMarkingBarrierSemantics::new(
+            #[cfg(feature = "publish_rate_analysis")]
+            mutator_tls,
+            mmtk,
+        ),
+    ));
+    #[cfg(not(feature = "public_bit"))]
+    let barrier = Box::new(crate::plan::barriers::NoBarrier);
+
+    #[cfg(feature = "public_bit")]
+    let barrier = Box::new(crate::plan::barriers::PublicObjectMarkingBarrier::new(
         crate::plan::barriers::PublicObjectMarkingBarrierSemantics::new(mmtk),
     ));
     #[cfg(not(feature = "public_bit"))]
     let barrier = Box::new(plan::barriers::NoBarrier);
+
     Mutator {
         allocators: Allocators::<VM>::new(mutator_tls, mmtk, &config.space_mapping),
         barrier,
         mutator_tls,
         config,
         plan: immix,
+        #[cfg(feature = "publish_rate_analysis")]
+        mutator_id: crate::plan::MUTATOR_ID_GENERATOR
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
     }
 }

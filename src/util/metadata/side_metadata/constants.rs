@@ -33,6 +33,10 @@ pub(crate) const GLOBAL_SIDE_METADATA_BASE_OFFSET: SideMetadataOffset =
 pub const VO_BIT_SIDE_METADATA_ADDR: Address =
     crate::util::metadata::vo_bit::VO_BIT_SIDE_METADATA_ADDR;
 
+#[cfg(feature = "public_bit")]
+pub const PUBLIC_SIDE_METADATA_ADDR: Address =
+    crate::util::metadata::public_bit::PUBLIC_SIDE_METADATA_ADDR;
+
 /// This constant represents the worst-case ratio of source data size to global side metadata.
 /// A value of 2 means the space required for global side metadata must be less than 1/4th of the source data.
 /// So, a value of `n` means this ratio must be less than $2^-n$.

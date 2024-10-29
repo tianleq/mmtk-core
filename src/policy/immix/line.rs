@@ -35,6 +35,11 @@ impl Line {
     pub const MARK_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_LINE_MARK;
 
+    #[cfg(feature = "thread_local_gc")]
+    /// Line level public table (side)
+    pub const LINE_PUBLICATION_TABLE: SideMetadataSpec =
+        crate::util::metadata::side_metadata::spec_defs::IX_LINE_PUBLICATION;
+
     /// Get the block containing the line.
     pub fn block(&self) -> Block {
         debug_assert!(!super::BLOCK_ONLY);
@@ -61,6 +66,7 @@ impl Line {
         unsafe { Self::MARK_TABLE.load::<u8>(self.start()) == state }
     }
 
+    #[cfg(not(feature = "thread_local_gc"))]
     /// Mark all lines the object is spanned to.
     pub fn mark_lines_for_object<VM: VMBinding>(object: ObjectReference, state: u8) -> usize {
         debug_assert!(!super::BLOCK_ONLY);
@@ -80,5 +86,54 @@ impl Line {
             line.mark(state)
         }
         marked_lines
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    /// Mark all lines the object is spanned to.
+    pub fn mark_lines_for_object<VM: VMBinding>(object: ObjectReference, state: u8) -> usize {
+        Self::mark_lines_for_object_impl::<VM>(object, state);
+        0
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn publish_lines_of_object<VM: VMBinding>(object: ObjectReference, state: u8) {
+        // mark line as public
+
+        Self::mark_lines_for_object_impl::<VM>(object, state);
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn mark_lines_for_object_impl<VM: VMBinding>(
+        object: ObjectReference,
+        state: u8,
+    ) -> (Line, Line) {
+        debug_assert!(!super::BLOCK_ONLY);
+        #[cfg(not(feature = "debug_publish_object"))]
+        let start = object.to_object_start::<VM>();
+        #[cfg(not(feature = "debug_publish_object"))]
+        let end = start + VM::VMObjectModel::get_current_size(object);
+        let start_line = Line::from_unaligned_address(start);
+        let mut end_line = Line::from_unaligned_address(end);
+        if !Line::is_aligned(end) {
+            end_line = end_line.next();
+        }
+
+        let iter = RegionIterator::<Line>::new(start_line, end_line);
+        for line in iter {
+            // benign race here, as the state is the same,
+            // multiple gc threads are trying to write the same byte value
+            line.mark(state);
+            // also publish lines if object is public
+            if crate::util::metadata::public_bit::is_public::<VM>(object) {
+                // benign race here, line is shared by multiple objects, set 1 can occur concurrently
+                // during global gc phase
+                Line::LINE_PUBLICATION_TABLE.store_atomic::<u8>(
+                    line.start(),
+                    1,
+                    atomic::Ordering::SeqCst,
+                );
+            }
+        }
+        (start_line, end_line)
     }
 }

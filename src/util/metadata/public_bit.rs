@@ -21,16 +21,13 @@ pub fn set_public_bit<VM: VMBinding>(object: ObjectReference) {
 }
 
 #[cfg(feature = "debug_publish_object")]
-pub fn set_public_bit<VM: VMBinding>(
-    object: ObjectReference,
-    _tls: Option<crate::util::VMMutatorThread>,
-) {
+pub fn set_public_bit<VM: VMBinding>(object: ObjectReference, _mutator_id: Option<u32>) {
     debug_assert!(
         !is_public::<VM>(object),
         "{:x}: public bit already set",
         object,
     );
-    info!("mutator: {:?} publish object: {:?}", _tls, object);
+    // info!("mutator: {:?} publish object: {:?}", _mutator_id, object);
     PUBLIC_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_address::<VM>(), 1, Ordering::SeqCst);
 }
 

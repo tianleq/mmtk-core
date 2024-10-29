@@ -16,16 +16,16 @@ use crate::mmtk::MMTK;
 use crate::plan::AllocationSemantics;
 use crate::plan::{Mutator, MutatorContext};
 use crate::scheduler::WorkBucketStage;
-use crate::scheduler::{GCController, GCWork, GCWorker};
+use crate::scheduler::{GCWork, GCWorker};
 use crate::util::alloc::allocators::AllocatorSelector;
 use crate::util::constants::{LOG_BYTES_IN_PAGE, MIN_OBJECT_SIZE};
 use crate::util::heap::layout::vm_layout::vm_layout;
 use crate::util::opaque_pointer::*;
 use crate::util::{Address, ObjectReference};
-use crate::vm::edge_shape::MemorySlice;
+use crate::vm::slot::MemorySlice;
 use crate::vm::ReferenceGlue;
 use crate::vm::VMBinding;
-use std::sync::atomic::Ordering;
+
 /// Initialize an MMTk instance. A VM should call this method after creating an [`crate::MMTK`]
 /// instance but before using any of the methods provided in MMTk (except `process()` and `process_bulk()`).
 ///
@@ -229,10 +229,28 @@ pub fn post_alloc<VM: VMBinding>(
 /// * `src`: The modified source object.
 /// * `slot`: The location of the field to be modified.
 /// * `target`: The target for the write operation.
+///
+/// # Deprecated
+///
+/// This function needs to be redesigned.  Its current form has multiple issues.
+///
+/// -   It is only able to write non-null object references into the slot.  But dynamic language
+///     VMs may write non-reference values, such as tagged small integers, special values such as
+///     `null`, `undefined`, `true`, `false`, etc. into a field that previous contains an object
+///     reference.
+/// -   It relies on `slot.store` to write `target` into the slot, but `slot.store` is designed for
+///     forwarding references when an object is moved by GC, and is supposed to preserve tagged
+///     type information, the offset (if it is an interior pointer), etc.  A write barrier is
+///     associated to an assignment operation, which usually updates such information instead.
+///
+/// We will redesign a more general subsuming write barrier to address those problems and replace
+/// the current `object_reference_write`.  Before that happens, VM bindings should use
+/// `object_reference_write_pre` and `object_reference_write_post` instead.
+#[deprecated = "Use `object_reference_write_pre` and `object_reference_write_post` instead, until this function is redesigned"]
 pub fn object_reference_write<VM: VMBinding>(
     mutator: &mut Mutator<VM>,
     src: ObjectReference,
-    slot: VM::VMEdge,
+    slot: VM::VMSlot,
     target: ObjectReference,
 ) {
     mutator.barrier().object_reference_write(src, slot, target);
@@ -252,12 +270,14 @@ pub fn object_reference_write<VM: VMBinding>(
 /// * `mutator`: The mutator for the current thread.
 /// * `src`: The modified source object.
 /// * `slot`: The location of the field to be modified.
-/// * `target`: The target for the write operation.
+/// * `target`: The target for the write operation.  `None` if the slot did not hold an object
+///   reference before the write operation.  For example, the slot may be holding a `null`
+///   reference, a small integer, or special values such as `true`, `false`, `undefined`, etc.
 pub fn object_reference_write_pre<VM: VMBinding>(
     mutator: &mut Mutator<VM>,
     src: ObjectReference,
-    slot: VM::VMEdge,
-    target: ObjectReference,
+    slot: VM::VMSlot,
+    target: Option<ObjectReference>,
 ) {
     mutator
         .barrier()
@@ -278,12 +298,14 @@ pub fn object_reference_write_pre<VM: VMBinding>(
 /// * `mutator`: The mutator for the current thread.
 /// * `src`: The modified source object.
 /// * `slot`: The location of the field to be modified.
-/// * `target`: The target for the write operation.
+/// * `target`: The target for the write operation.  `None` if the slot no longer hold an object
+///   reference after the write operation.  This may happen when writing a `null` reference, a small
+///   integers, or a special value such as`true`, `false`, `undefined`, etc., into the slot.
 pub fn object_reference_write_post<VM: VMBinding>(
     mutator: &mut Mutator<VM>,
     src: ObjectReference,
-    slot: VM::VMEdge,
-    target: ObjectReference,
+    slot: VM::VMSlot,
+    target: Option<ObjectReference>,
 ) {
     mutator
         .barrier()
@@ -293,7 +315,7 @@ pub fn object_reference_write_post<VM: VMBinding>(
 /// The *subsuming* memory region copy barrier by MMTk.
 /// This is called when the VM tries to copy a piece of heap memory to another.
 /// The data within the slice does not necessarily to be all valid pointers,
-/// but the VM binding will be able to filter out non-reference values on edge iteration.
+/// but the VM binding will be able to filter out non-reference values on slot iteration.
 ///
 /// For VMs that performs a heap memory copy operation, for example OpenJDK's array copy operation, the binding needs to
 /// call `memory_region_copy*` APIs. Same as `object_reference_write*`, the binding can choose either the subsuming barrier,
@@ -318,7 +340,7 @@ pub fn memory_region_copy<VM: VMBinding>(
 /// *before* it performs memory copy.
 /// This is called when the VM tries to copy a piece of heap memory to another.
 /// The data within the slice does not necessarily to be all valid pointers,
-/// but the VM binding will be able to filter out non-reference values on edge iteration.
+/// but the VM binding will be able to filter out non-reference values on slot iteration.
 ///
 /// For VMs that performs a heap memory copy operation, for example OpenJDK's array copy operation, the binding needs to
 /// call `memory_region_copy*` APIs. Same as `object_reference_write*`, the binding can choose either the subsuming barrier,
@@ -343,7 +365,7 @@ pub fn memory_region_copy_pre<VM: VMBinding>(
 /// *after* it performs memory copy.
 /// This is called when the VM tries to copy a piece of heap memory to another.
 /// The data within the slice does not necessarily to be all valid pointers,
-/// but the VM binding will be able to filter out non-reference values on edge iteration.
+/// but the VM binding will be able to filter out non-reference values on slot iteration.
 ///
 /// For VMs that performs a heap memory copy operation, for example OpenJDK's array copy operation, the binding needs to
 /// call `memory_region_copy*` APIs. Same as `object_reference_write*`, the binding can choose either the subsuming barrier,
@@ -438,6 +460,7 @@ pub fn free_with_size<VM: VMBinding>(mmtk: &MMTK<VM>, addr: Address, old_size: u
 /// Get the current active malloc'd bytes. Here MMTk only accounts for bytes that are done through those 'counted malloc' functions.
 #[cfg(feature = "malloc_counted_size")]
 pub fn get_malloc_bytes<VM: VMBinding>(mmtk: &MMTK<VM>) -> usize {
+    use std::sync::atomic::Ordering;
     mmtk.state.malloc_bytes.load(Ordering::SeqCst)
 }
 
@@ -460,53 +483,18 @@ pub fn gc_poll<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
     }
 }
 
-/// Run the main loop for the GC controller thread. This method does not return.
-///
-/// Arguments:
-/// * `tls`: The thread that will be used as the GC controller.
-/// * `gc_controller`: The execution context of the GC controller threa.
-///   It is the `GCController` passed to `Collection::spawn_gc_thread`.
-/// * `mmtk`: A reference to an MMTk instance.
-pub fn start_control_collector<VM: VMBinding>(
-    _mmtk: &'static MMTK<VM>,
-    tls: VMWorkerThread,
-    gc_controller: &mut GCController<VM>,
-) {
-    gc_controller.run(tls);
-}
-
-/// Run the main loop of a GC worker. This method does not return.
-///
-/// Arguments:
-/// * `tls`: The thread that will be used as the GC worker.
-/// * `worker`: The execution context of the GC worker thread.
-///   It is the `GCWorker` passed to `Collection::spawn_gc_thread`.
-/// * `mmtk`: A reference to an MMTk instance.
+/// Wrapper for [`crate::scheduler::GCWorker::run`].
 pub fn start_worker<VM: VMBinding>(
     mmtk: &'static MMTK<VM>,
     tls: VMWorkerThread,
-    worker: &mut GCWorker<VM>,
+    worker: Box<GCWorker<VM>>,
 ) {
     worker.run(tls, mmtk);
 }
 
-/// Initialize the scheduler and GC workers that are required for doing garbage collections.
-/// This is a mandatory call for a VM during its boot process once its thread system
-/// is ready. This should only be called once. This call will invoke Collection::spawn_gc_thread()
-/// to create GC threads.
-///
-/// Arguments:
-/// * `mmtk`: A reference to an MMTk instance.
-/// * `tls`: The thread that wants to enable the collection. This value will be passed back to the VM in
-///   Collection::spawn_gc_thread() so that the VM knows the context.
+/// Wrapper for [`crate::mmtk::MMTK::initialize_collection`].
 pub fn initialize_collection<VM: VMBinding>(mmtk: &'static MMTK<VM>, tls: VMThread) {
-    assert!(
-        !mmtk.state.is_initialized(),
-        "MMTk collection has been initialized (was initialize_collection() already called before?)"
-    );
-    mmtk.scheduler.spawn_gc_threads(mmtk, tls);
-    mmtk.state.initialized.store(true, Ordering::SeqCst);
-    probe!(mmtk, collection_initialized);
+    mmtk.initialize_collection(tls);
 }
 
 /// Process MMTk run-time options. Returns true if the option is processed successfully.
@@ -554,6 +542,7 @@ pub fn free_bytes<VM: VMBinding>(mmtk: &MMTK<VM>) -> usize {
 /// to call this method is at the end of a GC (e.g. when the runtime is about to resume threads).
 #[cfg(feature = "count_live_bytes_in_gc")]
 pub fn live_bytes_in_last_gc<VM: VMBinding>(mmtk: &MMTK<VM>) -> usize {
+    use std::sync::atomic::Ordering;
     mmtk.state.live_bytes_in_last_gc.load(Ordering::SeqCst)
 }
 
@@ -590,8 +579,8 @@ pub fn handle_user_collection_request<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMut
 ///
 /// Arguments:
 /// * `object`: The object reference to query.
-pub fn is_live_object(object: ObjectReference) -> bool {
-    object.is_live()
+pub fn is_live_object<VM: VMBinding>(object: ObjectReference) -> bool {
+    object.is_live::<VM>()
 }
 
 /// Check if `addr` is the address of an object reference to an MMTk object.
@@ -599,36 +588,16 @@ pub fn is_live_object(object: ObjectReference) -> bool {
 /// Concretely:
 /// 1.  Return true if `ObjectReference::from_raw_address(addr)` is a valid object reference to an
 ///     object in any space in MMTk.
-/// 2.  Also return true if there exists an `objref: ObjectReference` such that
-///     -   `objref` is a valid object reference to an object in any space in MMTk, and
-///     -   `lo <= objref.to_address() < hi`, where
-///         -   `lo = addr.align_down(VO_BIT_REGION_SIZE)` and
-///         -   `hi = lo + VO_BIT_REGION_SIZE` and
-///         -   `VO_BIT_REGION_SIZE` is [`crate::util::is_mmtk_object::VO_BIT_REGION_SIZE`].
-///             It is the byte granularity of the valid object (VO) bit.
-/// 3.  Return false otherwise.  This function never panics.
-///
-/// Case 2 means **this function is imprecise for misaligned addresses**.
-/// This function uses the "valid object (VO) bits" side metadata, i.e. a bitmap.
-/// For space efficiency, each bit of the bitmap governs a small region of memory.
-/// The size of a region is currently defined as the [minimum object size](crate::util::constants::MIN_OBJECT_SIZE),
-/// which is currently defined as the [word size](crate::util::constants::BYTES_IN_WORD),
-/// which is 4 bytes on 32-bit systems or 8 bytes on 64-bit systems.
-/// The alignment of a region is also the region size.
-/// If a VO bit is `1`, the bitmap cannot tell which address within the 4-byte or 8-byte region
-/// is the valid object reference.
-/// Therefore, if the input `addr` is not properly aligned, but is close to a valid object
-/// reference, this function may still return true.
-///
-/// For the reason above, the VM **must check if `addr` is properly aligned** before calling this
-/// function.  For most VMs, valid object references are always aligned to the word size, so
-/// checking `addr.is_aligned_to(BYTES_IN_WORD)` should usually work.  If you are paranoid, you can
-/// always check against [`crate::util::is_mmtk_object::VO_BIT_REGION_SIZE`].
+/// 2.  Return false otherwise.
 ///
 /// This function is useful for conservative root scanning.  The VM can iterate through all words in
 /// a stack, filter out zeros, misaligned words, obviously out-of-range words (such as addresses
 /// greater than `0x0000_7fff_ffff_ffff` on Linux on x86_64), and use this function to deside if the
 /// word is really a reference.
+///
+/// This function does not handle internal pointers. If a binding may have internal pointers on
+/// the stack, and requires identifying the base reference for an internal pointer, they should use
+/// [`find_object_from_internal_pointer`] instead.
 ///
 /// Note: This function has special behaviors if the VM space (enabled by the `vm_space` feature)
 /// is present.  See `crate::plan::global::BasePlan::vm_space`.
@@ -636,15 +605,46 @@ pub fn is_live_object(object: ObjectReference) -> bool {
 /// Argument:
 /// * `addr`: An arbitrary address.
 #[cfg(feature = "is_mmtk_object")]
-pub fn is_mmtk_object(addr: Address) -> bool {
-    use crate::mmtk::SFT_MAP;
-    SFT_MAP.get_checked(addr).is_mmtk_object(addr)
+pub fn is_mmtk_object(addr: Address) -> Option<ObjectReference> {
+    crate::util::is_mmtk_object::check_object_reference(addr)
+}
+
+/// Find if there is an object with VO bit set for the given address range.
+/// This should be used instead of [`crate::memory_manager::is_mmtk_object`] for conservative stack scanning if
+/// the binding may have internal pointers on the stack.
+///
+/// Note that, we only consider pointers that point to addresses that are equal or greater than the in-object addresss
+/// (i.e. [`crate::util::ObjectReference::to_address()`] which is the same as `object_ref.to_raw_address() + ObjectModel::IN_OBJECT_ADDRESS_OFFSET`),
+/// and within the allocation as 'internal pointers'. To be precise, for each object ref `obj_ref`, internal pointers are in the range
+/// `[obj_ref + ObjectModel::IN_OBJECT_ADDRESS_OFFSET, ObjectModel::ref_to_object_start(obj_ref) + ObjectModel::get_current_size(obj_ref))`.
+/// If a binding defines internal pointers differently, calling this method is undefined behavior.
+/// If this is the case for you, please submit an issue or engage us on Zulip to discuss more.
+///
+/// Note that, in the similar situation as [`crate::memory_manager::is_mmtk_object`], the binding should filter
+/// out obvious non-pointers (e.g. alignment check, bound check, etc) before calling this function to avoid unnecessary
+/// cost. This method is not cheap.
+///
+/// To minimize the cost, the user should also use a small `max_search_bytes`.
+///
+/// Note: This function has special behaviors if the VM space (enabled by the `vm_space` feature)
+/// is present.  See `crate::plan::global::BasePlan::vm_space`.
+///
+/// Argument:
+/// * `internal_ptr`: The address to start searching. We search backwards from this address (including this address) to find the base reference.
+/// * `max_search_bytes`: The maximum number of bytes we may search for an object with VO bit set. `internal_ptr - max_search_bytes` is not included.
+#[cfg(feature = "is_mmtk_object")]
+pub fn find_object_from_internal_pointer<VM: VMBinding>(
+    internal_ptr: Address,
+    max_search_bytes: usize,
+) -> Option<ObjectReference> {
+    crate::util::is_mmtk_object::check_internal_reference(internal_ptr, max_search_bytes)
 }
 
 /// Return true if the `object` lies in a region of memory where
 /// -   only MMTk can allocate into, or
 /// -   only MMTk's delegated memory allocator (such as a malloc implementation) can allocate into
 ///     for allocation requests from MMTk.
+///
 /// Return false otherwise.  This function never panics.
 ///
 /// Particularly, if this function returns true, `object` cannot be an object allocated by the VM
@@ -671,9 +671,6 @@ pub fn is_mmtk_object(addr: Address) -> bool {
 /// * `object`: The object reference to query.
 pub fn is_in_mmtk_spaces<VM: VMBinding>(object: ObjectReference) -> bool {
     use crate::mmtk::SFT_MAP;
-    if object.is_null() {
-        return false;
-    }
     SFT_MAP
         .get_checked(object.to_address::<VM>())
         .is_in_space(object)
@@ -732,6 +729,30 @@ pub fn add_phantom_candidate<VM: VMBinding>(mmtk: &MMTK<VM>, reff: ObjectReferen
 /// * `tls`: The thread that calls the function (and triggers a collection).
 pub fn harness_begin<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
     mmtk.harness_begin(tls);
+    #[cfg(feature = "publish_rate_analysis")]
+    {
+        use crate::ALLOCATION_COUNT;
+        use crate::ALLOCATION_SIZE;
+        use crate::PER_THREAD_PUBLICATION_STATS_MAP;
+        use crate::PUBLICATION_COUNT;
+        use crate::PUBLICATION_SIZE;
+        use crate::PUBLIC_KLASS_MAP;
+        use std::sync::atomic::Ordering::Release;
+
+        ALLOCATION_COUNT.store(0, Release);
+        ALLOCATION_SIZE.store(0, Release);
+        PUBLICATION_COUNT.store(0, Release);
+        PUBLICATION_SIZE.store(0, Release);
+        PUBLIC_KLASS_MAP.lock().unwrap().clear();
+
+        let mut stats = PER_THREAD_PUBLICATION_STATS_MAP.lock().unwrap();
+        for s in stats.values_mut() {
+            s.allocation_count = 0;
+            s.allocation_size = 0;
+            s.publication_count = 0;
+            s.publication_size = 0;
+        }
+    }
 }
 
 /// Generic hook to allow benchmarks to be harnessed. We stop collecting
@@ -741,6 +762,58 @@ pub fn harness_begin<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
 /// * `mmtk`: A reference to an MMTk instance.
 pub fn harness_end<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
     mmtk.harness_end();
+    #[cfg(feature = "publish_rate_analysis")]
+    {
+        use crate::MUTATOR_NAME_MAP;
+        use crate::PER_THREAD_PUBLICATION_STATS_MAP;
+        // use crate::PUBLIC_KLASS_MAP;
+        // use std::io::Write;
+
+        // let mut file = std::fs::OpenOptions::new()
+        //     .create(true)
+        //     .write(true)
+        //     .open("/home/tianleq/misc/tmp/public-klass.csv")
+        //     .unwrap();
+        // let tmp = PUBLIC_KLASS_MAP.lock().unwrap();
+        // let map: std::collections::BTreeMap<&usize, &String> =
+        //     tmp.iter().map(|(k, v)| (v, k)).collect();
+        // for (&count, &name) in &map {
+        //     let content = format!("{name},{count}\n");
+        //     file.write(content.as_bytes()).unwrap();
+        // }
+        // file.write("\n".as_bytes()).unwrap();
+        // file.flush().unwrap();
+        println!(
+            "============================ MMTk Publication Stats ============================"
+        );
+        let mut name_map = MUTATOR_NAME_MAP.lock().unwrap();
+
+        for (mutator_id, stats) in PER_THREAD_PUBLICATION_STATS_MAP.lock().unwrap().iter() {
+            let byte_ratio = stats.request_scope_publication_size as f64
+                / stats.request_scope_allocation_size as f64;
+            let object_ratio = stats.request_scope_publication_count as f64
+                / stats.request_scope_allocation_count as f64;
+            let publication_size = stats.request_scope_publication_size;
+            let allocation_size = stats.request_scope_allocation_size;
+            let name = if name_map.get(&mutator_id).is_some() {
+                name_map.get(&mutator_id).unwrap()
+            } else {
+                "unknown"
+            };
+            let content = format!(
+                "{name},{mutator_id},{byte_ratio},{object_ratio}|{publication_size}, {allocation_size}"
+            );
+            // file.write(content.as_bytes()).unwrap();
+            // file.flush().unwrap();
+            println!("{}", content);
+        }
+        PER_THREAD_PUBLICATION_STATS_MAP.lock().unwrap().clear();
+        name_map.clear();
+        // MUTATOR_NAME_MAP.lock().unwrap().clear();
+        println!(
+            "-------------------------- End MMTk Publication Stats --------------------------"
+        );
+    }
 }
 
 /// Register a finalizable object. MMTk will retain the liveness of
@@ -904,38 +977,162 @@ pub fn add_work_packets<VM: VMBinding>(
 }
 
 #[cfg(feature = "public_bit")]
-pub fn mmtk_set_public_bit<VM: VMBinding>(_mmtk: &'static MMTK<VM>, object: ObjectReference) {
-    debug_assert!(!object.is_null(), "object is null!");
-
+pub fn mmtk_set_public_bit<VM: VMBinding>(
+    #[cfg(feature = "publish_rate_analysis")] tls: VMMutatorThread,
+    _mmtk: &'static MMTK<VM>,
+    object: ObjectReference,
+) {
     crate::util::metadata::public_bit::set_public_bit::<VM>(object);
-}
+    #[cfg(feature = "thread_local_gc")]
+    _mmtk.get_plan().publish_object(object);
+    #[cfg(feature = "publish_rate_analysis")]
+    {
+        use crate::vm::ActivePlan;
+        use crate::vm::ObjectModel;
+        use crate::PER_THREAD_PUBLICATION_STATS_MAP;
+        use crate::PUBLICATION_COUNT;
+        use crate::PUBLICATION_SIZE;
+        use crate::REQUEST_SCOPE_BARRIER_SLOW_PATH_COUNT;
+        use crate::REQUEST_SCOPE_PUBLICATION_COUNT;
+        use crate::REQUEST_SCOPE_PUBLICATION_SIZE;
 
-#[cfg(feature = "public_bit")]
-pub fn mmtk_publish_object<VM: VMBinding>(_mmtk: &'static MMTK<VM>, _object: ObjectReference) {
-    use crate::vm::Scanning;
+        let object_size = VM::VMObjectModel::get_current_size(object);
+        let mutator_id = if VM::VMActivePlan::is_mutator(tls.0) {
+            VM::VMActivePlan::mutator(tls).mutator_id
+        } else {
+            0
+        };
 
-    if _object.is_null() || crate::util::metadata::public_bit::is_public::<VM>(_object) {
-        return;
+        PUBLICATION_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        PUBLICATION_SIZE.fetch_add(object_size, std::sync::atomic::Ordering::SeqCst);
+        REQUEST_SCOPE_PUBLICATION_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        REQUEST_SCOPE_PUBLICATION_SIZE.fetch_add(object_size, std::sync::atomic::Ordering::SeqCst);
+        REQUEST_SCOPE_BARRIER_SLOW_PATH_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let mut stats = PER_THREAD_PUBLICATION_STATS_MAP.lock().unwrap();
+        let s = stats.get_mut(&mutator_id).unwrap();
+        s.publication_count += 1;
+        s.publication_size += object_size;
+        s.request_scope_publication_count += 1;
+        s.request_scope_publication_size += object_size;
     }
-
-    let mut closure: crate::plan::PublishObjectClosure<VM> =
-        crate::plan::PublishObjectClosure::<VM>::new(_mmtk);
-
-    mmtk_set_public_bit(_mmtk, _object);
-    // Publish all the descendants
-    VM::VMScanning::scan_object(
-        VMWorkerThread(VMThread::UNINITIALIZED),
-        _object,
-        &mut closure,
-    );
-    closure.do_closure();
 }
 
 #[cfg(feature = "public_bit")]
-pub fn mmtk_is_object_published<VM: VMBinding>(object: ObjectReference) -> bool {
-    if object.is_null() {
-        false
-    } else {
+pub fn mmtk_publish_object<VM: VMBinding>(
+    #[cfg(feature = "publish_rate_analysis")] tls: VMMutatorThread,
+    _mmtk: &'static MMTK<VM>,
+    _object: Option<ObjectReference>,
+) {
+    // use crate::vm::Scanning;
+
+    if let Some(object) = _object {
+        if crate::util::metadata::public_bit::is_public::<VM>(object) {
+            return;
+        }
+        #[cfg(feature = "publish_rate_analysis")]
+        crate::REQUEST_SCOPE_BARRIER_SLOW_PATH_COUNT
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+        let mut closure: crate::plan::PublishObjectClosure<VM> =
+            crate::plan::PublishObjectClosure::<VM>::new(
+                _mmtk,
+                #[cfg(feature = "debug_publish_object")]
+                u32::MAX,
+            );
+
+        // mmtk_set_public_bit(_mmtk, object);
+        // #[cfg(feature = "thread_local_gc")]
+        // _mmtk.get_plan().publish_object(object);
+        // // Publish all the descendants
+        // VM::VMScanning::scan_object(
+        //     VMWorkerThread(VMThread::UNINITIALIZED),
+        //     object,
+        //     &mut closure,
+        // );
+        closure.do_closure(
+            object,
+            #[cfg(feature = "publish_rate_analysis")]
+            tls,
+        );
+    }
+}
+
+#[cfg(feature = "public_bit")]
+pub fn mmtk_is_object_published<VM: VMBinding>(_object: Option<ObjectReference>) -> bool {
+    if let Some(object) = _object {
         crate::util::metadata::public_bit::is_public::<VM>(object)
+    } else {
+        false
     }
+}
+
+#[cfg(feature = "publish_rate_analysis")]
+pub fn mmtk_register_mutator_name<VM: VMBinding>(tls: VMMutatorThread) {
+    use crate::{vm::ActivePlan, MUTATOR_NAME_MAP};
+
+    let name = VM::VMActivePlan::get_mutator_name(tls);
+    let mutator = VM::VMActivePlan::mutator(tls);
+    MUTATOR_NAME_MAP
+        .lock()
+        .unwrap()
+        .insert(mutator.mutator_id, name);
+}
+
+#[cfg(feature = "publish_rate_analysis")]
+pub fn mmtk_mutator_exit<VM: VMBinding>(tls: VMMutatorThread, _mmtk: &'static MMTK<VM>) {
+    use crate::{vm::ActivePlan, MUTATOR_NAME_MAP, PER_THREAD_PUBLICATION_STATS_MAP};
+    if _mmtk
+        .inside_harness
+        .load(std::sync::atomic::Ordering::Acquire)
+        == false
+    {
+        let mutator = VM::VMActivePlan::mutator(tls);
+        MUTATOR_NAME_MAP.lock().unwrap().remove(&mutator.mutator_id);
+        PER_THREAD_PUBLICATION_STATS_MAP
+            .lock()
+            .unwrap()
+            .remove(&mutator.mutator_id);
+    }
+}
+/// Generic hook to allow benchmarks to be harnessed. We do a full heap
+/// GC, and then start recording statistics for MMTk.
+///
+/// Arguments:
+/// * `mmtk`: A reference to an MMTk instance.
+/// * `tls`: The thread that calls the function (and triggers a collection).
+pub fn request_starting<VM: VMBinding>(_mmtk: &'static MMTK<VM>) {
+    #[cfg(feature = "publish_rate_analysis")]
+    {
+        use crate::PER_THREAD_PUBLICATION_STATS_MAP;
+        use crate::REQUEST_SCOPE_ALLOCATION_COUNT;
+        use crate::REQUEST_SCOPE_ALLOCATION_SIZE;
+        use crate::REQUEST_SCOPE_BARRIER_SLOW_PATH_COUNT;
+        use crate::REQUEST_SCOPE_PUBLICATION_COUNT;
+        use crate::REQUEST_SCOPE_PUBLICATION_SIZE;
+        use std::sync::atomic::Ordering::Release;
+
+        REQUEST_SCOPE_ALLOCATION_COUNT.store(0, Release);
+        REQUEST_SCOPE_ALLOCATION_SIZE.store(0, Release);
+        REQUEST_SCOPE_PUBLICATION_COUNT.store(0, Release);
+        REQUEST_SCOPE_PUBLICATION_SIZE.store(0, Release);
+        REQUEST_SCOPE_BARRIER_SLOW_PATH_COUNT.store(0, Release);
+
+        let mut stats = PER_THREAD_PUBLICATION_STATS_MAP.lock().unwrap();
+        for s in stats.values_mut() {
+            s.request_scope_allocation_count = 0;
+            s.request_scope_allocation_size = 0;
+            s.request_scope_publication_count = 0;
+            s.request_scope_publication_size = 0;
+        }
+    }
+    _mmtk.request_starting();
+}
+
+/// Generic hook to allow benchmarks to be harnessed. We stop collecting
+/// statistics, and print stats values.
+///
+/// Arguments:
+/// * `mmtk`: A reference to an MMTk instance.
+pub fn request_finished<VM: VMBinding>(_mmtk: &'static MMTK<VM>) {
+    _mmtk.request_finished();
 }

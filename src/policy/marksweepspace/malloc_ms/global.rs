@@ -15,6 +15,7 @@ use crate::util::metadata::side_metadata::{
     SideMetadataContext, SideMetadataSanity, SideMetadataSpec,
 };
 use crate::util::metadata::MetadataSpec;
+use crate::util::object_enum::ObjectEnumerator;
 use crate::util::opaque_pointer::*;
 use crate::util::Address;
 use crate::util::ObjectReference;
@@ -102,11 +103,23 @@ impl<VM: VMBinding> SFT for MallocSpace<VM> {
 
     /// For malloc space, we just use the side metadata.
     #[cfg(feature = "is_mmtk_object")]
-    fn is_mmtk_object(&self, addr: Address) -> bool {
+    fn is_mmtk_object(&self, addr: Address) -> Option<ObjectReference> {
         debug_assert!(!addr.is_zero());
         // `addr` cannot be mapped by us. It should be mapped by the malloc library.
         debug_assert!(!addr.is_mapped());
-        has_object_alloced_by_malloc::<VM>(addr).is_some()
+        has_object_alloced_by_malloc::<VM>(addr)
+    }
+
+    #[cfg(feature = "is_mmtk_object")]
+    fn find_object_from_internal_pointer(
+        &self,
+        ptr: Address,
+        max_search_bytes: usize,
+    ) -> Option<ObjectReference> {
+        crate::util::metadata::vo_bit::find_object_from_internal_pointer::<VM>(
+            ptr,
+            max_search_bytes,
+        )
     }
 
     fn initialize_object_metadata(&self, object: ObjectReference, _alloc: bool) {
@@ -135,6 +148,10 @@ impl<VM: VMBinding> Space<VM> for MallocSpace<VM> {
 
     fn get_page_resource(&self) -> &dyn PageResource<VM> {
         unreachable!()
+    }
+
+    fn maybe_get_page_resource_mut(&mut self) -> Option<&mut dyn PageResource<VM>> {
+        None
     }
 
     fn common(&self) -> &CommonSpace<VM> {
@@ -212,6 +229,10 @@ impl<VM: VMBinding> Space<VM> for MallocSpace<VM> {
     fn verify_side_metadata_sanity(&self, side_metadata_sanity_checker: &mut SideMetadataSanity) {
         side_metadata_sanity_checker
             .verify_metadata_context(std::any::type_name::<Self>(), &self.metadata)
+    }
+
+    fn enumerate_objects(&self, _enumerator: &mut dyn ObjectEnumerator) {
+        unimplemented!()
     }
 }
 
@@ -400,8 +421,6 @@ impl<VM: VMBinding> MallocSpace<VM> {
         queue: &mut Q,
         object: ObjectReference,
     ) -> ObjectReference {
-        debug_assert!(!object.is_null());
-
         assert!(
             self.in_space(object),
             "Cannot mark an object {} that was not alloced by malloc.",
@@ -491,6 +510,8 @@ impl<VM: VMBinding> MallocSpace<VM> {
 
         self.scheduler.work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
     }
+
+    pub fn end_of_gc(&mut self) {}
 
     pub fn sweep_chunk(&self, chunk_start: Address) {
         // Call the relevant sweep function depending on the location of the mark bits

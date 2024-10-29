@@ -1,12 +1,10 @@
 //! This module contains code useful for tracing,
 //! i.e. visiting the reachable objects by traversing all or part of an object graph.
 
-use crate::scheduler::gc_work::{EdgeOf, ProcessEdgesWork};
+use crate::scheduler::gc_work::{ProcessEdgesWork, SlotOf};
 use crate::scheduler::{GCWorker, WorkBucketStage};
 use crate::util::ObjectReference;
-use crate::vm::edge_shape::Edge;
-use crate::vm::EdgeVisitor;
-use crate::vm::Scanning;
+use crate::vm::SlotVisitor;
 
 /// This trait represents an object queue to enqueue objects during tracing.
 pub trait ObjectQueue {
@@ -79,11 +77,11 @@ impl ObjectQueue for VectorQueue<ObjectReference> {
     }
 }
 
-/// A transitive closure visitor to collect the edges from objects.
-/// It maintains a buffer for the edges, and flushes edges to a new work packet
+/// A transitive closure visitor to collect the slots from objects.
+/// It maintains a buffer for the slots, and flushes slots to a new work packet
 /// if the buffer is full or if the type gets dropped.
 pub struct ObjectsClosure<'a, E: ProcessEdgesWork> {
-    buffer: VectorQueue<EdgeOf<E>>,
+    buffer: VectorQueue<SlotOf<E>>,
     pub(crate) worker: &'a mut GCWorker<E::VM>,
     bucket: WorkBucketStage,
 }
@@ -113,12 +111,13 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
     }
 }
 
-impl<'a, E: ProcessEdgesWork> EdgeVisitor<EdgeOf<E>> for ObjectsClosure<'a, E> {
-    fn visit_edge(&mut self, slot: EdgeOf<E>) {
+impl<'a, E: ProcessEdgesWork> SlotVisitor<SlotOf<E>> for ObjectsClosure<'a, E> {
+    fn visit_slot(&mut self, slot: SlotOf<E>) {
         #[cfg(debug_assertions)]
         {
+            use crate::vm::slot::Slot;
             trace!(
-                "(ObjectsClosure) Visit edge {:?} (pointing to {})",
+                "(ObjectsClosure) Visit slot {:?} (pointing to {:?})",
                 slot,
                 slot.load()
             );
@@ -136,62 +135,166 @@ impl<'a, E: ProcessEdgesWork> Drop for ObjectsClosure<'a, E> {
     }
 }
 
+#[cfg(feature = "public_bit")]
 pub struct PublishObjectClosure<VM: crate::vm::VMBinding> {
     _mmtk: &'static crate::MMTK<VM>,
-    edge_buffer: std::collections::VecDeque<VM::VMEdge>,
+    slot_buffer: std::collections::VecDeque<VM::VMSlot>,
 }
 
+#[cfg(feature = "public_bit")]
 impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
     pub fn new(mmtk: &'static crate::MMTK<VM>) -> Self {
         PublishObjectClosure {
             _mmtk: mmtk,
-            edge_buffer: std::collections::VecDeque::new(),
+            slot_buffer: std::collections::VecDeque::new(),
         }
     }
 
-    pub fn do_closure(&mut self) {
-        while !self.edge_buffer.is_empty() {
-            let slot = self.edge_buffer.pop_front().unwrap();
-            let object = slot.load();
-            if object.is_null() {
+    pub fn do_closure(
+        &mut self,
+        object: ObjectReference,
+        #[cfg(feature = "publish_rate_analysis")] tls: crate::util::VMMutatorThread,
+    ) {
+        #[cfg(feature = "publish_rate_analysis")]
+        use crate::vm::ActivePlan;
+        use crate::vm::Scanning;
+
+        crate::util::metadata::public_bit::set_public_bit::<VM>(object);
+
+        #[cfg(feature = "publish_rate_analysis")]
+        let mut klass_names = Vec::new();
+
+        #[cfg(feature = "thread_local_gc")]
+        self._mmtk.get_plan().publish_object(object);
+        VM::VMScanning::scan_object(
+            crate::util::VMWorkerThread(crate::util::VMThread::UNINITIALIZED),
+            object,
+            self,
+        );
+
+        #[cfg(feature = "publish_rate_analysis")]
+        let mut publication_count = 0;
+        #[cfg(feature = "publish_rate_analysis")]
+        let mut publication_size = 0;
+        #[cfg(feature = "publish_rate_analysis")]
+        let mutator_id = if VM::VMActivePlan::is_mutator(tls.0) {
+            VM::VMActivePlan::mutator(tls).mutator_id
+        } else {
+            0
+        };
+
+        #[cfg(feature = "publish_rate_analysis")]
+        {
+            use crate::vm::ObjectModel;
+
+            let object_size = VM::VMObjectModel::get_current_size(object);
+            publication_count += 1;
+            publication_size += object_size;
+
+            let klass_name = VM::VMObjectModel::get_object_klass_name(object);
+            klass_names.push(klass_name);
+        }
+        while !self.slot_buffer.is_empty() {
+            let slot = self.slot_buffer.pop_front().unwrap();
+            let object = crate::vm::slot::Slot::load(&slot);
+            if object.is_none() {
                 continue;
             }
+            let object = object.unwrap();
             if !crate::util::metadata::public_bit::is_public::<VM>(object) {
                 // set public bit on the object
-                #[cfg(feature = "debug_publish_object")]
-                crate::util::metadata::public_bit::set_public_bit::<VM>(
-                    object,
-                    Some(self.mutator_id),
-                );
-                #[cfg(not(feature = "debug_publish_object"))]
                 crate::util::metadata::public_bit::set_public_bit::<VM>(object);
+
                 #[cfg(feature = "thread_local_gc")]
-                self._mmtk.get_plan().publish_object(
-                    object,
-                    #[cfg(feature = "debug_thread_local_gc_copying")]
-                    self.tls,
-                );
+                self._mmtk.get_plan().publish_object(object);
                 VM::VMScanning::scan_object(
                     crate::util::VMWorkerThread(crate::util::VMThread::UNINITIALIZED),
                     object,
                     self,
                 );
+                #[cfg(feature = "publish_rate_analysis")]
+                {
+                    use crate::vm::ObjectModel;
+
+                    let object_size = VM::VMObjectModel::get_current_size(object);
+                    publication_count += 1;
+                    publication_size += object_size;
+
+                    let klass_name = VM::VMObjectModel::get_object_klass_name(object);
+                    klass_names.push(klass_name);
+                }
             }
+        }
+        #[cfg(feature = "publish_rate_analysis")]
+        {
+            use crate::PER_THREAD_PUBLICATION_STATS_MAP;
+            use crate::PUBLICATION_COUNT;
+            use crate::PUBLICATION_SIZE;
+            use crate::PUBLIC_KLASS_MAP;
+            use crate::REQUEST_SCOPE_PUBLICATION_COUNT;
+            use crate::REQUEST_SCOPE_PUBLICATION_SIZE;
+
+            let mut map = PUBLIC_KLASS_MAP.lock().unwrap();
+            for name in klass_names {
+                if map.contains_key(&name) {
+                    *map.get_mut(&name).unwrap() += 1;
+                } else {
+                    map.insert(name, 1);
+                }
+            }
+
+            let mut stats = PER_THREAD_PUBLICATION_STATS_MAP.lock().unwrap();
+            match stats.get_mut(&mutator_id) {
+                Some(s) => {
+                    s.publication_count += publication_count;
+                    s.publication_size += publication_size;
+                    s.request_scope_publication_count += publication_count;
+                    s.request_scope_publication_size += publication_size;
+                }
+                None => {
+                    if mutator_id != 0 {
+                        panic!("should not reach here");
+                    } else {
+                        assert!(mutator_id == 0);
+                        stats.insert(
+                            mutator_id,
+                            crate::PublicationStats {
+                                publication_size: publication_size,
+                                publication_count: publication_count,
+                                request_scope_publication_size: publication_size,
+                                request_scope_publication_count: publication_count,
+                                allocation_size: publication_size,
+                                allocation_count: publication_count,
+                                request_scope_allocation_size: publication_size,
+                                request_scope_allocation_count: publication_count,
+                            },
+                        );
+                    }
+                }
+            }
+            PUBLICATION_COUNT.fetch_add(publication_count, std::sync::atomic::Ordering::SeqCst);
+            PUBLICATION_SIZE.fetch_add(publication_size, std::sync::atomic::Ordering::SeqCst);
+            REQUEST_SCOPE_PUBLICATION_COUNT
+                .fetch_add(publication_count, std::sync::atomic::Ordering::SeqCst);
+            REQUEST_SCOPE_PUBLICATION_SIZE
+                .fetch_add(publication_size, std::sync::atomic::Ordering::SeqCst);
         }
     }
 }
 
-impl<VM: crate::vm::VMBinding> EdgeVisitor<VM::VMEdge> for PublishObjectClosure<VM> {
-    fn visit_edge(&mut self, edge: VM::VMEdge) {
-        self.edge_buffer.push_back(edge);
+#[cfg(feature = "public_bit")]
+impl<VM: crate::vm::VMBinding> SlotVisitor<VM::VMSlot> for PublishObjectClosure<VM> {
+    fn visit_slot(&mut self, slot: VM::VMSlot) {
+        self.slot_buffer.push_back(slot);
     }
 }
 
+#[cfg(feature = "public_bit")]
 impl<VM: crate::vm::VMBinding> Drop for PublishObjectClosure<VM> {
     #[inline(always)]
     fn drop(&mut self) {
         assert!(
-            self.edge_buffer.is_empty(),
+            self.slot_buffer.is_empty(),
             "There are edges left over. Closure is not done correctly."
         );
     }

@@ -5,6 +5,7 @@ use crate::util::conversions::*;
 use crate::util::metadata::side_metadata::{
     SideMetadataContext, SideMetadataSanity, SideMetadataSpec,
 };
+use crate::util::object_enum::ObjectEnumerator;
 use crate::util::Address;
 use crate::util::ObjectReference;
 
@@ -28,7 +29,7 @@ use crate::util::heap::layout::Mmapper;
 use crate::util::heap::layout::VMMap;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
 use crate::util::heap::HeapMeta;
-use crate::util::memory;
+use crate::util::memory::{self, HugePageSupport, MmapProtection, MmapStrategy};
 use crate::vm::VMBinding;
 
 use std::marker::PhantomData;
@@ -41,6 +42,10 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
     fn as_space(&self) -> &dyn Space<VM>;
     fn as_sft(&self) -> &(dyn SFT + Sync + 'static);
     fn get_page_resource(&self) -> &dyn PageResource<VM>;
+
+    /// Get a mutable reference to the underlying page resource, or `None` if the space does not
+    /// have a page resource.
+    fn maybe_get_page_resource_mut(&mut self) -> Option<&mut dyn PageResource<VM>>;
 
     /// Initialize entires in SFT map for the space. This is called when the Space object
     /// has a non-moving address, as we will use the address to set sft.
@@ -133,13 +138,13 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
                     );
                     let bytes = conversions::pages_to_bytes(res.pages);
 
-                    let map_sidemetadata = || {
+                    let mmap = || {
                         // Mmap the pages and the side metadata, and handle error. In case of any error,
                         // we will either call back to the VM for OOM, or simply panic.
                         if let Err(mmap_error) = self
                             .common()
                             .mmapper
-                            .ensure_mapped(res.start, res.pages)
+                            .ensure_mapped(res.start, res.pages, self.common().mmap_strategy())
                             .and(
                                 self.common()
                                     .metadata
@@ -156,7 +161,7 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
                     // The scope of the lock is important in terms of performance when we have many allocator threads.
                     if SFT_MAP.get_side_metadata().is_some() {
                         // If the SFT map uses side metadata, so we have to initialize side metadata first.
-                        map_sidemetadata();
+                        mmap();
                         // then grow space, which will use the side metadata we mapped above
                         grow_space();
                         // then we can drop the lock after grow_space()
@@ -166,7 +171,7 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
                         grow_space();
                         drop(lock);
                         // and map side metadata without holding the lock
-                        map_sidemetadata();
+                        mmap();
                     }
 
                     // TODO: Concurrent zeroing
@@ -344,6 +349,31 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         side_metadata_sanity_checker
             .verify_metadata_context(std::any::type_name::<Self>(), &self.common().metadata)
     }
+
+    #[cfg(feature = "public_bit")]
+    fn publish_object(&self, _object: ObjectReference) {}
+
+    /// Enumerate objects in the current space.
+    ///
+    /// Implementers can use the `enumerator` to report
+    ///
+    /// -   individual objects within the space using `enumerator.visit_object`, and
+    /// -   ranges of address that may contain objects using `enumerator.visit_address_range`. The
+    ///     caller will then enumerate objects in the range using the VO bits metadata.
+    ///
+    /// Each object in the space shall be covered by one of the two methods above.
+    ///
+    /// # Implementation considerations
+    ///
+    /// **Skipping empty ranges**: When enumerating address ranges, spaces can skip ranges (blocks,
+    /// chunks, etc.) that are guarenteed not to contain objects.
+    ///
+    /// **Dynamic dispatch**: Because `Space` is a trait object type and `enumerator` is a `dyn`
+    /// reference, invoking methods of `enumerator` involves a dynamic dispatching.  But the
+    /// overhead is OK if we call it a block at a time because scanning the VO bits will dominate
+    /// the execution time.  For LOS, it will be cheaper to enumerate individual objects than
+    /// scanning VO bits because it is sparse.
+    fn enumerate_objects(&self, enumerator: &mut dyn ObjectEnumerator);
 }
 
 /// Print the VM map for a space.
@@ -417,10 +447,12 @@ pub struct CommonSpace<VM: VMBinding> {
     // the copy semantics for the space.
     pub copy: Option<CopySemantics>,
 
-    immortal: bool,
-    movable: bool,
+    pub immortal: bool,
+    pub movable: bool,
     pub contiguous: bool,
     pub zeroed: bool,
+
+    pub permission_exec: bool,
 
     pub start: Address,
     pub extent: usize,
@@ -439,6 +471,7 @@ pub struct CommonSpace<VM: VMBinding> {
 
     pub gc_trigger: Arc<GCTrigger<VM>>,
     pub global_state: Arc<GlobalState>,
+    pub options: Arc<Options>,
 
     p: PhantomData<VM>,
 }
@@ -455,6 +488,7 @@ pub struct PolicyCreateSpaceArgs<'a, VM: VMBinding> {
 pub struct PlanCreateSpaceArgs<'a, VM: VMBinding> {
     pub name: &'static str,
     pub zeroed: bool,
+    pub permission_exec: bool,
     pub vmrequest: VMRequest,
     pub global_side_metadata_specs: Vec<SideMetadataSpec>,
     pub vm_map: &'static dyn VMMap,
@@ -463,7 +497,7 @@ pub struct PlanCreateSpaceArgs<'a, VM: VMBinding> {
     pub constraints: &'a PlanConstraints,
     pub gc_trigger: Arc<GCTrigger<VM>>,
     pub scheduler: Arc<GCWorkScheduler<VM>>,
-    pub options: &'a Options,
+    pub options: Arc<Options>,
     pub global_state: Arc<GlobalState>,
 }
 
@@ -494,6 +528,7 @@ impl<VM: VMBinding> CommonSpace<VM> {
             immortal: args.immortal,
             movable: args.movable,
             contiguous: true,
+            permission_exec: args.plan_args.permission_exec,
             zeroed: args.plan_args.zeroed,
             start: unsafe { Address::zero() },
             extent: 0,
@@ -507,6 +542,7 @@ impl<VM: VMBinding> CommonSpace<VM> {
             },
             acquire_lock: Mutex::new(()),
             global_state: args.plan_args.global_state,
+            options: args.plan_args.options.clone(),
             p: PhantomData,
         };
 
@@ -614,6 +650,21 @@ impl<VM: VMBinding> CommonSpace<VM> {
 
     pub fn vm_map(&self) -> &'static dyn VMMap {
         self.vm_map
+    }
+
+    pub fn mmap_strategy(&self) -> MmapStrategy {
+        MmapStrategy {
+            huge_page: if *self.options.transparent_hugepages {
+                HugePageSupport::TransparentHugePages
+            } else {
+                HugePageSupport::No
+            },
+            prot: if self.permission_exec || cfg!(feature = "exec_permission_on_all_spaces") {
+                MmapProtection::ReadWriteExec
+            } else {
+                MmapProtection::ReadWrite
+            },
+        }
     }
 }
 

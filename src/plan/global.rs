@@ -299,6 +299,16 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
         true
     }
 
+    /// Return whether the current GC may move any object.  The VM binding can make use of this
+    /// information and choose to or not to update some data structures that record the addresses
+    /// of objects.
+    ///
+    /// This function is callable during a GC.  From the VM binding's point of view, the information
+    /// of whether the current GC moves object or not is available since `Collection::stop_mutators`
+    /// is called, and remains available until (but not including) `resume_mutators` at which time
+    /// the current GC has just finished.
+    fn current_gc_may_move_object(&self) -> bool;
+
     /// An object is firstly reached by a sanity GC. So the object is reachable
     /// in the current GC, and all the GC work has been done for the object (such as
     /// tracing and releasing). A plan can implement this to
@@ -315,6 +325,9 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
             space.verify_side_metadata_sanity(&mut side_metadata_sanity_checker);
         })
     }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn publish_object(&self, _object: ObjectReference) {}
 }
 
 impl_downcast!(Plan assoc VM);
@@ -345,9 +358,10 @@ pub struct BasePlan<VM: VMBinding> {
     /// If VM space is present, it has some special interaction with the
     /// `memory_manager::is_mmtk_object` and the `memory_manager::is_in_mmtk_spaces` functions.
     ///
-    /// -   The `is_mmtk_object` funciton requires the valid object (VO) bit side metadata to identify objects,
-    ///     but currently we do not require the boot image to provide it, so it will not work if the
-    ///     address argument is in the VM space.
+    /// -   The functions `is_mmtk_object` and `find_object_from_internal_pointer` require
+    ///     the valid object (VO) bit side metadata to identify objects.
+    ///     If the binding maintains the VO bit for objects in VM spaces, those functions will work accordingly.
+    ///     Otherwise, calling them is undefined behavior.
     ///
     /// -   The `is_in_mmtk_spaces` currently returns `true` if the given object reference is in
     ///     the VM space.
@@ -385,11 +399,13 @@ impl<'a, VM: VMBinding> CreateSpecificPlanArgs<'a, VM> {
         &mut self,
         name: &'static str,
         zeroed: bool,
+        permission_exec: bool,
         vmrequest: VMRequest,
     ) -> PlanCreateSpaceArgs<VM> {
         PlanCreateSpaceArgs {
             name,
             zeroed,
+            permission_exec,
             vmrequest,
             global_side_metadata_specs: self.global_side_metadata_specs.clone(),
             vm_map: self.global_args.vm_map,
@@ -398,7 +414,7 @@ impl<'a, VM: VMBinding> CreateSpecificPlanArgs<'a, VM> {
             constraints: self.constraints,
             gc_trigger: self.global_args.gc_trigger.clone(),
             scheduler: self.global_args.scheduler.clone(),
-            options: &self.global_args.options,
+            options: self.global_args.options.clone(),
             global_state: self.global_args.state.clone(),
         }
     }
@@ -412,11 +428,13 @@ impl<VM: VMBinding> BasePlan<VM> {
             code_space: ImmortalSpace::new(args.get_space_args(
                 "code_space",
                 true,
+                true,
                 VMRequest::discontiguous(),
             )),
             #[cfg(feature = "code_space")]
             code_lo_space: ImmortalSpace::new(args.get_space_args(
                 "code_lo_space",
+                true,
                 true,
                 VMRequest::discontiguous(),
             )),
@@ -424,12 +442,14 @@ impl<VM: VMBinding> BasePlan<VM> {
             ro_space: ImmortalSpace::new(args.get_space_args(
                 "ro_space",
                 true,
+                false,
                 VMRequest::discontiguous(),
             )),
             #[cfg(feature = "vm_space")]
             vm_space: VMSpace::new(args.get_space_args(
                 "vm_space",
                 false,
+                false, // it doesn't matter -- we are not mmapping for VM space.
                 VMRequest::discontiguous(),
             )),
 
@@ -550,6 +570,37 @@ impl<VM: VMBinding> BasePlan<VM> {
 
         space_full || stress_force_gc || heap_full
     }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn publish_object(&self, _object: ObjectReference) {
+        #[cfg(feature = "code_space")]
+        if self.code_space.in_space(_object) {
+            trace!("publish_object: object in code space");
+            self.code_space.publish_object(_object);
+            return;
+        }
+
+        #[cfg(feature = "code_space")]
+        if self.code_lo_space.in_space(_object) {
+            trace!("publish_object: object in large code space");
+            self.code_lo_space.publish_object(_object);
+            return;
+        }
+
+        #[cfg(feature = "ro_space")]
+        if self.ro_space.in_space(_object) {
+            trace!("publish_object: object in ro_space space");
+            self.ro_space.publish_object(_object);
+            return;
+        }
+
+        #[cfg(feature = "vm_space")]
+        if self.vm_space.in_space(_object) {
+            trace!("publish_object: object in boot space");
+            self.vm_space.publish_object(_object);
+            return;
+        }
+    }
 }
 
 /**
@@ -574,15 +625,17 @@ impl<VM: VMBinding> CommonPlan<VM> {
             immortal: ImmortalSpace::new(args.get_space_args(
                 "immortal",
                 true,
+                false,
                 VMRequest::discontiguous(),
             )),
             los: LargeObjectSpace::new(
-                args.get_space_args("los", true, VMRequest::discontiguous()),
+                args.get_space_args("los", true, false, VMRequest::discontiguous()),
                 false,
             ),
             nonmoving: ImmortalSpace::new(args.get_space_args(
                 "nonmoving",
                 true,
+                false,
                 VMRequest::discontiguous(),
             )),
             base: BasePlan::new(args),
@@ -642,6 +695,30 @@ impl<VM: VMBinding> CommonPlan<VM> {
     pub fn get_nonmoving(&self) -> &ImmortalSpace<VM> {
         &self.nonmoving
     }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn publish_object(&self, object: ObjectReference) {
+        if self.immortal.in_space(object) {
+            trace!("publish_object: object in immortal space");
+            self.immortal.publish_object(object);
+            return;
+        }
+        if self.los.in_space(object) {
+            trace!("publish_object: object in los");
+            self.los.publish_object(
+                object,
+                #[cfg(feature = "debug_thread_local_gc_copying")]
+                _tls,
+            );
+            return;
+        }
+        if self.nonmoving.in_space(object) {
+            trace!("publish_object: object in nonmoving space");
+            self.nonmoving.publish_object(object);
+            return;
+        }
+        self.base.publish_object(object);
+    }
 }
 
 use crate::policy::gc_work::TraceKind;
@@ -691,7 +768,7 @@ pub trait PlanTraceObject<VM: VMBinding> {
     ///
     /// Arguments:
     /// * `trace`: the current transitive closure
-    /// * `object`: the object to trace. This is a non-nullable object reference.
+    /// * `object`: the object to trace.
     /// * `worker`: the GC worker that is tracing this object.
     fn trace_object<Q: ObjectQueue, const KIND: TraceKind>(
         &self,

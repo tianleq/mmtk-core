@@ -33,8 +33,6 @@ extern crate strum_macros;
 extern crate lazy_static;
 #[macro_use]
 extern crate log;
-#[cfg(target = "x86_64-unknown-linux-gnu")]
-extern crate atomic;
 extern crate atomic_traits;
 extern crate crossbeam;
 extern crate num_cpus;
@@ -49,6 +47,7 @@ mod mmtk;
 pub use mmtk::MMTKBuilder;
 pub(crate) use mmtk::MMAPPER;
 pub use mmtk::MMTK;
+use portable_atomic::AtomicUsize;
 
 mod global_state;
 
@@ -64,3 +63,47 @@ pub mod vm;
 pub use crate::plan::{
     AllocationSemantics, BarrierSelector, Mutator, MutatorContext, ObjectQueue, Plan,
 };
+
+pub static ALLOCATION_SIZE: AtomicUsize = AtomicUsize::new(0);
+pub static ALLOCATION_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub static REQUEST_SCOPE_ALLOCATION_SIZE: AtomicUsize = AtomicUsize::new(0);
+pub static REQUEST_SCOPE_ALLOCATION_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+pub static PUBLICATION_SIZE: AtomicUsize = AtomicUsize::new(0);
+pub static PUBLICATION_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub static REQUEST_SCOPE_PUBLICATION_SIZE: AtomicUsize = AtomicUsize::new(0);
+pub static REQUEST_SCOPE_PUBLICATION_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub static REQUEST_SCOPE_BARRIER_SLOW_PATH_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+pub struct PublicationStats {
+    publication_size: usize,
+    publication_count: usize,
+    request_scope_publication_size: usize,
+    request_scope_publication_count: usize,
+    allocation_size: usize,
+    allocation_count: usize,
+    request_scope_allocation_size: usize,
+    request_scope_allocation_count: usize,
+}
+
+impl PublicationStats {
+    pub fn reset(&mut self) {
+        self.allocation_count = 0;
+        self.allocation_size = 0;
+        self.publication_count = 0;
+        self.publication_size = 0;
+        self.request_scope_allocation_count = 0;
+        self.request_scope_allocation_size = 0;
+        self.request_scope_publication_count = 0;
+        self.request_scope_publication_size = 0;
+    }
+}
+
+lazy_static! {
+    pub static ref PUBLIC_KLASS_MAP: std::sync::Mutex<std::collections::HashMap<String, usize>> =
+        std::sync::Mutex::new(std::collections::HashMap::new());
+    pub static ref PER_THREAD_PUBLICATION_STATS_MAP: std::sync::Mutex<std::collections::HashMap<u32, PublicationStats>> =
+        std::sync::Mutex::new(std::collections::HashMap::new());
+    pub static ref MUTATOR_NAME_MAP: std::sync::Mutex<std::collections::HashMap<u32, String>> =
+        std::sync::Mutex::new(std::collections::HashMap::new());
+}

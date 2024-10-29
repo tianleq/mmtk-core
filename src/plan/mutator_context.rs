@@ -9,7 +9,6 @@ use crate::util::alloc::Allocator;
 use crate::util::{Address, ObjectReference};
 use crate::util::{VMMutatorThread, VMWorkerThread};
 use crate::vm::VMBinding;
-
 use enum_map::EnumMap;
 
 pub(crate) type SpaceMapping<VM> = Vec<(AllocatorSelector, &'static dyn Space<VM>)>;
@@ -95,6 +94,8 @@ pub struct Mutator<VM: VMBinding> {
     pub mutator_tls: VMMutatorThread,
     pub(crate) plan: &'static dyn Plan<VM = VM>,
     pub(crate) config: MutatorConfig<VM>,
+    #[cfg(feature = "publish_rate_analysis")]
+    pub mutator_id: u32,
 }
 
 impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
@@ -113,6 +114,45 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         offset: usize,
         allocator: AllocationSemantics,
     ) -> Address {
+        #[cfg(feature = "publish_rate_analysis")]
+        {
+            // The following only makes sense when allocation fast path is disabled
+            use crate::{
+                ALLOCATION_COUNT, ALLOCATION_SIZE, PER_THREAD_PUBLICATION_STATS_MAP,
+                REQUEST_SCOPE_ALLOCATION_COUNT, REQUEST_SCOPE_ALLOCATION_SIZE,
+            };
+            use std::sync::atomic::Ordering;
+
+            ALLOCATION_COUNT.fetch_add(1, Ordering::SeqCst);
+            ALLOCATION_SIZE.fetch_add(size, Ordering::SeqCst);
+            REQUEST_SCOPE_ALLOCATION_COUNT.fetch_add(1, Ordering::SeqCst);
+            REQUEST_SCOPE_ALLOCATION_SIZE.fetch_add(size, Ordering::SeqCst);
+            let mut stats = PER_THREAD_PUBLICATION_STATS_MAP.lock().unwrap();
+            if stats.contains_key(&self.mutator_id) {
+                let s = stats.get_mut(&self.mutator_id).unwrap();
+                s.allocation_count += 1;
+                s.allocation_size += size;
+                s.request_scope_allocation_count += 1;
+                s.request_scope_allocation_size += size;
+            } else {
+                let mutator_id = self.mutator_id;
+                // assert!(mutator_id < 1024);
+
+                stats.insert(
+                    mutator_id,
+                    crate::PublicationStats {
+                        publication_size: 0,
+                        publication_count: 0,
+                        request_scope_publication_size: 0,
+                        request_scope_publication_count: 0,
+                        allocation_size: size,
+                        allocation_count: 1,
+                        request_scope_allocation_size: size,
+                        request_scope_allocation_count: 1,
+                    },
+                );
+            }
+        }
         unsafe {
             self.allocators
                 .get_allocator_mut(self.config.allocator_mapping[allocator])
@@ -139,25 +179,36 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         &mut self,
         refer: ObjectReference,
         _bytes: usize,
-        allocator: AllocationSemantics,
+        semantics: AllocationSemantics,
     ) {
         unsafe {
             self.allocators
-                .get_allocator_mut(self.config.allocator_mapping[allocator])
+                .get_allocator_mut(self.config.allocator_mapping[semantics])
         }
         .get_space()
-        .initialize_object_metadata(refer, true)
+        .initialize_object_metadata(refer, true);
+
+        // Large object allocation always go through the slow-path, so it is fine to
+        // do the following book-keeping in post_alloc(only executed in slow-path)
+        #[cfg(feature = "thread_local_gc")]
+        {
+            use crate::util::alloc::LargeObjectAllocator;
+
+            if semantics == AllocationSemantics::Los {
+                // store los objects into a local set
+                let allocator = unsafe {
+                    self.allocators
+                        .get_allocator_mut(self.config.allocator_mapping[semantics])
+                        .downcast_mut::<LargeObjectAllocator<VM>>()
+                        .unwrap()
+                };
+                allocator.add_los_objects(refer);
+            }
+        }
     }
 
     fn get_tls(&self) -> VMMutatorThread {
         self.mutator_tls
-    }
-
-    /// Used by specialized barrier slow-path calls to avoid dynamic dispatches.
-    unsafe fn barrier_impl<B: Barrier<VM>>(&mut self) -> &mut B {
-        debug_assert!(self.barrier().is::<B>());
-        let (payload, _vptr) = std::mem::transmute::<_, (*mut B, *mut ())>(self.barrier());
-        &mut *payload
     }
 
     fn barrier(&mut self) -> &mut dyn Barrier<VM> {
@@ -316,11 +367,6 @@ pub trait MutatorContext<VM: VMBinding>: Send + 'static {
     fn get_tls(&self) -> VMMutatorThread;
     /// Get active barrier trait object
     fn barrier(&mut self) -> &mut dyn Barrier<VM>;
-    /// Force cast the barrier trait object to a concrete implementation.
-    ///
-    /// # Safety
-    /// The safety of this function is ensured by a down-cast check.
-    unsafe fn barrier_impl<B: Barrier<VM>>(&mut self) -> &mut B;
 }
 
 /// This is used for plans to indicate the number of allocators reserved for the plan.

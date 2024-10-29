@@ -1,8 +1,6 @@
 //! Read/Write barrier implementations.
 
-use self::metadata::public_bit::{is_public, set_public_bit};
-use super::PublishObjectClosure;
-use crate::vm::edge_shape::{Edge, MemorySlice};
+use crate::vm::slot::{MemorySlice, Slot};
 use crate::vm::ObjectModel;
 use crate::vm::Scanning;
 use crate::MMTK;
@@ -25,6 +23,8 @@ pub enum BarrierSelector {
     NoBarrier,
     /// Object remembering barrier is used.
     ObjectBarrier,
+    #[cfg(feature = "public_bit")]
+    PublicObjectMarkingBarrier,
 }
 
 impl BarrierSelector {
@@ -53,20 +53,20 @@ pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
     fn object_reference_write(
         &mut self,
         src: ObjectReference,
-        slot: VM::VMEdge,
+        slot: VM::VMSlot,
         target: ObjectReference,
     ) {
-        self.object_reference_write_pre(src, slot, target);
+        self.object_reference_write_pre(src, slot, Some(target));
         slot.store(target);
-        self.object_reference_write_post(src, slot, target);
+        self.object_reference_write_post(src, slot, Some(target));
     }
 
     /// Full pre-barrier for object reference write
     fn object_reference_write_pre(
         &mut self,
         _src: ObjectReference,
-        _slot: VM::VMEdge,
-        _target: ObjectReference,
+        _slot: VM::VMSlot,
+        _target: Option<ObjectReference>,
     ) {
     }
 
@@ -74,8 +74,8 @@ pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
     fn object_reference_write_post(
         &mut self,
         _src: ObjectReference,
-        _slot: VM::VMEdge,
-        _target: ObjectReference,
+        _slot: VM::VMSlot,
+        _target: Option<ObjectReference>,
     ) {
     }
 
@@ -84,8 +84,8 @@ pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
     fn object_reference_write_slow(
         &mut self,
         _src: ObjectReference,
-        _slot: VM::VMEdge,
-        _target: ObjectReference,
+        _slot: VM::VMSlot,
+        _target: Option<ObjectReference>,
     ) {
     }
 
@@ -111,6 +111,27 @@ pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
     ) {
     }
 
+    /// Full pre-barrier for array copy
+    fn object_array_copy_pre(
+        &mut self,
+        _src_base: ObjectReference,
+        _dst_base: ObjectReference,
+        _src: VM::VMMemorySlice,
+        _dst: VM::VMMemorySlice,
+    ) {
+    }
+
+    /// Object arraycopy write slow-path call.
+    /// This can be called either before or after the store, depend on the concrete barrier implementation.
+
+    fn object_array_copy_slow(
+        &mut self,
+        _src_base: ObjectReference,
+        _dst_base: ObjectReference,
+        _src: VM::VMMemorySlice,
+        _dst: VM::VMMemorySlice,
+    ) {
+    }
     /// Subsuming barrier for array copy
     fn memory_region_copy(&mut self, src: VM::VMMemorySlice, dst: VM::VMMemorySlice) {
         self.memory_region_copy_pre(src.clone(), dst.clone());
@@ -172,8 +193,8 @@ pub trait BarrierSemantics: 'static + Send {
     fn object_reference_write_slow(
         &mut self,
         src: ObjectReference,
-        slot: <Self::VM as VMBinding>::VMEdge,
-        target: ObjectReference,
+        slot: <Self::VM as VMBinding>::VMSlot,
+        target: Option<ObjectReference>,
     );
 
     /// Slow-path call for mempry slice copy operations. For example, array-copy operations.
@@ -185,6 +206,14 @@ pub trait BarrierSemantics: 'static + Send {
         dst: <Self::VM as VMBinding>::VMMemorySlice,
     );
 
+    /// Slow-path call for mempry slice copy operations. For example, array-copy operations.
+    fn object_array_copy_slow(
+        &mut self,
+        src_base: ObjectReference,
+        dst_base: ObjectReference,
+        src: <Self::VM as VMBinding>::VMMemorySlice,
+        dst: <Self::VM as VMBinding>::VMMemorySlice,
+    );
     /// Slow-path call for mempry slice copy operations. For example, array-copy operations.
     fn memory_region_copy_slow(
         &mut self,
@@ -251,8 +280,8 @@ impl<S: BarrierSemantics> Barrier<S::VM> for ObjectBarrier<S> {
     fn object_reference_write_post(
         &mut self,
         src: ObjectReference,
-        slot: <S::VM as VMBinding>::VMEdge,
-        target: ObjectReference,
+        slot: <S::VM as VMBinding>::VMSlot,
+        target: Option<ObjectReference>,
     ) {
         if self.object_is_unlogged(src) {
             self.object_reference_write_slow(src, slot, target);
@@ -262,8 +291,8 @@ impl<S: BarrierSemantics> Barrier<S::VM> for ObjectBarrier<S> {
     fn object_reference_write_slow(
         &mut self,
         src: ObjectReference,
-        slot: <S::VM as VMBinding>::VMEdge,
-        target: ObjectReference,
+        slot: <S::VM as VMBinding>::VMSlot,
+        target: Option<ObjectReference>,
     ) {
         if self.log_object(src) {
             self.semantics
@@ -282,150 +311,6 @@ impl<S: BarrierSemantics> Barrier<S::VM> for ObjectBarrier<S> {
     fn object_probable_write(&mut self, obj: ObjectReference) {
         if self.object_is_unlogged(obj) {
             self.semantics.object_probable_write_slow(obj);
-        }
-    }
-}
-
-pub struct PublicObjectMarkingBarrier<S: BarrierSemantics> {
-    semantics: S,
-}
-
-impl<S: BarrierSemantics> PublicObjectMarkingBarrier<S> {
-    pub fn new(semantics: S) -> Self {
-        Self { semantics }
-    }
-}
-
-impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
-    #[inline(always)]
-    fn object_reference_write_pre(
-        &mut self,
-        src: ObjectReference,
-        slot: <S::VM as VMBinding>::VMEdge,
-        target: ObjectReference,
-    ) {
-        // only trace when store private to a public object
-        if is_public::<S::VM>(src) {
-            if !target.is_null() && !is_public::<S::VM>(target) {
-                self.object_reference_write_slow(src, slot, target);
-            }
-        }
-    }
-
-    #[inline(always)]
-    fn object_reference_write_slow(
-        &mut self,
-        src: ObjectReference,
-        slot: <S::VM as VMBinding>::VMEdge,
-        target: ObjectReference,
-    ) {
-        debug_assert!(is_public::<S::VM>(src), "source check is broken");
-        debug_assert!(!target.is_null(), "target null check is broken");
-        debug_assert!(!is_public::<S::VM>(target), "target check is broken");
-        self.semantics
-            .object_reference_write_slow(src, slot, target);
-    }
-
-    #[inline(always)]
-    fn object_array_copy_pre(
-        &mut self,
-        src_base: ObjectReference,
-        dst_base: ObjectReference,
-        src: <S::VM as VMBinding>::VMMemorySlice,
-        dst: <S::VM as VMBinding>::VMMemorySlice,
-    ) {
-        debug_assert!(!src_base.is_null(), "source array is null");
-        debug_assert!(!dst_base.is_null(), "destination array is null");
-        // Only do publication when the dst array is public and src array is private
-        // a private array should not have public object as its elements
-        if is_public::<S::VM>(dst_base) {
-            if !is_public::<S::VM>(src_base) {
-                self.semantics
-                    .object_array_copy_slow(src_base, dst_base, src, dst);
-            }
-        }
-    }
-
-    // The following is not being used by openjdk
-    #[inline(always)]
-    fn object_array_copy_slow(
-        &mut self,
-        src_base: ObjectReference,
-        dst_base: ObjectReference,
-        src: <S::VM as VMBinding>::VMMemorySlice,
-        dst: <S::VM as VMBinding>::VMMemorySlice,
-    ) {
-        debug_assert!(
-            is_public::<S::VM>(dst_base),
-            "arraycopy slow path: destination array: {:?} is private",
-            dst_base
-        );
-        debug_assert!(
-            !is_public::<S::VM>(src_base),
-            "arraycopy slow path: source array: {:?} is public",
-            src_base
-        );
-        self.semantics
-            .object_array_copy_slow(src_base, dst_base, src, dst);
-    }
-}
-
-pub struct PublicObjectMarkingBarrierSemantics<VM: VMBinding> {
-    mmtk: &'static MMTK<VM>,
-}
-
-impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
-    pub fn new(mmtk: &'static MMTK<VM>) -> Self {
-        Self { mmtk }
-    }
-
-    fn trace_public_object(&mut self, _src: ObjectReference, value: ObjectReference) {
-        let mut closure = PublishObjectClosure::<VM>::new(self.mmtk);
-        set_public_bit::<VM>(value);
-        #[cfg(feature = "thread_local_gc")]
-        self.mmtk.get_plan().publish_object(
-            value,
-            #[cfg(feature = "debug_thread_local_gc_copying")]
-            self.tls,
-        );
-        VM::VMScanning::scan_object(VMWorkerThread(VMThread::UNINITIALIZED), value, &mut closure);
-        closure.do_closure();
-    }
-}
-
-impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM> {
-    type VM = VM;
-
-    fn object_reference_write_slow(
-        &mut self,
-        src: ObjectReference,
-        _slot: VM::VMEdge,
-        target: ObjectReference,
-    ) {
-        self.trace_public_object(src, target)
-    }
-
-    fn flush(&mut self) {}
-
-    fn memory_region_copy_slow(&mut self, _src: VM::VMMemorySlice, _dst: VM::VMMemorySlice) {}
-
-    fn object_array_copy_slow(
-        &mut self,
-        _src_base: ObjectReference,
-        _dst_base: ObjectReference,
-        src: <Self::VM as VMBinding>::VMMemorySlice,
-        _dst: <Self::VM as VMBinding>::VMMemorySlice,
-    ) {
-        // publish all objects in the src slice
-        for slot in src.iter_edges() {
-            // info!("array_copy_slow:: slot: {:?}", slot);
-            let object = slot.load();
-            // although src array is private, it may contain
-            // public objects, so need to rule out those public
-            // objects
-            if !object.is_null() && !is_public::<VM>(object) {
-                self.trace_public_object(_dst_base, object)
-            }
         }
     }
 }

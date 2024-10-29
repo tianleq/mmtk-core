@@ -8,6 +8,9 @@ use crate::util::linear_scan::{Region, RegionIterator};
 use crate::util::metadata::side_metadata::{MetadataByteArrayRef, SideMetadataSpec};
 #[cfg(feature = "vo_bit")]
 use crate::util::metadata::vo_bit;
+#[cfg(feature = "object_pinning")]
+use crate::util::metadata::MetadataSpec;
+use crate::util::object_enum::BlockMayHaveObjects;
 use crate::util::Address;
 use crate::vm::*;
 use std::sync::atomic::Ordering;
@@ -84,6 +87,12 @@ impl Region for Block {
     }
 }
 
+impl BlockMayHaveObjects for Block {
+    fn may_have_objects(&self) -> bool {
+        self.get_state() != BlockState::Unallocated
+    }
+}
+
 impl Block {
     /// Log pages in block
     pub const LOG_PAGES: usize = Self::LOG_BYTES - LOG_BYTES_IN_PAGE as usize;
@@ -101,6 +110,22 @@ impl Block {
     /// Block mark table (side)
     pub const MARK_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_MARK;
+
+    /// Block level public table (side)
+    #[cfg(feature = "thread_local_gc")]
+    pub const METADATA_TABLE: SideMetadataSpec =
+        crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_METADATA;
+
+    //       public bit
+    //       |
+    // 00000000
+    //        |
+    //        dirty bit
+    //
+    #[cfg(feature = "thread_local_gc")]
+    pub const PUBLIC_BIT: u8 = 0b10;
+    #[cfg(feature = "thread_local_gc")]
+    pub const DIRTY_BIT: u8 = 0b01;
 
     /// Get the chunk containing the block.
     pub fn chunk(&self) -> Chunk {
@@ -188,6 +213,13 @@ impl Block {
         RegionIterator::<Line>::new(self.start_line(), self.end_line())
     }
 
+    #[cfg(feature = "thread_local_gc")]
+    pub fn reset_metadata(&self) {
+        Self::METADATA_TABLE.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
+        // Also rest all lines within the block
+        Line::LINE_PUBLICATION_TABLE.bzero_metadata(self.start(), Self::BYTES);
+    }
+
     /// Sweep this block.
     /// Return true if the block is swept.
     pub fn sweep<VM: VMBinding>(
@@ -202,6 +234,18 @@ impl Block {
                 BlockState::Unmarked => {
                     #[cfg(feature = "vo_bit")]
                     vo_bit::helper::on_region_swept::<VM, _>(self, false);
+
+                    #[cfg(feature = "thread_local_gc")]
+                    self.reset_metadata();
+
+                    // If the pin bit is not on the side, we cannot bulk zero.
+                    // We shouldn't need to clear it here in that case, since the pin bit
+                    // should be overwritten at each object allocation. The same applies below
+                    // when we are sweeping on a line granularity.
+                    #[cfg(feature = "object_pinning")]
+                    if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_PINNING_BIT_SPEC {
+                        side.bzero_metadata(self.start(), Block::BYTES);
+                    }
 
                     // Release the block if it is allocated but not marked by the current GC.
                     space.release_block(*self);
@@ -235,6 +279,12 @@ impl Block {
                     #[cfg(feature = "immix_zero_on_release")]
                     crate::util::memory::zero(line.start(), Line::BYTES);
 
+                    // We need to clear the pin bit if it is on the side, as this line can be reused
+                    #[cfg(feature = "object_pinning")]
+                    if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_PINNING_BIT_SPEC {
+                        side.bzero_metadata(line.start(), Line::BYTES);
+                    }
+
                     prev_line_is_marked = false;
                 }
             }
@@ -242,6 +292,9 @@ impl Block {
             if marked_lines == 0 {
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_region_swept::<VM, _>(self, false);
+
+                #[cfg(feature = "thread_local_gc")]
+                self.reset_metadata();
 
                 // Release the block if non of its lines are marked.
                 space.release_block(*self);
@@ -300,6 +353,20 @@ impl Block {
                 }
             }
         }
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn publish(&self, dirty: bool) -> bool {
+        let val = if dirty {
+            Self::DIRTY_BIT | Self::PUBLIC_BIT
+        } else {
+            Self::PUBLIC_BIT
+        };
+
+        let prev_value =
+            Self::METADATA_TABLE.fetch_or_atomic::<u8>(self.start(), val, Ordering::SeqCst);
+
+        (prev_value & Self::PUBLIC_BIT) == 0
     }
 }
 

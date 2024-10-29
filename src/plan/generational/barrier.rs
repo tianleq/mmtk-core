@@ -116,6 +116,6 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>> BarrierSem
         _src: <Self::VM as VMBinding>::VMMemorySlice,
         _dst: <Self::VM as VMBinding>::VMMemorySlice,
     ) {
-        self.memory_region_copy_slow(src, dst)
+        unreachable!()
     }
 }

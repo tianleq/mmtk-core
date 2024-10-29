@@ -172,68 +172,69 @@ impl<F: Finalizable> FinalizableProcessor<F> {
 pub struct Finalization<E: ProcessEdgesWork>(PhantomData<E>);
 
 impl<E: ProcessEdgesWork> GCWork<E::VM> for Finalization<E> {
-    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
-        #[cfg(feature = "thread_local_gc")]
-        use crate::vm::ActivePlan;
+    fn do_work(&mut self, worker: &mut GCWorker<E::VM>, _mmtk: &'static MMTK<E::VM>) {
+        <E::VM as VMBinding>::VMCollection::process_final_refs::<E>(worker);
+        // #[cfg(feature = "thread_local_gc")]
+        // use crate::vm::ActivePlan;
 
-        if !*mmtk.options.no_reference_types {
-            // Rescan soft and weak references at the end of the transitive closure from resurrected
-            // objects.  New soft and weak references may be discovered during this.
-            let rescan = Box::new(RescanReferences {
-                soft: true,
-                weak: true,
-                phantom_data: PhantomData,
-            });
-            worker.scheduler().work_buckets[WorkBucketStage::FinalRefClosure].set_sentinel(rescan);
-        }
+        // if !*_mmtk.options.no_reference_types {
+        //     // Rescan soft and weak references at the end of the transitive closure from resurrected
+        //     // objects.  New soft and weak references may be discovered during this.
+        //     let rescan = Box::new(RescanReferences {
+        //         soft: true,
+        //         weak: true,
+        //         phantom_data: PhantomData,
+        //     });
+        //     worker.scheduler().work_buckets[WorkBucketStage::FinalRefClosure].set_sentinel(rescan);
+        // }
 
-        let mut finalizable_processor = mmtk.finalizable_processor.lock().unwrap();
-        debug!(
-            "Finalization, {} objects in candidates, {} objects ready to finalize",
-            finalizable_processor.candidates.len(),
-            finalizable_processor.ready_for_finalize.len()
-        );
-        #[cfg(not(feature = "debug_publish_object"))]
-        let mut w = E::new(vec![], false, mmtk, WorkBucketStage::FinalRefClosure);
-        #[cfg(feature = "debug_publish_object")]
-        let mut w = E::new(
-            vec![],
-            vec![],
-            false,
-            0,
-            mmtk,
-            WorkBucketStage::FinalRefClosure,
-        );
-        w.set_worker(worker);
-        #[cfg(feature = "thread_local_gc")]
-        for mutator in <E::VM as VMBinding>::VMActivePlan::mutators() {
-            let local_reday_for_finalization = mutator
-                .finalizable_candidates
-                .iter()
-                .map(|f| *f)
-                .filter(|f| !f.get_reference().is_live::<E::VM>())
-                .map(|f| {
-                    // publish private ready for finalize objects as they will be pushed to the global list
-                    crate::memory_manager::mmtk_publish_object(mmtk, Some(f.get_reference()));
-                    f
-                });
+        // let mut finalizable_processor = _mmtk.finalizable_processor.lock().unwrap();
+        // debug!(
+        //     "Finalization, {} objects in candidates, {} objects ready to finalize",
+        //     finalizable_processor.candidates.len(),
+        //     finalizable_processor.ready_for_finalize.len()
+        // );
+        // #[cfg(not(feature = "debug_publish_object"))]
+        // let mut w = E::new(vec![], false, _mmtk, WorkBucketStage::FinalRefClosure);
+        // #[cfg(feature = "debug_publish_object")]
+        // let mut w = E::new(
+        //     vec![],
+        //     vec![],
+        //     false,
+        //     0,
+        //     _mmtk,
+        //     WorkBucketStage::FinalRefClosure,
+        // );
+        // w.set_worker(worker);
+        // #[cfg(feature = "thread_local_gc")]
+        // for mutator in <E::VM as VMBinding>::VMActivePlan::mutators() {
+        //     let local_reday_for_finalization = mutator
+        //         .finalizable_candidates
+        //         .iter()
+        //         .map(|f| *f)
+        //         .filter(|f| !f.get_reference().is_live::<E::VM>())
+        //         .map(|f| {
+        //             // publish private ready for finalize objects as they will be pushed to the global list
+        //             crate::memory_manager::mmtk_publish_object(_mmtk, Some(f.get_reference()));
+        //             f
+        //         });
 
-            finalizable_processor.add_ready_for_finalize_objects(local_reday_for_finalization);
-            // get rid of dead objects from local finalizable list
-            mutator
-                .finalizable_candidates
-                .retain(|f| f.get_reference().is_live::<E::VM>());
+        //     finalizable_processor.add_ready_for_finalize_objects(local_reday_for_finalization);
+        //     // get rid of dead objects from local finalizable list
+        //     mutator
+        //         .finalizable_candidates
+        //         .retain(|f| f.get_reference().is_live::<E::VM>());
 
-            // make sure local finalizable objects are up-to-date
-            // This is necessary since defrag mutator might evacuate private objects
-            finalizable_processor.scan_thread_local(&mut w, &mut mutator.finalizable_candidates);
-        }
-        finalizable_processor.scan(worker.tls, &mut w, is_nursery_gc(mmtk.get_plan()));
-        debug!(
-            "Finished finalization, {} objects in candidates, {} objects ready to finalize",
-            finalizable_processor.candidates.len(),
-            finalizable_processor.ready_for_finalize.len()
-        );
+        //     // make sure local finalizable objects are up-to-date
+        //     // This is necessary since defrag mutator might evacuate private objects
+        //     finalizable_processor.scan_thread_local(&mut w, &mut mutator.finalizable_candidates);
+        // }
+        // finalizable_processor.scan(worker.tls, &mut w, is_nursery_gc(_mmtk.get_plan()));
+        // debug!(
+        //     "Finished finalization, {} objects in candidates, {} objects ready to finalize",
+        //     finalizable_processor.candidates.len(),
+        //     finalizable_processor.ready_for_finalize.len()
+        // );
     }
 }
 impl<E: ProcessEdgesWork> Finalization<E> {
@@ -265,6 +266,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ForwardFinalization<E> {
 
         finalizable_processor.forward_finalizable(&mut w, is_nursery_gc(mmtk.get_plan()));
         trace!("Finished forwarding finlizable");
+        panic!("should not reach here");
     }
 }
 impl<E: ProcessEdgesWork> ForwardFinalization<E> {

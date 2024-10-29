@@ -280,6 +280,10 @@ impl<VM: crate::vm::VMBinding> SlotVisitor<VM::VMSlot> for PublishObjectClosure<
     fn visit_slot(&mut self, _object: ObjectReference, slot: VM::VMSlot) {
         self.edge_buffer.push_back(slot);
     }
+
+    fn should_discover_references(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(feature = "public_bit")]

@@ -136,7 +136,7 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
                 s.request_scope_allocation_size += size;
             } else {
                 let mutator_id = self.mutator_id;
-                assert!(mutator_id < 1024);
+                // assert!(mutator_id < 1024);
 
                 stats.insert(
                     mutator_id,

@@ -249,12 +249,16 @@ impl Stats {
             let requests_time = self.requests_time.lock().unwrap().get_total(None);
 
             println!(
-                "request scope bytes publication rate: {}, {}",
+                "request scope bytes publication rate: {}, {}, {}, {}",
+                request_scope_publication_size,
+                request_scope_allocation_size,
                 request_scope_publication_size as f64 / request_scope_allocation_size as f64,
                 (request_scope_publication_size as f64 / requests_time as f64) * 1e9f64
             );
             println!(
-                "request scope objects publication rate: {}, {}",
+                "request scope objects publication rate: {}, {}, {}, {}",
+                request_scope_publication_count,
+                request_scope_allocation_count,
                 request_scope_publication_count as f64 / request_scope_allocation_count as f64,
                 (request_scope_publication_count as f64 / requests_time as f64) * 1e9f64
             );

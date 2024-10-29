@@ -161,10 +161,11 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
 
         crate::util::metadata::public_bit::set_public_bit::<VM>(object);
 
+        #[cfg(feature = "publish_rate_analysis")]
         let mut klass_names = Vec::new();
 
         #[cfg(feature = "thread_local_gc")]
-        self.mmtk.get_plan().publish_object(value);
+        self._mmtk.get_plan().publish_object(object);
         VM::VMScanning::scan_object(
             crate::util::VMWorkerThread(crate::util::VMThread::UNINITIALIZED),
             object,

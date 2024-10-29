@@ -448,7 +448,11 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
         #[cfg(feature = "publish_rate_analysis")] tls: VMMutatorThread,
         mmtk: &'static crate::MMTK<VM>,
     ) -> Self {
-        Self { tls, mmtk }
+        Self {
+            #[cfg(feature = "publish_rate_analysis")]
+            tls,
+            mmtk,
+        }
     }
 
     fn trace_public_object(&mut self, _src: ObjectReference, value: ObjectReference) {
@@ -456,7 +460,11 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
 
         let mut closure = super::tracing::PublishObjectClosure::<VM>::new(self.mmtk);
 
-        closure.do_closure(value, self.tls);
+        closure.do_closure(
+            value,
+            #[cfg(feature = "publish_rate_analysis")]
+            self.tls,
+        );
     }
 }
 

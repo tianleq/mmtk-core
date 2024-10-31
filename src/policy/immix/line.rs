@@ -178,13 +178,13 @@ impl Line {
         state: u8,
     ) -> (Line, Line) {
         debug_assert!(!super::BLOCK_ONLY);
-        #[cfg(not(feature = "debug_publish_object"))]
+        #[cfg(not(feature = "extra_header"))]
         let start = object.to_object_start::<VM>();
-        #[cfg(not(feature = "debug_publish_object"))]
+        #[cfg(not(feature = "extra_header"))]
         let end = start + VM::VMObjectModel::get_current_size(object);
-        #[cfg(feature = "debug_publish_object")]
+        #[cfg(feature = "extra_header")]
         let start = object.to_object_start::<VM>() - VM::EXTRA_HEADER_BYTES;
-        #[cfg(feature = "debug_publish_object")]
+        #[cfg(feature = "extra_header")]
         let end = start + VM::VMObjectModel::get_current_size(object) + VM::EXTRA_HEADER_BYTES;
         let start_line = Line::from_unaligned_address(start);
         let mut end_line = Line::from_unaligned_address(end);

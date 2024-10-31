@@ -601,3 +601,37 @@ pub(crate) static ACTIVE_LOCAL_GC_COUNTER: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(0);
 pub(crate) static DEFAULT_MAX_CONCURRENT_LOCAL_GC: u32 = 3;
 pub(crate) static DEFAULT_MAX_LOCAL_COPY_RESERVE: u8 = 4;
+pub(crate) static BYTES_EVACUATED: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+pub(crate) static BYTES_LEFT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+pub(crate) static PUBLIC_BYTES_TRACED: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+pub(crate) static REQUESTS_STATS: std::sync::Mutex<Vec<RequestScopeStats>> =
+    std::sync::Mutex::new(Vec::new());
+
+#[derive(Default, Copy, Clone)]
+pub(crate) struct RequestScopeStats {
+    pub bytes_allocated: u32,
+    pub objects_allocated: u32,
+    pub bytes_published: u32,
+    pub objects_published: u32,
+    pub bytes_survived: u32,
+    pub objects_survived: u32,
+    pub total_bytes_survived: u32,
+    pub total_objects_survived: u32,
+}
+
+impl RequestScopeStats {
+    pub fn reset(&mut self) {
+        self.bytes_allocated = 0;
+        self.objects_allocated = 0;
+        self.bytes_published = 0;
+        self.objects_published = 0;
+        self.bytes_survived = 0;
+        self.objects_survived = 0;
+        self.total_bytes_survived = 0;
+        self.total_objects_survived = 0;
+    }
+}

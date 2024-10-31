@@ -1020,12 +1020,18 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_object_forwarded::<VM>(new_object);
 
-                #[cfg(all(feature = "debug_publish_object", feature = "thread_local_gc"))]
+                #[cfg(all(feature = "extra_header", feature = "thread_local_gc"))]
                 {
+                    // copy extra header over
+                    let metadata =
+                        crate::util::object_extra_header_metadata::get_extra_header_metadata::<
+                            VM,
+                            usize,
+                        >(object);
                     crate::util::object_extra_header_metadata::store_extra_header_metadata::<
                         VM,
                         usize,
-                    >(new_object, usize::try_from(u32::MAX).unwrap());
+                    >(new_object, metadata);
                 }
                 new_object
             };
@@ -1148,6 +1154,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         // public block is now defrag source, so simply leave those public
         // objects in place
         if crate::util::metadata::public_bit::is_public::<VM>(object) {
+            crate::scheduler::thread_local_gc_work::PUBLIC_BYTES_TRACED.fetch_add(
+                VM::VMObjectModel::get_current_size(object),
+                Ordering::SeqCst,
+            );
             return ThreadlocalTracedObjectType::Scanned(object);
         }
 
@@ -1194,13 +1204,19 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 block.set_state(BlockState::Marked);
                 // set the ditry bit
                 block.taint();
-
+                crate::scheduler::thread_local_gc_work::BYTES_LEFT.fetch_add(
+                    VM::VMObjectModel::get_current_size(object),
+                    Ordering::SeqCst,
+                );
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_object_marked::<VM>(object);
                 object
             } else {
                 // We are forwarding objects.
-
+                crate::scheduler::thread_local_gc_work::BYTES_EVACUATED.fetch_add(
+                    VM::VMObjectModel::get_current_size(object),
+                    Ordering::SeqCst,
+                );
                 // Clippy complains if the "vo_bit" feature is not enabled.
                 #[allow(clippy::let_and_return)]
                 let new_object = object_forwarding::thread_local_forward_object::<VM>(
@@ -1215,31 +1231,35 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_object_forwarded::<VM>(new_object);
 
-                #[cfg(feature = "debug_publish_object")]
+                #[cfg(feature = "extra_header")]
                 {
-                    // copy metadata (object owner) over
+                    // copy metadata over
                     let metadata =
                         crate::util::object_extra_header_metadata::get_extra_header_metadata::<
                             VM,
                             usize,
                         >(object);
-                    debug_assert!(
-                        usize::try_from(Block::containing::<VM>(object).owner()).unwrap()
-                            == metadata
-                                & crate::util::object_extra_header_metadata::BOTTOM_HALF_MASK
-                            || Block::containing::<VM>(object).is_block_published(),
-                        "owner: {:?}, metadata: {:?}",
-                        Block::containing::<VM>(object).owner(),
-                        metadata
-                    );
-                    debug_assert!(
-                        metadata & crate::util::object_extra_header_metadata::BOTTOM_HALF_MASK
-                            == usize::try_from(mutator.mutator_id).unwrap(),
-                        "object: {:?} owner: {:?} | mutator: {:?}",
-                        object,
-                        metadata,
-                        mutator.mutator_id
-                    );
+                    #[cfg(feature = "debug_publish_object")]
+                    {
+                        debug_assert!(
+                            usize::try_from(Block::containing::<VM>(object).owner()).unwrap()
+                                == metadata
+                                    & crate::util::object_extra_header_metadata::BOTTOM_HALF_MASK
+                                || Block::containing::<VM>(object).is_block_published(),
+                            "owner: {:?}, metadata: {:?}",
+                            Block::containing::<VM>(object).owner(),
+                            metadata
+                        );
+                        debug_assert!(
+                            metadata & crate::util::object_extra_header_metadata::BOTTOM_HALF_MASK
+                                == usize::try_from(mutator.mutator_id).unwrap(),
+                            "object: {:?} owner: {:?} | mutator: {:?}",
+                            object,
+                            metadata,
+                            mutator.mutator_id
+                        );
+                    }
+
                     crate::util::object_extra_header_metadata::store_extra_header_metadata::<
                         VM,
                         usize,
@@ -1254,6 +1274,23 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             );
 
             self.unlog_object_if_needed(new_object);
+            #[cfg(feature = "extra_header")]
+            {
+                use crate::util::object_extra_header_metadata::{SHIFT, TOP_HALF_MASK};
+                let metadata = crate::util::object_extra_header_metadata::get_extra_header_metadata::<
+                    VM,
+                    usize,
+                >(new_object);
+                let request_id = (metadata & TOP_HALF_MASK) >> SHIFT;
+                if mutator.request_id == request_id {
+                    mutator.request_stats.bytes_survived +=
+                        u32::try_from(VM::VMObjectModel::get_current_size(new_object)).unwrap();
+                    mutator.request_stats.objects_survived += 1;
+                }
+                mutator.request_stats.total_bytes_survived +=
+                    u32::try_from(VM::VMObjectModel::get_current_size(new_object)).unwrap();
+                mutator.request_stats.total_objects_survived += 1;
+            }
             ThreadlocalTracedObjectType::ToBeScanned(new_object)
         }
     }
@@ -1348,6 +1385,21 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                         );
                         new_object
                     };
+
+                    #[cfg(feature = "extra_header")]
+                    {
+                        // copy metadata over
+                        let metadata =
+                            crate::util::object_extra_header_metadata::get_extra_header_metadata::<
+                                VM,
+                                usize,
+                            >(object);
+
+                        crate::util::object_extra_header_metadata::store_extra_header_metadata::<
+                            VM,
+                            usize,
+                        >(new_object, metadata);
+                    }
 
                     #[cfg(feature = "vo_bit")]
                     vo_bit::helper::on_object_forwarded::<VM>(new_object);

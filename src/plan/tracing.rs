@@ -187,8 +187,8 @@ pub struct PublishObjectClosure<VM: crate::vm::VMBinding> {
     slot_buffer: std::collections::VecDeque<VM::VMSlot>,
     #[cfg(feature = "debug_publish_object")]
     mutator_id: u32,
-    #[cfg(feature = "debug_thread_local_gc_copying")]
-    tls: VMMutatorThread,
+    #[cfg(any(feature = "debug_thread_local_gc_copying", feature = "extra_header"))]
+    tls: crate::util::VMMutatorThread,
 }
 
 #[cfg(feature = "public_bit")]
@@ -196,20 +196,24 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
     pub fn new(
         mmtk: &'static MMTK<VM>,
         #[cfg(feature = "debug_publish_object")] mutator_id: u32,
-        #[cfg(feature = "debug_thread_local_gc_copying")] tls: VMMutatorThread,
+        #[cfg(any(feature = "debug_thread_local_gc_copying", feature = "extra_header"))]
+        tls: crate::util::VMMutatorThread,
     ) -> Self {
         PublishObjectClosure {
             _mmtk: mmtk,
             slot_buffer: std::collections::VecDeque::new(),
             #[cfg(feature = "debug_publish_object")]
             mutator_id,
-            #[cfg(feature = "debug_thread_local_gc_copying")]
+            #[cfg(any(feature = "debug_thread_local_gc_copying", feature = "extra_header"))]
             tls,
         }
     }
 
-    pub fn do_closure(&mut self) {
-        #[cfg(feature = "debug_thread_local_gc_copying")]
+    pub fn do_closure(&mut self, object: ObjectReference) {
+        #[cfg(any(feature = "debug_thread_local_gc_copying", feature = "extra_header"))]
+        use crate::vm::ActivePlan;
+
+        #[cfg(any(feature = "debug_thread_local_gc_copying", feature = "extra_header"))]
         let mut mutator = if VM::VMActivePlan::is_mutator(self.tls.0) {
             Some(VM::VMActivePlan::mutator(self.tls))
         } else {
@@ -217,7 +221,29 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
         };
         #[cfg(feature = "debug_thread_local_gc_copying")]
         let mut number_of_bytes_published = 0;
+        #[cfg(feature = "debug_thread_local_gc_copying")]
+        let mut number_of_objects_published = 0;
 
+        crate::util::metadata::public_bit::set_public_bit::<VM>(object);
+        #[cfg(feature = "thread_local_gc")]
+        self._mmtk.get_plan().publish_object(object);
+
+        VM::VMScanning::scan_object(
+            crate::util::VMWorkerThread(crate::util::VMThread::UNINITIALIZED),
+            object,
+            self,
+        );
+
+        let mut publication_count = 0;
+        let mut publication_size = 0;
+        #[cfg(feature = "thread_local_gc")]
+        {
+            use crate::vm::ObjectModel;
+
+            let object_size = VM::VMObjectModel::get_current_size(object);
+            publication_count += 1;
+            publication_size += object_size;
+        }
         while !self.slot_buffer.is_empty() {
             let slot = self.slot_buffer.pop_front().unwrap();
             let object = slot.load();
@@ -245,7 +271,14 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
                     object,
                     self,
                 );
+                #[cfg(feature = "thread_local_gc")]
+                {
+                    use crate::vm::ObjectModel;
 
+                    let object_size = VM::VMObjectModel::get_current_size(object);
+                    publication_count += 1;
+                    publication_size += object_size;
+                }
                 #[cfg(feature = "debug_thread_local_gc_copying")]
                 {
                     use crate::vm::ObjectModel;
@@ -254,6 +287,30 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
                         m.stats.bytes_published += VM::VMObjectModel::get_current_size(object);
                     }
                     number_of_bytes_published += VM::VMObjectModel::get_current_size(object);
+                }
+            }
+        }
+        #[cfg(feature = "thread_local_gc")]
+        {
+            use crate::PUBLICATION_COUNT;
+            use crate::PUBLICATION_SIZE;
+            use crate::REQUEST_SCOPE_PUBLICATION_COUNT;
+            use crate::REQUEST_SCOPE_PUBLICATION_SIZE;
+
+            PUBLICATION_COUNT.fetch_add(publication_count, std::sync::atomic::Ordering::SeqCst);
+            PUBLICATION_SIZE.fetch_add(publication_size, std::sync::atomic::Ordering::SeqCst);
+            REQUEST_SCOPE_PUBLICATION_COUNT
+                .fetch_add(publication_count, std::sync::atomic::Ordering::SeqCst);
+            REQUEST_SCOPE_PUBLICATION_SIZE
+                .fetch_add(publication_size, std::sync::atomic::Ordering::SeqCst);
+            #[cfg(feature = "extra_header")]
+            {
+                if let Some(ref mut m) = mutator {
+                    if m.in_request {
+                        m.request_stats.bytes_published += u32::try_from(publication_size).unwrap();
+                        m.request_stats.objects_published +=
+                            u32::try_from(publication_count).unwrap();
+                    }
                 }
             }
         }

@@ -1,6 +1,6 @@
 //! Read/Write barrier implementations.
 #[cfg(feature = "public_bit")]
-use crate::util::metadata::public_bit::{is_public, set_public_bit};
+use crate::util::metadata::public_bit::is_public;
 use crate::vm::slot::{MemorySlice, Slot};
 use crate::vm::ObjectModel;
 
@@ -13,8 +13,6 @@ use downcast_rs::Downcast;
 
 #[cfg(feature = "public_bit")]
 use super::tracing::PublishObjectClosure;
-#[cfg(feature = "public_bit")]
-use crate::vm::Scanning;
 #[cfg(feature = "public_bit")]
 use crate::MMTK;
 
@@ -442,7 +440,7 @@ pub struct PublicObjectMarkingBarrierSemantics<VM: VMBinding> {
     mmtk: &'static MMTK<VM>,
     #[cfg(feature = "debug_publish_object")]
     mutator_id: u32,
-    #[cfg(feature = "debug_thread_local_gc_copying")]
+    #[cfg(any(feature = "debug_thread_local_gc_copying", feature = "extra_header"))]
     tls: VMMutatorThread,
 }
 
@@ -451,13 +449,14 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
     pub fn new(
         mmtk: &'static MMTK<VM>,
         #[cfg(feature = "debug_publish_object")] mutator_id: u32,
-        #[cfg(feature = "debug_thread_local_gc_copying")] tls: VMMutatorThread,
+        #[cfg(any(feature = "debug_thread_local_gc_copying", feature = "extra_header"))]
+        tls: VMMutatorThread,
     ) -> Self {
         Self {
             mmtk,
             #[cfg(feature = "debug_publish_object")]
             mutator_id,
-            #[cfg(feature = "debug_thread_local_gc_copying")]
+            #[cfg(any(feature = "debug_thread_local_gc_copying", feature = "extra_header"))]
             tls,
         }
     }
@@ -467,21 +466,21 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
             self.mmtk,
             #[cfg(feature = "debug_publish_object")]
             self.mutator_id,
-            #[cfg(feature = "debug_thread_local_gc_copying")]
+            #[cfg(any(feature = "debug_thread_local_gc_copying", feature = "extra_header"))]
             self.tls,
         );
-        #[cfg(feature = "debug_publish_object")]
-        set_public_bit::<VM>(value, Some(self.mutator_id));
-        #[cfg(not(feature = "debug_publish_object"))]
-        set_public_bit::<VM>(value);
-        #[cfg(feature = "thread_local_gc")]
-        self.mmtk.get_plan().publish_object(
-            value,
-            #[cfg(feature = "debug_thread_local_gc_copying")]
-            self.tls,
-        );
-        VM::VMScanning::scan_object(VMWorkerThread(VMThread::UNINITIALIZED), value, &mut closure);
-        closure.do_closure();
+        // #[cfg(feature = "debug_publish_object")]
+        // set_public_bit::<VM>(value, Some(self.mutator_id));
+        // #[cfg(not(feature = "debug_publish_object"))]
+        // set_public_bit::<VM>(value);
+        // #[cfg(feature = "thread_local_gc")]
+        // self.mmtk.get_plan().publish_object(
+        //     value,
+        //     #[cfg(feature = "debug_thread_local_gc_copying")]
+        //     self.tls,
+        // );
+        // VM::VMScanning::scan_object(VMWorkerThread(VMThread::UNINITIALIZED), value, &mut closure);
+        closure.do_closure(value);
 
         #[cfg(feature = "debug_thread_local_gc_copying")]
         {

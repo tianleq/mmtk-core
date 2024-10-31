@@ -94,7 +94,7 @@ pub fn create_ss_mutator<VM: VMBinding>(
             mmtk,
             #[cfg(feature = "debug_publish_object")]
             mutator_id,
-            #[cfg(feature = "debug_thread_local_gc_copying")]
+            #[cfg(any(feature = "debug_thread_local_gc_copying", feature = "extra_header"))]
             mutator_tls,
         ),
     ));
@@ -115,12 +115,19 @@ pub fn create_ss_mutator<VM: VMBinding>(
 
         #[cfg(any(
             feature = "debug_thread_local_gc_copying",
-            feature = "debug_publish_object"
+            feature = "debug_publish_object",
+            feature = "extra_header"
         ))]
         request_id: 0,
         #[cfg(feature = "debug_thread_local_gc_copying")]
         stats: Box::new(crate::util::LocalGCStatistics::default()),
         #[cfg(feature = "thread_local_gc_copying")]
         local_allocation_size: 0,
+        #[cfg(feature = "extra_header")]
+        in_request: false,
+        #[cfg(feature = "extra_header")]
+        request_stats: Box::new(
+            crate::scheduler::thread_local_gc_work::RequestScopeStats::default(),
+        ),
     }
 }

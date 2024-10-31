@@ -44,6 +44,8 @@ extern crate static_assertions;
 extern crate probe;
 
 mod mmtk;
+use std::sync::atomic::AtomicUsize;
+
 pub use mmtk::MMTKBuilder;
 pub(crate) use mmtk::MMAPPER;
 pub use mmtk::MMTK;
@@ -62,3 +64,13 @@ pub mod vm;
 pub use crate::plan::{
     AllocationSemantics, BarrierSelector, Mutator, MutatorContext, ObjectQueue, Plan,
 };
+
+pub static ALLOCATION_SIZE: AtomicUsize = AtomicUsize::new(0);
+pub static ALLOCATION_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub static REQUEST_SCOPE_ALLOCATION_SIZE: AtomicUsize = AtomicUsize::new(0);
+pub static REQUEST_SCOPE_ALLOCATION_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+pub static PUBLICATION_SIZE: AtomicUsize = AtomicUsize::new(0);
+pub static PUBLICATION_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub static REQUEST_SCOPE_PUBLICATION_SIZE: AtomicUsize = AtomicUsize::new(0);
+pub static REQUEST_SCOPE_PUBLICATION_COUNT: AtomicUsize = AtomicUsize::new(0);

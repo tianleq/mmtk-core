@@ -28,7 +28,6 @@ use crate::util::{Address, ObjectReference};
 use crate::vm::slot::MemorySlice;
 use crate::vm::ActivePlan;
 use crate::vm::ReferenceGlue;
-use crate::vm::Scanning;
 use crate::vm::VMBinding;
 #[cfg(feature = "thread_local_gc")]
 use std::sync::atomic::Ordering;
@@ -738,6 +737,21 @@ pub fn add_phantom_candidate<VM: VMBinding>(mmtk: &MMTK<VM>, reff: ObjectReferen
 /// * `tls`: The thread that calls the function (and triggers a collection).
 pub fn harness_begin<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
     mmtk.harness_begin(tls);
+    #[cfg(feature = "thread_local_gc")]
+    {
+        {
+            use crate::ALLOCATION_COUNT;
+            use crate::ALLOCATION_SIZE;
+            use crate::PUBLICATION_COUNT;
+            use crate::PUBLICATION_SIZE;
+            use std::sync::atomic::Ordering::Release;
+
+            ALLOCATION_COUNT.store(0, Release);
+            ALLOCATION_SIZE.store(0, Release);
+            PUBLICATION_COUNT.store(0, Release);
+            PUBLICATION_SIZE.store(0, Release);
+        }
+    }
 }
 
 /// Generic hook to allow benchmarks to be harnessed. We stop collecting
@@ -912,7 +926,10 @@ pub fn add_work_packets<VM: VMBinding>(
     mmtk.scheduler.work_buckets[bucket].bulk_add(packets)
 }
 
-#[cfg(all(feature = "public_bit", not(feature = "debug_thread_local_gc_copying")))]
+#[cfg(all(
+    feature = "public_bit",
+    not(any(feature = "debug_thread_local_gc_copying", feature = "extra_header"))
+))]
 pub fn mmtk_set_public_bit<VM: VMBinding>(_mmtk: &'static MMTK<VM>, object: ObjectReference) {
     #[cfg(feature = "debug_publish_object")]
     crate::util::metadata::public_bit::set_public_bit::<VM>(object, None);
@@ -920,9 +937,29 @@ pub fn mmtk_set_public_bit<VM: VMBinding>(_mmtk: &'static MMTK<VM>, object: Obje
     crate::util::metadata::public_bit::set_public_bit::<VM>(object);
     #[cfg(feature = "thread_local_gc")]
     _mmtk.get_plan().publish_object(object);
+    #[cfg(feature = "thread_local_gc")]
+    {
+        use crate::vm::ObjectModel;
+
+        use crate::PUBLICATION_COUNT;
+        use crate::PUBLICATION_SIZE;
+
+        use crate::REQUEST_SCOPE_PUBLICATION_COUNT;
+        use crate::REQUEST_SCOPE_PUBLICATION_SIZE;
+
+        let object_size = VM::VMObjectModel::get_current_size(object);
+
+        PUBLICATION_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        PUBLICATION_SIZE.fetch_add(object_size, std::sync::atomic::Ordering::SeqCst);
+        REQUEST_SCOPE_PUBLICATION_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        REQUEST_SCOPE_PUBLICATION_SIZE.fetch_add(object_size, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
-#[cfg(all(feature = "public_bit", not(feature = "debug_thread_local_gc_copying")))]
+#[cfg(all(
+    feature = "public_bit",
+    not(any(feature = "debug_thread_local_gc_copying", feature = "extra_header"))
+))]
 pub fn mmtk_publish_object<VM: VMBinding>(
     _mmtk: &'static MMTK<VM>,
     _object: Option<ObjectReference>,
@@ -939,48 +976,78 @@ pub fn mmtk_publish_object<VM: VMBinding>(
                 u32::MAX,
             );
 
-        mmtk_set_public_bit(_mmtk, object);
-        // Publish all the descendants
-        VM::VMScanning::scan_object(
-            VMWorkerThread(VMThread::UNINITIALIZED),
-            object,
-            &mut closure,
-        );
-        closure.do_closure();
+        // mmtk_set_public_bit(_mmtk, object);
+        // // Publish all the descendants
+        // VM::VMScanning::scan_object(
+        //     VMWorkerThread(VMThread::UNINITIALIZED),
+        //     object,
+        //     &mut closure,
+        // );
+        closure.do_closure(object);
     } else {
         return;
     }
 }
 
-#[cfg(all(feature = "public_bit", feature = "debug_thread_local_gc_copying"))]
+#[cfg(all(
+    feature = "public_bit",
+    any(feature = "debug_thread_local_gc_copying", feature = "extra_header")
+))]
 pub fn mmtk_set_public_bit<VM: VMBinding>(
     _mmtk: &'static MMTK<VM>,
     object: ObjectReference,
     _tls: VMMutatorThread,
 ) {
-    use crate::util::{GLOBAL_GC_STATISTICS, TOTAL_PU8LISHED_BYTES};
-    use crate::vm::ObjectModel;
+    // use crate::util::{GLOBAL_GC_STATISTICS, TOTAL_PU8LISHED_BYTES};
+    // use crate::vm::ObjectModel;
 
-    debug_assert!(!object.is_null(), "object is null!");
     #[cfg(feature = "debug_publish_object")]
     crate::util::metadata::public_bit::set_public_bit::<VM>(object, None);
     #[cfg(not(feature = "debug_publish_object"))]
     crate::util::metadata::public_bit::set_public_bit::<VM>(object);
     #[cfg(feature = "thread_local_gc")]
-    _mmtk.get_plan().publish_object(object, _tls);
-    if VM::VMActivePlan::is_mutator(_tls.0) {
-        let mutator = VM::VMActivePlan::mutator(_tls);
-        mutator.stats.bytes_published += VM::VMObjectModel::get_current_size(object);
+    _mmtk.get_plan().publish_object(object);
+    #[cfg(feature = "thread_local_gc")]
+    {
+        use crate::vm::ObjectModel;
+
+        use crate::PUBLICATION_COUNT;
+        use crate::PUBLICATION_SIZE;
+
+        use crate::REQUEST_SCOPE_PUBLICATION_COUNT;
+        use crate::REQUEST_SCOPE_PUBLICATION_SIZE;
+
+        let object_size = VM::VMObjectModel::get_current_size(object);
+
+        PUBLICATION_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        PUBLICATION_SIZE.fetch_add(object_size, std::sync::atomic::Ordering::SeqCst);
+        REQUEST_SCOPE_PUBLICATION_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        REQUEST_SCOPE_PUBLICATION_SIZE.fetch_add(object_size, std::sync::atomic::Ordering::SeqCst);
+        #[cfg(feature = "extra_header")]
+        {
+            if VM::VMActivePlan::is_mutator(_tls.0) {
+                let mutator = VM::VMActivePlan::mutator(_tls);
+                if mutator.in_request {
+                    mutator.request_stats.bytes_published +=
+                        u32::try_from(VM::VMObjectModel::get_current_size(object)).unwrap();
+                    mutator.request_stats.objects_published += 1;
+                }
+            }
+        }
     }
-    let mut guard = GLOBAL_GC_STATISTICS.lock().unwrap();
-    guard.bytes_published += VM::VMObjectModel::get_current_size(object);
-    TOTAL_PU8LISHED_BYTES.fetch_add(
-        VM::VMObjectModel::get_current_size(object),
-        Ordering::SeqCst,
-    );
+
+    // let mut guard = GLOBAL_GC_STATISTICS.lock().unwrap();
+    // guard.bytes_published += VM::VMObjectModel::get_current_size(object);
+    // TOTAL_PU8LISHED_BYTES.fetch_add(
+    //     VM::VMObjectModel::get_current_size(object),
+    //     Ordering::SeqCst,
+    // );
 }
 
-#[cfg(all(feature = "public_bit", feature = "debug_thread_local_gc_copying"))]
+#[cfg(all(
+    feature = "public_bit",
+    any(feature = "debug_thread_local_gc_copying", feature = "extra_header")
+))]
 pub fn mmtk_publish_object<VM: VMBinding>(
     _mmtk: &'static MMTK<VM>,
     _object: Option<ObjectReference>,
@@ -996,18 +1063,18 @@ pub fn mmtk_publish_object<VM: VMBinding>(
                 _mmtk,
                 #[cfg(feature = "debug_publish_object")]
                 u32::MAX,
-                #[cfg(feature = "debug_thread_local_gc_copying")]
+                #[cfg(any(feature = "debug_thread_local_gc_copying", feature = "extra_header"))]
                 _tls,
             );
 
-        mmtk_set_public_bit(_mmtk, objec, _tls);
-        // Publish all the descendants
-        VM::VMScanning::scan_object(
-            VMWorkerThread(VMThread::UNINITIALIZED),
-            object,
-            &mut closure,
-        );
-        closure.do_closure();
+        // mmtk_set_public_bit(_mmtk, object, _tls);
+        // // Publish all the descendants
+        // VM::VMScanning::scan_object(
+        //     VMWorkerThread(VMThread::UNINITIALIZED),
+        //     object,
+        //     &mut closure,
+        // );
+        closure.do_closure(object);
     } else {
         return;
     }
@@ -1083,6 +1150,19 @@ pub fn compute_mutator_mem_layout_checksum<VM: VMBinding>() -> usize {
 /// * `mmtk`: A reference to an MMTk instance.
 /// * `tls`: The thread that calls the function (and triggers a collection).
 pub fn request_starting<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
+    #[cfg(feature = "thread_local_gc")]
+    {
+        use crate::REQUEST_SCOPE_ALLOCATION_COUNT;
+        use crate::REQUEST_SCOPE_ALLOCATION_SIZE;
+        use crate::REQUEST_SCOPE_PUBLICATION_COUNT;
+        use crate::REQUEST_SCOPE_PUBLICATION_SIZE;
+        use std::sync::atomic::Ordering::Release;
+
+        REQUEST_SCOPE_ALLOCATION_COUNT.store(0, Release);
+        REQUEST_SCOPE_ALLOCATION_SIZE.store(0, Release);
+        REQUEST_SCOPE_PUBLICATION_COUNT.store(0, Release);
+        REQUEST_SCOPE_PUBLICATION_SIZE.store(0, Release);
+    }
     mmtk.request_starting();
 }
 
@@ -1093,4 +1173,15 @@ pub fn request_starting<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
 /// * `mmtk`: A reference to an MMTk instance.
 pub fn request_finished<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
     mmtk.request_finished();
+}
+
+#[cfg(all(feature = "thread_local_gc", feature = "extra_header"))]
+pub fn mmtk_update_request_stats<VM: VMBinding>(_mmtk: &'static MMTK<VM>, tls: VMMutatorThread) {
+    let mutator = VM::VMActivePlan::mutator(tls);
+    let stats = *mutator.request_stats;
+    crate::scheduler::thread_local_gc_work::REQUESTS_STATS
+        .lock()
+        .unwrap()
+        .push(stats);
+    mutator.request_stats.reset();
 }

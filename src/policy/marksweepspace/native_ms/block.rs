@@ -295,7 +295,9 @@ impl Block {
             // About unsafe: We know `cell` is non-zero here.
             let potential_object = unsafe { ObjectReference::from_raw_address_unchecked(cell) };
             #[cfg(feature = "extra_header")]
-            let potential_object = ObjectReference::from_raw_address(cell + VM::EXTRA_HEADER_BYTES);
+            let potential_object = unsafe {
+                ObjectReference::from_raw_address_unchecked(cell + VM::EXTRA_HEADER_BYTES)
+            };
 
             if !VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
                 .is_marked::<VM>(potential_object, Ordering::SeqCst)

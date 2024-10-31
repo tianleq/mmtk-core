@@ -4,6 +4,7 @@ use crate::plan::barriers::Barrier;
 use crate::plan::global::Plan;
 use crate::plan::AllocationSemantics;
 use crate::policy::space::Space;
+use crate::scheduler::thread_local_gc_work::RequestScopeStats;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
 use crate::util::alloc::Allocator;
 use crate::util::{Address, ObjectReference};
@@ -119,9 +120,14 @@ pub struct Mutator<VM: VMBinding> {
         Box<Vec<<VM::VMReferenceGlue as crate::vm::ReferenceGlue<VM>>::FinalizableType>>,
     #[cfg(any(
         feature = "debug_thread_local_gc_copying",
-        feature = "debug_publish_object"
+        feature = "debug_publish_object",
+        feature = "extra_header"
     ))]
     pub request_id: usize,
+    #[cfg(feature = "extra_header")]
+    pub in_request: bool,
+    #[cfg(feature = "extra_header")]
+    pub(crate) request_stats: Box<RequestScopeStats>,
     #[cfg(feature = "debug_thread_local_gc_copying")]
     pub(crate) stats: Box<crate::util::LocalGCStatistics>,
     #[cfg(feature = "thread_local_gc_copying")]
@@ -144,6 +150,30 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         offset: usize,
         semantics: AllocationSemantics,
     ) -> Address {
+
+        #[cfg(feature = "thread_local_gc")]
+        {
+            use crate::{
+                ALLOCATION_COUNT, ALLOCATION_SIZE, REQUEST_SCOPE_ALLOCATION_COUNT, REQUEST_SCOPE_ALLOCATION_SIZE,
+            };
+            use std::sync::atomic::Ordering;
+
+            ALLOCATION_COUNT.fetch_add(1, Ordering::SeqCst);
+            ALLOCATION_SIZE.fetch_add(size, Ordering::SeqCst);
+            REQUEST_SCOPE_ALLOCATION_COUNT.fetch_add(1, Ordering::SeqCst);
+            REQUEST_SCOPE_ALLOCATION_SIZE.fetch_add(size, Ordering::SeqCst);
+            #[cfg(feature = "extra_header")]
+            {
+                use crate::vm::ActivePlan;
+
+                let mutator = VM::VMActivePlan::mutator(self.mutator_tls);
+                if mutator.in_request {
+                    mutator.request_stats.bytes_allocated += u32::try_from(size).unwrap();
+                    mutator.request_stats.objects_allocated += 1;
+                }
+            }
+        }
+
         unsafe {
             self.allocators
                 .get_allocator_mut(self.config.allocator_mapping[semantics])
@@ -174,7 +204,7 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
     ) {
         #[cfg(feature = "thread_local_gc")]
         use crate::util::alloc::LargeObjectAllocator;
-        #[cfg(feature = "debug_publish_object")]
+        #[cfg(any(feature = "debug_publish_object", feature = "extra_header"))]
         use crate::util::object_extra_header_metadata;
         let space = unsafe {
             self.allocators
@@ -206,7 +236,7 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
                     crate::util::conversions::page_align_down(refer.to_object_start::<VM>());
                 metadata_address.store(metadata);
                 // Store request_id|mutator_id into the extra header
-                #[cfg(all(feature = "debug_publish_object"))]
+                #[cfg(any(feature = "debug_publish_object", feature = "extra_header"))]
                 ((metadata_address + offset) as Address)
                     .store(metadata | self.request_id << object_extra_header_metadata::SHIFT);
                 debug_assert!(
@@ -221,10 +251,10 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
                 self.stats.los_bytes_allocated += _bytes;
             }
         } else {
-            #[cfg(feature = "debug_publish_object")]
+            #[cfg(any(feature = "debug_publish_object", feature = "extra_header"))]
             {
 
-                let metadata: usize = usize::try_from(self.mutator_id).unwrap();
+                let metadata: usize = usize::try_from(self.mutator_id).unwrap() | self.request_id << object_extra_header_metadata::SHIFT;
                 object_extra_header_metadata::store_extra_header_metadata::<VM, usize>(
                     refer, metadata,
                 );

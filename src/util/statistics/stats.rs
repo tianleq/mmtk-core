@@ -254,6 +254,73 @@ impl Stats {
         print!("Total time: ");
         self.total_time.lock().unwrap().print_total(None);
         println!(" ms");
+        #[cfg(feature = "thread_local_gc")]
+        {
+            use crate::REQUEST_SCOPE_ALLOCATION_COUNT;
+            use crate::REQUEST_SCOPE_ALLOCATION_SIZE;
+            use crate::REQUEST_SCOPE_PUBLICATION_COUNT;
+            use crate::REQUEST_SCOPE_PUBLICATION_SIZE;
+
+            let request_scope_allocation_count =
+                REQUEST_SCOPE_ALLOCATION_COUNT.load(std::sync::atomic::Ordering::Acquire);
+            let request_scope_allocation_size =
+                REQUEST_SCOPE_ALLOCATION_SIZE.load(std::sync::atomic::Ordering::Acquire);
+            let request_scope_publication_count =
+                REQUEST_SCOPE_PUBLICATION_COUNT.load(std::sync::atomic::Ordering::Acquire);
+            let request_scope_publication_size =
+                REQUEST_SCOPE_PUBLICATION_SIZE.load(std::sync::atomic::Ordering::Acquire);
+
+            let requests_time = self.requests_time.lock().unwrap().get_total(None);
+
+            let all_scope_allocation_count =
+                crate::ALLOCATION_COUNT.load(std::sync::atomic::Ordering::Acquire);
+            let all_scope_allocation_size =
+                crate::ALLOCATION_SIZE.load(std::sync::atomic::Ordering::Acquire);
+            let all_scope_publication_count =
+                crate::PUBLICATION_COUNT.load(std::sync::atomic::Ordering::Acquire);
+            let all_scope_publication_size =
+                crate::PUBLICATION_SIZE.load(std::sync::atomic::Ordering::Acquire);
+
+            let total_time = self.total_time.lock().unwrap().get_total(None);
+            let bytes_evacuated =
+                crate::scheduler::thread_local_gc_work::BYTES_EVACUATED.load(Ordering::Acquire);
+            let bytes_left =
+                crate::scheduler::thread_local_gc_work::BYTES_LEFT.load(Ordering::Acquire);
+            let public_bytes_traced =
+                crate::scheduler::thread_local_gc_work::PUBLIC_BYTES_TRACED.load(Ordering::Acquire);
+            println!("Bytes Evacuated: {}", bytes_evacuated);
+            println!("Bytes Left: {}", bytes_left);
+            println!("Public bytes traced: {}", public_bytes_traced);
+            println!(
+                "request scope bytes publication rate: {}, {}, {}, {}",
+                request_scope_publication_size,
+                request_scope_allocation_size,
+                request_scope_publication_size as f64 / request_scope_allocation_size as f64,
+                (request_scope_publication_size as f64 / requests_time as f64) * 1e9f64
+            );
+            println!(
+                "request scope objects publication rate: {}, {}, {}, {}",
+                request_scope_publication_count,
+                request_scope_allocation_count,
+                request_scope_publication_count as f64 / request_scope_allocation_count as f64,
+                (request_scope_publication_count as f64 / requests_time as f64) * 1e9f64
+            );
+
+            println!(
+                "all scope bytes publication rate: {}, {}, {}, {}",
+                all_scope_publication_size,
+                all_scope_allocation_size,
+                all_scope_publication_size as f64 / all_scope_allocation_size as f64,
+                (request_scope_publication_size as f64 / total_time as f64) * 1e9f64
+            );
+            println!(
+                "all scope objects publication rate: {}, {}, {}, {}",
+                all_scope_publication_count,
+                all_scope_allocation_count,
+                all_scope_publication_count as f64 / all_scope_allocation_count as f64,
+                (all_scope_publication_count as f64 / total_time as f64) * 1e9f64
+            );
+        }
 
         println!("------------------------------ End MMTk Statistics -----------------------------")
     }

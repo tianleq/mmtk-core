@@ -585,6 +585,12 @@ impl<VM: VMBinding> MMTK<VM> {
     pub fn request_starting(&self) {
         // self.handle_user_collection_request(VMMutatorThread(VMThread::UNINITIALIZED), true, true);
         self.stats.request_starting();
+        #[cfg(feature = "thread_local_gc")]
+        {
+            crate::scheduler::thread_local_gc_work::BYTES_EVACUATED.store(0, Ordering::Release);
+            crate::scheduler::thread_local_gc_work::BYTES_LEFT.store(0, Ordering::Release);
+            crate::scheduler::thread_local_gc_work::PUBLIC_BYTES_TRACED.store(0, Ordering::Release);
+        }
     }
 
     pub fn request_finished(&self) {

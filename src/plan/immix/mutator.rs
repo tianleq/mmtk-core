@@ -64,24 +64,6 @@ pub fn create_immix_mutator<VM: VMBinding>(
     #[cfg(not(feature = "public_bit"))]
     let barrier = Box::new(crate::plan::barriers::NoBarrier);
 
-    #[cfg(feature = "public_bit")]
-    let barrier = Box::new(crate::plan::barriers::PublicObjectMarkingBarrier::new(
-        crate::plan::barriers::PublicObjectMarkingBarrierSemantics::new(
-            #[cfg(feature = "publish_rate_analysis")]
-            mutator_tls,
-            mmtk,
-        ),
-    ));
-    #[cfg(not(feature = "public_bit"))]
-    let barrier = Box::new(crate::plan::barriers::NoBarrier);
-
-    #[cfg(feature = "public_bit")]
-    let barrier = Box::new(crate::plan::barriers::PublicObjectMarkingBarrier::new(
-        crate::plan::barriers::PublicObjectMarkingBarrierSemantics::new(mmtk),
-    ));
-    #[cfg(not(feature = "public_bit"))]
-    let barrier = Box::new(plan::barriers::NoBarrier);
-
     Mutator {
         allocators: Allocators::<VM>::new(mutator_tls, mmtk, &config.space_mapping),
         barrier,

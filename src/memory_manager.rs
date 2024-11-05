@@ -1023,7 +1023,7 @@ pub fn mmtk_publish_object<VM: VMBinding>(
     _mmtk: &'static MMTK<VM>,
     _object: Option<ObjectReference>,
 ) {
-    // use crate::vm::Scanning;
+    use crate::vm::Scanning;
 
     if let Some(object) = _object {
         if crate::util::metadata::public_bit::is_public::<VM>(object) {
@@ -1040,20 +1040,21 @@ pub fn mmtk_publish_object<VM: VMBinding>(
                 u32::MAX,
             );
 
-        // mmtk_set_public_bit(_mmtk, object);
-        // #[cfg(feature = "thread_local_gc")]
-        // _mmtk.get_plan().publish_object(object);
-        // // Publish all the descendants
-        // VM::VMScanning::scan_object(
-        //     VMWorkerThread(VMThread::UNINITIALIZED),
-        //     object,
-        //     &mut closure,
-        // );
-        closure.do_closure(
+        mmtk_set_public_bit(_mmtk, object);
+        #[cfg(feature = "thread_local_gc")]
+        _mmtk.get_plan().publish_object(object);
+        // Publish all the descendants
+        VM::VMScanning::scan_object(
+            VMWorkerThread(VMThread::UNINITIALIZED),
             object,
-            #[cfg(feature = "publish_rate_analysis")]
-            tls,
+            &mut closure,
         );
+        closure.do_closure();
+        // closure.do_closure(
+        //     object,
+        //     #[cfg(feature = "publish_rate_analysis")]
+        //     tls,
+        // );
     }
 }
 

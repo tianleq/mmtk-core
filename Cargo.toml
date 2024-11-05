@@ -68,7 +68,6 @@ harness = false
 [features]
 default = []
 
-public_bit = []
 thread_local_gc = ["public_bit"]
 publish_rate_analysis = ["public_bit"]
 

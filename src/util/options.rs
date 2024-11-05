@@ -911,7 +911,8 @@ options! {
     max_local_heap:        ThreadlocalHeapSize   [env_var: true, command_line: true] [|v: &ThreadlocalHeapSize| v.size > 0] = ThreadlocalHeapSize {size: 1 << 20},
     /// max number of concurrent local gc
     max_concurrent_local_gc: u32               [env_var: true, command_line: true]  [always_valid] = crate::scheduler::thread_local_gc_work::DEFAULT_MAX_CONCURRENT_LOCAL_GC,
-    max_local_copy_reserve:  u8               [env_var: true, command_line: true]  [always_valid] = crate::scheduler::thread_local_gc_work::DEFAULT_MAX_LOCAL_COPY_RESERVE
+    max_local_copy_reserve:  u8               [env_var: true, command_line: true]  [always_valid] = crate::scheduler::thread_local_gc_work::DEFAULT_MAX_LOCAL_COPY_RESERVE,
+    log_file:                String            [env_var: true, command_line: true]  [always_valid] = String::from("/tmp/tmp.log")
 }
 
 #[cfg(not(feature = "thread_local_gc"))]

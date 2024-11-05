@@ -151,29 +151,6 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         semantics: AllocationSemantics,
     ) -> Address {
 
-        #[cfg(feature = "thread_local_gc")]
-        {
-            use crate::{
-                ALLOCATION_COUNT, ALLOCATION_SIZE, REQUEST_SCOPE_ALLOCATION_COUNT, REQUEST_SCOPE_ALLOCATION_SIZE,
-            };
-            use std::sync::atomic::Ordering;
-
-            ALLOCATION_COUNT.fetch_add(1, Ordering::SeqCst);
-            ALLOCATION_SIZE.fetch_add(size, Ordering::SeqCst);
-            REQUEST_SCOPE_ALLOCATION_COUNT.fetch_add(1, Ordering::SeqCst);
-            REQUEST_SCOPE_ALLOCATION_SIZE.fetch_add(size, Ordering::SeqCst);
-            #[cfg(feature = "extra_header")]
-            {
-                use crate::vm::ActivePlan;
-
-                let mutator = VM::VMActivePlan::mutator(self.mutator_tls);
-                if mutator.in_request {
-                    mutator.request_stats.bytes_allocated += u32::try_from(size).unwrap();
-                    mutator.request_stats.objects_allocated += 1;
-                }
-            }
-        }
-
         unsafe {
             self.allocators
                 .get_allocator_mut(self.config.allocator_mapping[semantics])
@@ -212,6 +189,29 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         }
         .get_space();
         space.initialize_object_metadata(refer, true);
+
+        #[cfg(feature = "thread_local_gc")]
+        {
+            use crate::{
+                ALLOCATION_COUNT, ALLOCATION_SIZE, REQUEST_SCOPE_ALLOCATION_COUNT, REQUEST_SCOPE_ALLOCATION_SIZE,
+            };
+            use std::sync::atomic::Ordering;
+
+            ALLOCATION_COUNT.fetch_add(1, Ordering::SeqCst);
+            ALLOCATION_SIZE.fetch_add(_bytes, Ordering::SeqCst);
+            REQUEST_SCOPE_ALLOCATION_COUNT.fetch_add(1, Ordering::SeqCst);
+            REQUEST_SCOPE_ALLOCATION_SIZE.fetch_add(_bytes, Ordering::SeqCst);
+            #[cfg(feature = "extra_header")]
+            {
+                use crate::vm::ActivePlan;
+
+                let mutator = VM::VMActivePlan::mutator(self.mutator_tls);
+                if mutator.in_request {
+                    mutator.request_stats.bytes_allocated += u32::try_from(_bytes).unwrap();
+                    mutator.request_stats.objects_allocated += 1;
+                }
+            }
+        }
 
         // Large object allocation always go through the slow-path, so it is fine to
         // do the following book-keeping in post_alloc(only executed in slow-path)

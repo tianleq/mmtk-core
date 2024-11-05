@@ -29,6 +29,7 @@ use crate::vm::slot::MemorySlice;
 use crate::vm::ActivePlan;
 use crate::vm::ReferenceGlue;
 use crate::vm::VMBinding;
+use std::io::Write;
 #[cfg(feature = "thread_local_gc")]
 use std::sync::atomic::Ordering;
 
@@ -744,12 +745,26 @@ pub fn harness_begin<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
             use crate::ALLOCATION_SIZE;
             use crate::PUBLICATION_COUNT;
             use crate::PUBLICATION_SIZE;
+            use crate::REQUEST_SCOPE_ALLOCATION_COUNT;
+            use crate::REQUEST_SCOPE_ALLOCATION_SIZE;
+            use crate::REQUEST_SCOPE_PUBLICATION_COUNT;
+            use crate::REQUEST_SCOPE_PUBLICATION_SIZE;
             use std::sync::atomic::Ordering::Release;
 
             ALLOCATION_COUNT.store(0, Release);
             ALLOCATION_SIZE.store(0, Release);
             PUBLICATION_COUNT.store(0, Release);
             PUBLICATION_SIZE.store(0, Release);
+
+            REQUEST_SCOPE_ALLOCATION_COUNT.store(0, Release);
+            REQUEST_SCOPE_ALLOCATION_SIZE.store(0, Release);
+            REQUEST_SCOPE_PUBLICATION_COUNT.store(0, Release);
+            REQUEST_SCOPE_PUBLICATION_SIZE.store(0, Release);
+        }
+        #[cfg(feature = "extra_header")]
+        {
+            use crate::scheduler::thread_local_gc_work::REQUESTS_STATS;
+            REQUESTS_STATS.lock().unwrap().clear();
         }
     }
 }
@@ -761,6 +776,22 @@ pub fn harness_begin<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
 /// * `mmtk`: A reference to an MMTk instance.
 pub fn harness_end<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
     mmtk.harness_end();
+    #[cfg(feature = "extra_header")]
+    {
+        use crate::scheduler::thread_local_gc_work::REQUESTS_STATS;
+        use std::fs::OpenOptions;
+
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(mmtk.options.log_file.as_str())
+            .unwrap();
+
+        for stats in REQUESTS_STATS.lock().unwrap().iter() {
+            writeln!(&mut file, "{:?}", *stats).unwrap();
+        }
+        writeln!(&mut file, "****************").unwrap();
+    }
 }
 
 /// Register a finalizable object. MMTk will retain the liveness of
@@ -1183,5 +1214,6 @@ pub fn mmtk_update_request_stats<VM: VMBinding>(_mmtk: &'static MMTK<VM>, tls: V
         .lock()
         .unwrap()
         .push(stats);
+
     mutator.request_stats.reset();
 }

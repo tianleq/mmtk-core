@@ -314,7 +314,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         #[cfg(feature = "debug_publish_object")] source: ObjectReference,
         #[cfg(feature = "debug_publish_object")] _slot: VM::VMEdge,
         object: ObjectReference,
-        _mutator: &crate::Mutator<VM>,
+        _mutator: &mut crate::Mutator<VM>,
     ) -> ThreadlocalTracedObjectType {
         #[cfg(not(feature = "debug_publish_object"))]
         if crate::util::metadata::public_bit::is_public::<VM>(object) {
@@ -344,6 +344,25 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                     self.get_object_owner(object)
                 );
             }
+        }
+
+        #[cfg(feature = "extra_header")]
+        {
+            use crate::util::object_extra_header_metadata::{SHIFT, TOP_HALF_MASK};
+            let offset: usize = 8;
+            let metadata_address: Address =
+                crate::util::conversions::page_align_down(object.to_object_start::<VM>()) + offset;
+
+            let metadata: usize = unsafe { metadata_address.load() };
+            let request_id = (metadata & TOP_HALF_MASK) >> SHIFT;
+            if _mutator.request_id == request_id {
+                _mutator.request_stats.bytes_survived +=
+                    u32::try_from(VM::VMObjectModel::get_current_size(object)).unwrap();
+                _mutator.request_stats.objects_survived += 1;
+            }
+            _mutator.request_stats.total_bytes_survived +=
+                u32::try_from(VM::VMObjectModel::get_current_size(object)).unwrap();
+            _mutator.request_stats.total_objects_survived += 1;
         }
 
         if self.thread_local_mark(object, MARK_BIT) {

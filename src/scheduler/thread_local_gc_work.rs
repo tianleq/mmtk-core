@@ -611,7 +611,7 @@ pub(crate) static PUBLIC_BYTES_TRACED: std::sync::atomic::AtomicUsize =
 pub(crate) static REQUESTS_STATS: std::sync::Mutex<Vec<RequestScopeStats>> =
     std::sync::Mutex::new(Vec::new());
 
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Copy, Clone, Debug)]
 pub(crate) struct RequestScopeStats {
     pub bytes_allocated: u32,
     pub objects_allocated: u32,

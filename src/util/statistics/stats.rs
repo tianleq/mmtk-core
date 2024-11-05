@@ -232,7 +232,6 @@ impl Stats {
         {
             use crate::REQUEST_SCOPE_ALLOCATION_COUNT;
             use crate::REQUEST_SCOPE_ALLOCATION_SIZE;
-            use crate::REQUEST_SCOPE_BARRIER_SLOW_PATH_COUNT;
             use crate::REQUEST_SCOPE_PUBLICATION_COUNT;
             use crate::REQUEST_SCOPE_PUBLICATION_SIZE;
 
@@ -244,9 +243,19 @@ impl Stats {
                 REQUEST_SCOPE_PUBLICATION_COUNT.load(std::sync::atomic::Ordering::Acquire);
             let request_scope_publication_size =
                 REQUEST_SCOPE_PUBLICATION_SIZE.load(std::sync::atomic::Ordering::Acquire);
-            let request_scop_barrier_slow_path =
-                REQUEST_SCOPE_BARRIER_SLOW_PATH_COUNT.load(Ordering::Acquire);
+
             let requests_time = self.requests_time.lock().unwrap().get_total(None);
+
+            let all_scope_allocation_count =
+                crate::ALLOCATION_COUNT.load(std::sync::atomic::Ordering::Acquire);
+            let all_scope_allocation_size =
+                crate::ALLOCATION_SIZE.load(std::sync::atomic::Ordering::Acquire);
+            let all_scope_publication_count =
+                crate::PUBLICATION_COUNT.load(std::sync::atomic::Ordering::Acquire);
+            let all_scope_publication_size =
+                crate::PUBLICATION_SIZE.load(std::sync::atomic::Ordering::Acquire);
+
+            let total_time = self.total_time.lock().unwrap().get_total(None);
 
             println!(
                 "request scope bytes publication rate: {}, {}, {}, {}",
@@ -262,10 +271,22 @@ impl Stats {
                 request_scope_publication_count as f64 / request_scope_allocation_count as f64,
                 (request_scope_publication_count as f64 / requests_time as f64) * 1e9f64
             );
+
             println!(
-                "request scope barrier slow path: {}",
-                (request_scop_barrier_slow_path as f64 / requests_time as f64) * 1e9f64,
+                "all scope bytes publication rate: {}, {}, {}, {}",
+                all_scope_publication_size,
+                all_scope_allocation_size,
+                all_scope_publication_size as f64 / all_scope_allocation_size as f64,
+                (request_scope_publication_size as f64 / total_time as f64) * 1e9f64
             );
+            println!(
+                "all scope objects publication rate: {}, {}, {}, {}",
+                all_scope_publication_count,
+                all_scope_allocation_count,
+                all_scope_publication_count as f64 / all_scope_allocation_count as f64,
+                (all_scope_publication_count as f64 / total_time as f64) * 1e9f64
+            );
+
             //
         }
         println!("------------------------------ End MMTk Statistics -----------------------------")

@@ -276,7 +276,10 @@ impl Stats {
     fn stop_all_counters(&self) {
         let counters = self.counters.lock().unwrap();
         for c in &(*counters) {
-            c.lock().unwrap().stop();
+            let mut ctr = c.lock().unwrap();
+            if ctr.implicitly_stop() {
+                ctr.stop();
+            }
         }
         self.shared.set_gathering_stats(false);
     }

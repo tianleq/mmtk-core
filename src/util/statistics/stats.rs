@@ -55,6 +55,7 @@ pub struct Stats {
     pub shared: Arc<SharedStats>,
     counters: Mutex<Vec<Arc<Mutex<dyn Counter + Send>>>>,
     exceeded_phase_limit: AtomicBool,
+    requests_time: Arc<Mutex<Timer>>,
 }
 
 impl Stats {
@@ -78,10 +79,20 @@ impl Stats {
             "time".to_string(),
             shared.clone(),
             true,
+            true,
             false,
             MonotoneNanoTime {},
         )));
         counters.push(t.clone());
+        let requests_time = Arc::new(Mutex::new(LongCounter::new(
+            "requests_time".to_string(),
+            shared.clone(),
+            false,
+            false,
+            false,
+            MonotoneNanoTime {},
+        )));
+        counters.push(requests_time.clone());
         // Read from the MMTK option for a list of perf events we want to
         // measure, and create corresponding counters
         #[cfg(feature = "perf_counter")]
@@ -103,6 +114,7 @@ impl Stats {
             shared,
             counters: Mutex::new(counters),
             exceeded_phase_limit: AtomicBool::new(false),
+            requests_time,
         }
     }
 
@@ -110,6 +122,7 @@ impl Stats {
         &self,
         name: &str,
         implicit_start: bool,
+        implicit_stop: bool,
         merge_phases: bool,
     ) -> Arc<Mutex<EventCounter>> {
         let mut guard = self.counters.lock().unwrap();
@@ -117,6 +130,7 @@ impl Stats {
             name.to_string(),
             self.shared.clone(),
             implicit_start,
+            implicit_stop,
             merge_phases,
         )));
         guard.push(counter.clone());
@@ -127,10 +141,16 @@ impl Stats {
         &self,
         name: &str,
         implicit_start: bool,
+        implicit_stop: bool,
         merge_phases: bool,
     ) -> Mutex<SizeCounter> {
-        let u = self.new_event_counter(name, implicit_start, merge_phases);
-        let v = self.new_event_counter(&format!("{}.volume", name), implicit_start, merge_phases);
+        let u = self.new_event_counter(name, implicit_start, implicit_stop, merge_phases);
+        let v = self.new_event_counter(
+            &format!("{}.volume", name),
+            implicit_start,
+            implicit_stop,
+            merge_phases,
+        );
         Mutex::new(SizeCounter::new(u, v))
     }
 
@@ -138,6 +158,7 @@ impl Stats {
         &self,
         name: &str,
         implicit_start: bool,
+        implicit_stop: bool,
         merge_phases: bool,
     ) -> Arc<Mutex<Timer>> {
         let mut guard = self.counters.lock().unwrap();
@@ -145,6 +166,7 @@ impl Stats {
             name.to_string(),
             self.shared.clone(),
             implicit_start,
+            implicit_stop,
             merge_phases,
             MonotoneNanoTime {},
         )));
@@ -265,5 +287,13 @@ impl Stats {
 
     pub fn get_gathering_stats(&self) -> bool {
         self.shared.get_gathering_stats()
+    }
+
+    pub fn request_starting(&self) {
+        self.requests_time.lock().unwrap().start();
+    }
+
+    pub fn request_finished(&self) {
+        self.requests_time.lock().unwrap().stop();
     }
 }

@@ -59,6 +59,7 @@ pub trait Counter {
     ///
     /// FIXME currently unused
     fn implicitly_start(&self) -> bool;
+    fn implicitly_stop(&self) -> bool;
     /// Get the name of the counter
     fn name(&self) -> &String;
 }

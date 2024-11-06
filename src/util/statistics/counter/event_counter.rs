@@ -9,6 +9,7 @@ use std::sync::Arc;
 pub struct EventCounter {
     name: String,
     pub implicitly_start: bool,
+    pub implicitly_stop: bool,
     merge_phases: bool,
     count: Box<[u64; MAX_PHASES]>,
     current_count: u64,
@@ -21,11 +22,13 @@ impl EventCounter {
         name: String,
         stats: Arc<SharedStats>,
         implicitly_start: bool,
+        implicitly_stop: bool,
         merge_phases: bool,
     ) -> Self {
         EventCounter {
             name,
             implicitly_start,
+            implicitly_stop,
             merge_phases,
             count: Box::new([0; MAX_PHASES]),
             current_count: 0,
@@ -162,5 +165,9 @@ impl Counter for EventCounter {
 
     fn name(&self) -> &String {
         &self.name
+    }
+
+    fn implicitly_stop(&self) -> bool {
+        self.implicitly_stop
     }
 }

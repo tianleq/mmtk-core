@@ -899,3 +899,22 @@ pub fn add_work_packets<VM: VMBinding>(
 ) {
     mmtk.scheduler.work_buckets[bucket].bulk_add(packets)
 }
+
+/// Generic hook to allow benchmarks to be harnessed. We do a full heap
+/// GC, and then start recording statistics for MMTk.
+///
+/// Arguments:
+/// * `mmtk`: A reference to an MMTk instance.
+/// * `tls`: The thread that calls the function (and triggers a collection).
+pub fn request_starting<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
+    mmtk.request_starting();
+}
+
+/// Generic hook to allow benchmarks to be harnessed. We stop collecting
+/// statistics, and print stats values.
+///
+/// Arguments:
+/// * `mmtk`: A reference to an MMTk instance.
+pub fn request_finished<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
+    mmtk.request_finished();
+}

@@ -300,38 +300,19 @@ where
             #[cfg(feature = "debug_publish_object")]
             let _source = self.source_buffer.pop_front().unwrap();
             let _object = slot.load();
-            if _object.is_none() {
+            let (Some(object), Some(source)) = (_object, _source) else {
                 continue;
-            }
-            let object = _object.unwrap();
-            #[cfg(not(feature = "debug_publish_object"))]
-            let new_object =
-                match self
-                    .plan
-                    .thread_local_trace_object::<KIND>(mutator, object, self.worker)
-                {
-                    Scanned(new_object) => new_object,
-                    ToBeScanned(new_object) => {
-                        VM::VMScanning::scan_object(
-                            VMWorkerThread(VMThread::UNINITIALIZED),
-                            new_object,
-                            self,
-                        );
-                        self.plan
-                            .thread_local_post_scan_object::<KIND>(mutator, new_object);
-                        new_object
-                    }
-                };
+            };
 
-            #[cfg(feature = "debug_publish_object")]
             let new_object = match self.plan.thread_local_trace_object::<KIND>(
                 mutator,
-                _source.unwrap(), // _source should never be none, the only case it may be null is when slot is as root slot, but then in that case, _source == object and will not fall through
-                slot,
+                #[cfg(feature = "debug_publish_object")]
+                source,
                 object,
                 self.worker,
             ) {
                 Scanned(new_object) => {
+                    #[cfg(feature = "debug_publish_object")]
                     if crate::util::metadata::public_bit::is_public::<VM>(object) {
                         assert!(
                             crate::util::metadata::public_bit::is_public::<VM>(new_object),
@@ -340,12 +321,11 @@ where
                             new_object
                         );
                     }
-
                     new_object
                 }
                 ToBeScanned(new_object) => {
                     VM::VMScanning::scan_object(
-                        VMWorkerThread(VMThread::UNINITIALIZED), // worker tls is not being used by the openjdk binding
+                        VMWorkerThread(VMThread::UNINITIALIZED),
                         new_object,
                         self,
                     );
@@ -359,7 +339,7 @@ where
             {
                 // in a local gc, public objects are not moved, so source is
                 // the exact object that needs to be looked at
-                if crate::util::metadata::public_bit::is_public::<VM>(_source.unwrap()) {
+                if crate::util::metadata::public_bit::is_public::<VM>(source) {
                     assert!(
                         crate::util::metadata::public_bit::is_public::<VM>(new_object),
                         "public object: {:?} {:?} points to private object: {:?} {:?}",
@@ -367,7 +347,7 @@ where
                         crate::util::object_extra_header_metadata::get_extra_header_metadata::<
                             VM,
                             usize,
-                        >(_source.unwrap())
+                        >(source)
                             & object_extra_header_metadata::BOTTOM_HALF_MASK,
                         new_object,
                         crate::util::object_extra_header_metadata::get_extra_header_metadata::<
@@ -389,37 +369,10 @@ where
 
         debug_assert!(self.worker.is_none());
 
-        #[cfg(not(feature = "debug_publish_object"))]
-        let new_object =
-            match self
-                .plan
-                .thread_local_trace_object::<KIND>(mutator, object, self.worker)
-            {
-                Scanned(new_object) => {
-                    debug_assert!(
-                        object.is_live::<VM>(),
-                        "object: {:?} is supposed to be alive.",
-                        object
-                    );
-                    new_object
-                }
-                ToBeScanned(new_object) => {
-                    VM::VMScanning::scan_object(
-                        VMWorkerThread(VMThread::UNINITIALIZED),
-                        new_object,
-                        self,
-                    );
-                    self.plan
-                        .thread_local_post_scan_object::<KIND>(mutator, new_object);
-                    new_object
-                }
-            };
-
-        #[cfg(feature = "debug_publish_object")]
         let new_object = match self.plan.thread_local_trace_object::<KIND>(
             mutator,
+            #[cfg(feature = "debug_publish_object")]
             object,
-            VM::VMObjectModel::null_slot(),
             object,
             self.worker,
         ) {
@@ -450,28 +403,13 @@ where
     fn do_object_tracing(&mut self, object: ObjectReference) -> ObjectReference {
         let mutator = VM::VMActivePlan::mutator(self.tls);
         debug_assert!(self.worker.is_none());
-        #[cfg(not(feature = "debug_publish_object"))]
-        let new_object =
-            match self
-                .plan
-                .thread_local_trace_object::<KIND>(mutator, object, self.worker)
-            {
-                Scanned(new_object) => new_object,
-                _ => {
-                    panic!(
-                        "live object: {:?} must have been traced/scanned already",
-                        object
-                    );
-                }
-            };
 
-        #[cfg(feature = "debug_publish_object")]
         let new_object = match self.plan.thread_local_trace_object::<KIND>(
             mutator,
+            #[cfg(feature = "debug_publish_object")]
             object,
-            VM::VMObjectModel::null_slot(),
             object,
-            None,
+            self.worker,
         ) {
             Scanned(new_object) => new_object,
             _ => {
@@ -481,6 +419,7 @@ where
                 );
             }
         };
+
         new_object
     }
 }

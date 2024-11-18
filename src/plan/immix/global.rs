@@ -587,7 +587,6 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for Immix<VM> {
         &self,
         mutator: &mut Mutator<VM>,
         source: ObjectReference,
-        slot: VM::VMSlot,
         object: ObjectReference,
         worker: Option<*mut GCWorker<VM>>,
     ) -> ThreadlocalTracedObjectType {
@@ -598,7 +597,6 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for Immix<VM> {
                 &self.immix_space,
                 mutator,
                 source,
-                slot,
                 object,
                 worker,
                 Some(CopySemantics::DefaultCopy),
@@ -608,7 +606,6 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for Immix<VM> {
             &self.common,
             mutator,
             source,
-            slot,
             object,
             worker,
         )

@@ -157,7 +157,6 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
         &self,
         _mutator: &mut crate::Mutator<VM>,
         _source: ObjectReference,
-        _slot: VM::VMSlot,
         object: ObjectReference,
         _worker: Option<*mut GCWorker<VM>>,
         _copy: Option<CopySemantics>,

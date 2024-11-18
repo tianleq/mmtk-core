@@ -246,7 +246,6 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM>
         &self,
         mutator: &mut crate::Mutator<VM>,
         source: ObjectReference,
-        slot: VM::VMSlot,
         object: ObjectReference,
         _worker: Option<*mut GCWorker<VM>>,
         _copy: Option<CopySemantics>,
@@ -258,7 +257,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM>
             #[cfg(not(feature = "thread_local_gc_copying"))]
             unreachable!()
         } else {
-            self.thread_local_trace_object(source, slot, object, mutator)
+            self.thread_local_trace_object(source, object, mutator)
         }
     }
 
@@ -321,7 +320,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     fn thread_local_trace_object(
         &self,
         #[cfg(feature = "debug_publish_object")] source: ObjectReference,
-        #[cfg(feature = "debug_publish_object")] _slot: VM::VMSlot,
         object: ObjectReference,
         _mutator: &crate::Mutator<VM>,
     ) -> ThreadlocalTracedObjectType {

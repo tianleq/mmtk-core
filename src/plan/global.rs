@@ -733,7 +733,6 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for BasePlan<VM> {
         &self,
         _mutator: &mut Mutator<VM>,
         _source: ObjectReference,
-        _slot: VM::VMSlot,
         object: ObjectReference,
         _worker: Option<*mut GCWorker<VM>>,
     ) -> ThreadlocalTracedObjectType {
@@ -966,7 +965,6 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
         &self,
         mutator: &mut Mutator<VM>,
         source: ObjectReference,
-        slot: VM::VMSlot,
         object: ObjectReference,
         worker: Option<*mut GCWorker<VM>>,
     ) -> ThreadlocalTracedObjectType {
@@ -977,7 +975,6 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
                 &self.immortal,
                 mutator,
                 source,
-                slot,
                 object,
                 None,
                 None
@@ -989,7 +986,6 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
                 &self.los,
                 mutator,
                 source,
-                slot,
                 object,
                 None,
                 None,
@@ -1000,7 +996,6 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
                 &self.nonmoving,
                 mutator,
                 source,
-                slot,
                 object,
                 None,
                 None,
@@ -1008,7 +1003,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
             );
         }
         <BasePlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
-            &self.base, mutator, source, slot, object, worker,
+            &self.base, mutator, source, object, worker,
         )
     }
 
@@ -1130,7 +1125,6 @@ pub trait PlanThreadlocalTraceObject<VM: VMBinding> {
         &self,
         mutator: &mut Mutator<VM>,
         source: ObjectReference,
-        slot: VM::VMSlot,
         object: ObjectReference,
         worker: Option<*mut GCWorker<VM>>,
     ) -> ThreadlocalTracedObjectType;

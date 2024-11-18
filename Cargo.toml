@@ -129,7 +129,7 @@ public_bit = []
 #Enable allocate extra header of each individual object
 extra_header = []
 
-#Enable debugging publishing object
+#Enable debugging publishing object(allocation fastpath needs to be disabled)
 debug_publish_object = ["extra_header", "public_bit"]
 
 #Enable thread local gc

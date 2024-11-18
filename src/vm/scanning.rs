@@ -12,7 +12,7 @@ pub trait SlotVisitor<SL: Slot> {
     fn visit_slot(&mut self, slot: SL);
     #[cfg(feature = "debug_publish_object")]
     /// Call this function for each edge.
-    fn visit_edge(&mut self, object: ObjectReference, slot: SL);
+    fn visit_slot(&mut self, object: ObjectReference, slot: SL);
 }
 
 /// This lets us use closures as SlotVisitor.
@@ -29,15 +29,15 @@ impl<SL: Slot, F: FnMut(Option<ObjectReference>, SL)> SlotVisitor<SL> for F {
     }
 
     #[cfg(feature = "debug_publish_object")]
-    fn visit_edge(&mut self, object: ObjectReference, slot: SL) {
+    fn visit_slot(&mut self, object: ObjectReference, slot: SL) {
         #[cfg(debug_assertions)]
         trace!(
-            "(FunctionClosure) Visit edge {:?} of object {:?} (pointing to {})",
-            edge,
+            "(FunctionClosure) Visit edge {:?} of object {:?} (pointing to {:?})",
+            slot,
             object,
-            edge.load()
+            slot.load(),
         );
-        self(object, slot)
+        self(Some(object), slot)
     }
 }
 
@@ -286,7 +286,7 @@ pub trait Scanning<VM: VMBinding> {
     // fn thread_local_scan_roots_of_mutator_threads(
     //     tls: VMWorkerThread,
     //     mutator: &'static mut Mutator<VM>,
-    //     factory: impl RootsWorkFactory<VM::VMEdge>,
+    //     factory: impl RootsWorkFactory<VM::VMSlot>,
     // );
 
     /// Scan VM-specific roots. The creation of all root scan tasks (except thread scanning)

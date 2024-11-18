@@ -130,9 +130,17 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
                     sources.len() == buf.len(),
                     "The number of objects and slots do not equal"
                 );
+
                 self.worker.add_work(
                     self.bucket,
-                    E::new(sources, buf, false, 0, self.worker.mmtk, self.bucket),
+                    E::new(
+                        sources.iter().map(|source| Some(*source)).collect(),
+                        buf,
+                        false,
+                        0,
+                        self.worker.mmtk,
+                        self.bucket,
+                    ),
                 );
             }
         }
@@ -161,7 +169,7 @@ impl<'a, E: ProcessEdgesWork> SlotVisitor<SlotOf<E>> for ObjectsClosure<'a, E> {
         #[cfg(debug_assertions)]
         {
             trace!(
-                "(ObjectsClosure) Visit slot {:?} of Object {:?} (pointing to {})",
+                "(ObjectsClosure) Visit slot {:?} of Object {:?} (pointing to {:?})",
                 slot,
                 object,
                 slot.load()
@@ -278,7 +286,7 @@ impl<VM: crate::vm::VMBinding> SlotVisitor<VM::VMSlot> for PublishObjectClosure<
 
     #[cfg(feature = "debug_publish_object")]
     fn visit_slot(&mut self, _object: ObjectReference, slot: VM::VMSlot) {
-        self.edge_buffer.push_back(slot);
+        self.slot_buffer.push_back(slot);
     }
 }
 

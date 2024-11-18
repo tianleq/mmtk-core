@@ -247,7 +247,7 @@ pub struct PlanThreadlocalObjectGraphTraversalClosure<
     tls: VMMutatorThread,
     slot_buffer: VecDeque<VM::VMSlot>,
     #[cfg(feature = "debug_publish_object")]
-    source_buffer: VecDeque<ObjectReference>,
+    source_buffer: VecDeque<Option<ObjectReference>>,
     worker: Option<*mut GCWorker<VM>>,
 }
 
@@ -263,7 +263,7 @@ where
         root_slots: Option<Vec<VM::VMSlot>>,
         worker: Option<*mut GCWorker<VM>>,
     ) -> Self {
-        let mut edge_buffer = VecDeque::with_capacity(4096);
+        let mut slot_buffer = VecDeque::with_capacity(4096);
         #[cfg(feature = "debug_publish_object")]
         let mut source_buffer = VecDeque::new();
         if let Some(roots) = root_slots {
@@ -274,13 +274,13 @@ where
                     source_buffer.push_back(slot.load());
                 }
             }
-            edge_buffer = VecDeque::from(roots);
+            slot_buffer = VecDeque::from(roots);
         }
 
         Self {
             plan: mmtk.get_plan().downcast_ref::<P>().unwrap(),
             tls,
-            slot_buffer: edge_buffer,
+            slot_buffer,
             #[cfg(feature = "debug_publish_object")]
             source_buffer,
             worker,
@@ -290,7 +290,7 @@ where
     fn do_closure(&mut self) {
         #[cfg(feature = "debug_publish_object")]
         assert!(
-            self.edge_buffer.len() == self.source_buffer.len(),
+            self.slot_buffer.len() == self.source_buffer.len(),
             "slots len != object len"
         );
         let mutator = VM::VMActivePlan::mutator(self.tls);
@@ -324,10 +324,13 @@ where
                 };
 
             #[cfg(feature = "debug_publish_object")]
-            let new_object = match self
-                .plan
-                .thread_local_trace_object::<KIND>(mutator, _source, slot, object)
-            {
+            let new_object = match self.plan.thread_local_trace_object::<KIND>(
+                mutator,
+                _source.unwrap(), // _source should never be none, the only case it may be null is when slot is as root slot, but then in that case, _source == object and will not fall through
+                slot,
+                object,
+                self.worker,
+            ) {
                 Scanned(new_object) => {
                     if crate::util::metadata::public_bit::is_public::<VM>(object) {
                         assert!(
@@ -346,7 +349,8 @@ where
                         new_object,
                         self,
                     );
-                    self.plan.thread_local_post_scan_object(mutator, new_object);
+                    self.plan
+                        .thread_local_post_scan_object::<KIND>(mutator, new_object);
                     new_object
                 }
             };
@@ -355,8 +359,7 @@ where
             {
                 // in a local gc, public objects are not moved, so source is
                 // the exact object that needs to be looked at
-                if !_source.is_null() && crate::util::metadata::public_bit::is_public::<VM>(_source)
-                {
+                if crate::util::metadata::public_bit::is_public::<VM>(_source.unwrap()) {
                     assert!(
                         crate::util::metadata::public_bit::is_public::<VM>(new_object),
                         "public object: {:?} {:?} points to private object: {:?} {:?}",
@@ -364,7 +367,7 @@ where
                         crate::util::object_extra_header_metadata::get_extra_header_metadata::<
                             VM,
                             usize,
-                        >(_source)
+                        >(_source.unwrap())
                             & object_extra_header_metadata::BOTTOM_HALF_MASK,
                         new_object,
                         crate::util::object_extra_header_metadata::get_extra_header_metadata::<
@@ -418,10 +421,11 @@ where
             object,
             VM::VMObjectModel::null_slot(),
             object,
+            self.worker,
         ) {
             Scanned(new_object) => {
                 debug_assert!(
-                    object.is_live(),
+                    object.is_live::<VM>(),
                     "object: {:?} is supposed to be alive.",
                     object
                 );
@@ -433,7 +437,8 @@ where
                     new_object,
                     self,
                 );
-                self.plan.thread_local_post_scan_object(mutator, new_object);
+                self.plan
+                    .thread_local_post_scan_object::<KIND>(mutator, new_object);
                 new_object
             }
         };
@@ -466,6 +471,7 @@ where
             object,
             VM::VMObjectModel::null_slot(),
             object,
+            None,
         ) {
             Scanned(new_object) => new_object,
             _ => {
@@ -492,8 +498,8 @@ impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIN
     #[cfg(feature = "debug_publish_object")]
     fn visit_slot(&mut self, object: ObjectReference, slot: VM::VMSlot) {
         if let Some(_) = slot.load() {
-            self.source_buffer.push_back(object);
-            self.edge_buffer.push_back(slot);
+            self.source_buffer.push_back(Some(object));
+            self.slot_buffer.push_back(slot);
         }
     }
 }

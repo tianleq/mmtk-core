@@ -1055,7 +1055,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self,
         mutator: &Mutator<VM>,
         #[cfg(feature = "debug_publish_object")] source: ObjectReference,
-        #[cfg(feature = "debug_publish_object")] _slot: VM::VMEdge,
+        #[cfg(feature = "debug_publish_object")] _slot: VM::VMSlot,
         object: ObjectReference,
     ) -> ThreadlocalTracedObjectType {
         #[cfg(feature = "vo_bit")]
@@ -1139,7 +1139,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self,
         mutator: &mut Mutator<VM>,
         #[cfg(feature = "debug_publish_object")] _source: ObjectReference,
-        #[cfg(feature = "debug_publish_object")] _slot: VM::VMEdge,
+        #[cfg(feature = "debug_publish_object")] _slot: VM::VMSlot,
         object: ObjectReference,
         semantics: CopySemantics,
         // nursery_collection: bool,
@@ -1345,6 +1345,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                             object,
                             semantics,
                             copy_context,
+                            #[cfg(feature = "debug_publish_object")]
+                            mutator.mutator_id,
                         );
                         new_object
                     };
@@ -1723,7 +1725,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     #[cfg(feature = "debug_publish_object")]
     pub fn is_object_published(&self, object: ObjectReference) -> bool {
-        debug_assert!(!object.is_null());
         let is_published = crate::util::metadata::public_bit::is_public::<VM>(object);
         if object_forwarding::is_forwarded_or_being_forwarded::<VM>(object) {
             // object's public bit may have been cleared, so need to read the public bit on the forwarded object
@@ -1797,8 +1798,9 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
         &self,
         mutator: &mut Mutator<VM>,
         _source: ObjectReference,
-        _slot: VM::VMEdge,
+        _slot: VM::VMSlot,
         object: ObjectReference,
+        _worker: Option<*mut GCWorker<VM>>,
         _copy: Option<CopySemantics>,
     ) -> ThreadlocalTracedObjectType {
         if KIND == TRACE_THREAD_LOCAL_FAST {
@@ -1824,16 +1826,15 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
         } else if KIND == TRACE_THREAD_LOCAL_DEFRAG {
             #[cfg(not(feature = "thread_local_gc_copying"))]
             unreachable!();
+            // This branch is only reachable during global
+            // gc, it is doing defrag mutator
             #[cfg(feature = "thread_local_gc_copying")]
             {
-                self.thread_local_trace_object_with_opportunistic_copy(
+                self.thread_local_trace_object_defrag(
                     mutator,
-                    _source,
-                    _slot,
                     object,
+                    unsafe { &mut *_worker.unwrap() },
                     _copy.unwrap(),
-                    // // This should not be nursery collection. Nursery collection does not use PolicyTraceObject.
-                    // false,
                 )
             }
         } else {

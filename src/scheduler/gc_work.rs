@@ -538,7 +538,7 @@ pub struct ProcessEdgesBase<VM: VMBinding> {
     pub roots: bool,
     pub bucket: WorkBucketStage,
     #[cfg(feature = "debug_publish_object")]
-    pub sources: Vec<ObjectReference>,
+    pub sources: Vec<Option<ObjectReference>>,
     #[cfg(feature = "debug_publish_object")]
     pub vm_roots_type: u8,
 }
@@ -576,7 +576,7 @@ impl<VM: VMBinding> ProcessEdgesBase<VM> {
     // Requires an MMTk reference. Each plan-specific type that uses ProcessEdgesBase can get a static plan reference
     // at creation. This avoids overhead for dynamic dispatch or downcasting plan for each object traced.
     pub fn new(
-        sources: Vec<ObjectReference>,
+        sources: Vec<Option<ObjectReference>>,
         slots: Vec<VM::VMSlot>,
         roots: bool,
         vm_roots_type: u8,
@@ -692,7 +692,7 @@ pub trait ProcessEdgesWork:
 
     #[cfg(feature = "debug_publish_object")]
     fn new(
-        _sources: Vec<ObjectReference>,
+        _sources: Vec<Option<ObjectReference>>,
         slots: Vec<SlotOf<Self>>,
         roots: bool,
         vm_roots: u8,
@@ -783,68 +783,68 @@ pub trait ProcessEdgesWork:
 
     /// Process all the slots in the work packet.
     #[cfg(feature = "debug_publish_object")]
-    fn process_slotss(&mut self) {
-        for i in 0..self.edges.len() {
-            let source = self.sources[i];
-            #[cfg(debug_assertions)]
-            {
-                if self.roots {
-                    assert!(
-                        self.edges[i].load() == source,
-                        "root packets, source object != slot.load()"
-                    );
+    fn process_slots(&mut self) {
+        for i in 0..self.slots.len() {
+            let _source: Option<ObjectReference> = self.sources[i];
 
-                    // root type 0 are stack roots
-                    if self.vm_roots_type != 0 && !source.is_null() {
+            if self.roots {
+                assert!(
+                    self.slots[i].load() == _source,
+                    "root packets, source object != slot.load()"
+                );
+
+                // root type 0 are stack roots
+                if self.vm_roots_type != 0 {
+                    if let Some(source) = _source {
                         if !self.is_object_published(source) {
-                            println!("root slot: {:?}", self.edges[i]);
                             panic!(
-                                "VM Specific Root({:?}): {:?} is not published",
-                                self.vm_roots_type, source
-                            )
+                                    "VM Specific Root({:?}) | slot: {:?}, object: {:?} is not published",
+                                    self.vm_roots_type,self.slots[i], source
+                                )
                         }
                     }
                 }
             }
 
-            let slot: EdgeOf<Self> = self.edges[i];
-            let object = slot.load();
-            if object.is_null() {
-                continue;
-            }
-            let new_object = self.trace_object(object);
-            {
-                // In the case of a root packet, sources[i] might contain a stale object
-                // is_object_published will make sure to read the public bit on the correct
-                // object reference
-
-                if !source.is_null() && self.is_object_published(source) {
-                    if !new_object.is_null() {
-                        // source is public, then its child new_object must be public, otherwise, leakage
-                        // occurs
-                        let valid =
-                            crate::util::metadata::public_bit::is_public::<Self::VM>(new_object);
-                        if !valid {
-                            panic!(
-                                "public object: {:?} {:?} slot: {:?} points to private object: {:?} {:?}",
-                                source,
-                                crate::util::object_extra_header_metadata::get_extra_header_metadata::<
-                                    Self::VM,
-                                    usize,
-                                >(source),
-                                slot,
+            let slot: SlotOf<Self> = self.slots[i];
+            let _object = slot.load();
+            if let Some(object) = _object {
+                let new_object = self.trace_object(object);
+                {
+                    // In the case of a root packet, sources[i] might contain a stale object
+                    // is_object_published will make sure to read the public bit on the correct
+                    // object reference
+                    if let Some(source) = _source {
+                        if self.is_object_published(source) {
+                            // source is public, then its child new_object must be public, otherwise, leakage
+                            // occurs
+                            let valid = crate::util::metadata::public_bit::is_public::<Self::VM>(
                                 new_object,
-                                crate::util::object_extra_header_metadata::get_extra_header_metadata::<
-                                    Self::VM,
-                                    usize,
-                                >(new_object)
                             );
+                            if !valid {
+                                panic!(
+                                        "public object: {:?} {:?} slot: {:?} points to private object: {:?} {:?}",
+                                        source,
+                                        crate::util::object_extra_header_metadata::get_extra_header_metadata::<
+                                            Self::VM,
+                                            usize,
+                                        >(source),
+                                        slot,
+                                        new_object,
+                                        crate::util::object_extra_header_metadata::get_extra_header_metadata::<
+                                            Self::VM,
+                                            usize,
+                                        >(new_object)
+                                    );
+                            }
                         }
                     }
                 }
-            }
-            if Self::OVERWRITE_REFERENCE {
-                slot.store(new_object);
+                if Self::OVERWRITE_REFERENCE && new_object != object {
+                    slot.store(new_object);
+                }
+            } else {
+                continue;
             }
         }
     }
@@ -858,7 +858,9 @@ pub trait ProcessEdgesWork:
     }
 
     #[cfg(feature = "debug_publish_object")]
-    fn is_object_published(&self, _object: ObjectReference) -> bool;
+    fn is_object_published(&self, _object: ObjectReference) -> bool {
+        unimplemented!();
+    }
 }
 
 impl<E: ProcessEdgesWork> GCWork<E::VM> for E {
@@ -910,7 +912,7 @@ impl<VM: VMBinding> ProcessEdgesWork for SFTProcessEdges<VM> {
 
     #[cfg(feature = "debug_publish_object")]
     fn new(
-        sources: Vec<ObjectReference>,
+        sources: Vec<Option<ObjectReference>>,
         slots: Vec<SlotOf<Self>>,
         roots: bool,
         vm_roots: u8,
@@ -991,11 +993,20 @@ impl<VM: VMBinding, DPE: ProcessEdgesWork<VM = VM>, PPE: ProcessEdgesWork<VM = V
     }
 
     #[cfg(feature = "debug_publish_object")]
-    fn create_process_roots_work(&mut self, vm_roots: u8, slots: Vec<SlotOf<E>>) {
+    fn create_process_roots_work(&mut self, vm_roots: u8, slots: Vec<VM::VMSlot>) {
+        // Note: We should use the same USDT name "mmtk:roots" for all the three kinds of roots. A
+        // VM binding may not call all of the three methods in this impl. For example, the OpenJDK
+        // binding only calls `create_process_roots_work`, and the Ruby binding only calls
+        // `create_process_pinning_roots_work`. Because `ProcessEdgesWorkRootsWorkFactory<VM, DPE,
+        // PPE>` is a generic type, the Rust compiler emits the function bodies on demand, so the
+        // resulting machine code may not contain all three USDT trace points.  If they have
+        // different names, and our `capture.bt` mentions all of them, `bpftrace` may complain that
+        // it cannot find one or more of those USDT trace points in the binary.
+        probe!(mmtk, roots, RootsKind::NORMAL, slots.len());
         crate::memory_manager::add_work_packet(
             self.mmtk,
             WorkBucketStage::Closure,
-            E::new(
+            DPE::new(
                 slots.iter().map(|&slot| slot.load()).collect(),
                 slots,
                 true,
@@ -1212,7 +1223,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
 
     #[cfg(feature = "debug_publish_object")]
     fn new(
-        sources: Vec<ObjectReference>,
+        sources: Vec<Option<ObjectReference>>,
         slots: Vec<SlotOf<Self>>,
         roots: bool,
         vm_roots: u8,
@@ -1390,7 +1401,7 @@ impl<VM: VMBinding, R2OPE: ProcessEdgesWork<VM = VM>, O2OPE: ProcessEdgesWork<VM
         let scanned_root_objects = {
             // We create an instance of E to use its `trace_object` method and its object queue.
             #[cfg(feature = "debug_publish_object")]
-            let mut process_edges_work = I::new(
+            let mut process_edges_work = R2OPE::new(
                 vec![],
                 vec![],
                 true,
@@ -1465,8 +1476,8 @@ impl<VM: VMBinding> ProcessEdgesWork for UnsupportedProcessEdges<VM> {
 
     #[cfg(feature = "debug_publish_object")]
     fn new(
-        _sources: Vec<ObjectReference>,
-        _edges: Vec<EdgeOf<Self>>,
+        _sources: Vec<Option<ObjectReference>>,
+        _edges: Vec<SlotOf<Self>>,
         _roots: bool,
         _vm_roots: u8,
         _mmtk: &'static MMTK<Self::VM>,

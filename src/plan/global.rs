@@ -733,8 +733,9 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for BasePlan<VM> {
         &self,
         _mutator: &mut Mutator<VM>,
         _source: ObjectReference,
-        _slot: VM::VMEdge,
+        _slot: VM::VMSlot,
         object: ObjectReference,
+        _worker: Option<*mut GCWorker<VM>>,
     ) -> ThreadlocalTracedObjectType {
         #[cfg(feature = "code_space")]
         if self.code_space.in_space(object) {
@@ -743,7 +744,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for BasePlan<VM> {
                 _mutator,
                 source,
                 object,
-                None,
+                worker,
             );
         }
 
@@ -754,7 +755,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for BasePlan<VM> {
                 _mutator,
                 source,
                 object,
-                None,
+                worker,
             );
         }
 
@@ -765,7 +766,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for BasePlan<VM> {
                 _mutator,
                 source,
                 object,
-                None,
+                worker,
             );
         }
 
@@ -776,7 +777,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for BasePlan<VM> {
                 _mutator,
                 source,
                 object,
-                None,
+                worker,
             );
         }
 
@@ -965,8 +966,9 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
         &self,
         mutator: &mut Mutator<VM>,
         source: ObjectReference,
-        slot: VM::VMEdge,
+        slot: VM::VMSlot,
         object: ObjectReference,
+        worker: Option<*mut GCWorker<VM>>,
     ) -> ThreadlocalTracedObjectType {
         if self.immortal.in_space(object) {
             return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<
@@ -978,6 +980,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
                 slot,
                 object,
                 None,
+                None
 
             );
         }
@@ -989,6 +992,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
                 slot,
                 object,
                 None,
+                None,
             );
         }
         if self.nonmoving.in_space(object) {
@@ -999,11 +1003,12 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
                 slot,
                 object,
                 None,
+                None,
 
             );
         }
         <BasePlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
-            &self.base, mutator, source, slot, object,
+            &self.base, mutator, source, slot, object, worker,
         )
     }
 
@@ -1125,7 +1130,7 @@ pub trait PlanThreadlocalTraceObject<VM: VMBinding> {
         &self,
         mutator: &mut Mutator<VM>,
         source: ObjectReference,
-        slot: VM::VMEdge,
+        slot: VM::VMSlot,
         object: ObjectReference,
         worker: Option<*mut GCWorker<VM>>,
     ) -> ThreadlocalTracedObjectType;

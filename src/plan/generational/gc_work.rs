@@ -44,8 +44,8 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>, const KIND
 
     #[cfg(feature = "debug_publish_object")]
     fn new(
-        sources: Vec<ObjectReference>,
-        slots: Vec<EdgeOf<Self>>,
+        sources: Vec<Option<ObjectReference>>,
+        slots: Vec<SlotOf<Self>>,
         roots: bool,
         vm_roots: u8,
         mmtk: &'static MMTK<VM>,
@@ -200,8 +200,8 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ProcessRegionModBuf<E> {
             // Forward entries
             GCWork::do_work(
                 &mut E::new(
-                    edges.iter().map(|&edge| edge.load()).collect(),
-                    edges,
+                    slots.iter().map(|&slot| slot.load()).collect(),
+                    slots,
                     false,
                     0,
                     mmtk,

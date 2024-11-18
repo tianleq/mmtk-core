@@ -141,7 +141,6 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
 
     #[cfg(feature = "debug_publish_object")]
     fn is_object_published(&self, object: crate::util::ObjectReference) -> bool {
-        debug_assert!(object.is_null() == false, "object is null");
         if self.tospace().in_space(object) {
             // object has already been forwarded, simply check the public bit
             crate::util::metadata::public_bit::is_public::<VM>(object)

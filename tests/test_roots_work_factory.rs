@@ -24,7 +24,7 @@ impl MockScanning {
         #[cfg(not(feature = "debug_publish_object"))]
         factory.create_process_roots_work(self.roots.clone());
         #[cfg(feature = "debug_publish_object")]
-        factory.create_process_edge_roots_work(0, self.roots.clone());
+        factory.create_process_roots_work(0, self.roots.clone());
     }
 }
 
@@ -70,8 +70,8 @@ impl RootsWorkFactory<Address> for MockFactory {
         }
     }
     #[cfg(feature = "debug_publish_object")]
-    fn create_process_edge_roots_work(&mut self, _vm_roots: u8, edges: Vec<Address>) {
-        assert_eq!(edges, EDGES);
+    fn create_process_roots_work(&mut self, _vm_roots: u8, edges: Vec<Address>) {
+        assert_eq!(edges, SLOTS);
         match self.round {
             1 => {
                 assert_eq!(self.v, "y");

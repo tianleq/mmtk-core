@@ -328,17 +328,19 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
             #[cfg(all(feature = "debug_publish_object", debug_assertions))]
             {
                 // use crate::vm::ActivePlan;
-                if target.is_some() && !is_public::<S::VM>(target.unwrap()) {
-                    // both source and target are private
-                    // they should have the same owner
-                    let source_owner = self.semantics.get_object_owner(src);
-                    let target_owner = self.semantics.get_object_owner(target);
-                    let valid = source_owner == target_owner;
-                    if !valid {
-                        panic!(
-                            "source: {} owner: {}, target: {} owner: {}",
-                            src, source_owner, target, target_owner
-                        );
+                if let Some(val) = target {
+                    if !is_public::<S::VM>(val) {
+                        // both source and target are private
+                        // they should have the same owner
+                        let source_owner = self.semantics.get_object_owner(src);
+                        let target_owner = self.semantics.get_object_owner(val);
+                        let valid = source_owner == target_owner;
+                        if !valid {
+                            panic!(
+                                "source: {} owner: {}, target: {} owner: {}",
+                                src, source_owner, val, target_owner
+                            );
+                        }
                     }
                 }
             }
@@ -395,17 +397,18 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
                     // Even if src base is private, it may still contain public objects
                     // so need to rule out public objects
                     for slot in src.iter_slots() {
-                        let object = slot.load();
-                        if !object.is_null() && !is_public::<S::VM>(object) {
-                            let owner = self.semantics.get_object_owner(object);
-                            assert!(
-                                dst_owner == owner,
-                                "dst base: {} owner: {}, src object: {} owner: {}",
-                                dst_base,
-                                dst_owner,
-                                object,
-                                owner
-                            );
+                        if let Some(object) = slot.load() {
+                            if !is_public::<S::VM>(object) {
+                                let owner = self.semantics.get_object_owner(object);
+                                assert!(
+                                    dst_owner == owner,
+                                    "dst base: {} owner: {}, src object: {} owner: {}",
+                                    dst_base,
+                                    dst_owner,
+                                    object,
+                                    owner
+                                );
+                            }
                         }
                     }
                 }

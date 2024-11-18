@@ -524,7 +524,16 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for SoftRefProcessing<E> {
 
             // Retain soft references.  This will expand the transitive closure.  We create an
             // instance of `E` for this.
-            let mut w = E::new(vec![], false, mmtk, WorkBucketStage::SoftRefClosure);
+            let mut w = E::new(
+                vec![],
+                #[cfg(feature = "debug_publish_object")]
+                vec![],
+                false,
+                #[cfg(feature = "debug_publish_object")]
+                0,
+                mmtk,
+                WorkBucketStage::SoftRefClosure,
+            );
             w.set_worker(worker);
             mmtk.reference_processors.retain_soft_refs(&mut w, mmtk);
             w.flush();

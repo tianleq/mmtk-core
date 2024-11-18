@@ -327,7 +327,6 @@ impl<VM: VMBinding> CopySpace<VM> {
 
     #[cfg(all(feature = "debug_publish_object"))]
     pub fn is_object_published(&self, object: ObjectReference) -> bool {
-        debug_assert!(!object.is_null());
         // read the public bit of the old object first
         let is_published = crate::util::metadata::public_bit::is_public::<VM>(object);
         if object_forwarding::is_forwarded_or_being_forwarded::<VM>(object) {

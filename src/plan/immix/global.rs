@@ -299,7 +299,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
 
     #[cfg(feature = "debug_publish_object")]
     fn is_object_published(&self, object: ObjectReference) -> bool {
-        debug_assert!(object.is_null() == false, "object is null");
         if self.immix_space.in_space(object) {
             self.immix_space.is_object_published(object)
         } else {
@@ -588,8 +587,9 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for Immix<VM> {
         &self,
         mutator: &mut Mutator<VM>,
         source: ObjectReference,
-        slot: VM::VMEdge,
+        slot: VM::VMSlot,
         object: ObjectReference,
+        worker: Option<*mut GCWorker<VM>>,
     ) -> ThreadlocalTracedObjectType {
         if self.immix_space.in_space(object) {
             return <ImmixSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<
@@ -600,6 +600,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for Immix<VM> {
                 source,
                 slot,
                 object,
+                worker,
                 Some(CopySemantics::DefaultCopy),
             );
         }
@@ -609,6 +610,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for Immix<VM> {
             source,
             slot,
             object,
+            worker,
         )
     }
 }

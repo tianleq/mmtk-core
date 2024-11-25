@@ -300,7 +300,14 @@ where
             #[cfg(feature = "debug_publish_object")]
             let _source = self.source_buffer.pop_front().unwrap();
             let _object = slot.load();
+            #[cfg(feature = "debug_publish_object")]
             let (Some(object), Some(source)) = (_object, _source) else {
+                continue;
+            };
+
+            #[cfg(not(feature = "debug_publish_object"))]
+            let Some(object) = _object
+            else {
                 continue;
             };
 

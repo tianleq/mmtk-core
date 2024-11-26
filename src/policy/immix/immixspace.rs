@@ -1263,6 +1263,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     pub fn thread_local_trace_object_defrag(
         &self,
         mutator: &mut Mutator<VM>,
+        #[cfg(feature = "debug_publish_object")] _source: ObjectReference,
         object: ObjectReference,
         _worker: &mut GCWorker<VM>,
         semantics: CopySemantics,
@@ -1270,26 +1271,29 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         // TODO make sure there is enough space to evacuate
 
         let block = Block::containing::<VM>(object);
+        let is_private_object = !crate::util::metadata::public_bit::is_public::<VM>(object);
         #[cfg(feature = "vo_bit")]
         vo_bit::helper::on_trace_object::<VM>(object);
-        if block.is_defrag_source() {
-            let is_private_object = !crate::util::metadata::public_bit::is_public::<VM>(object);
-            let mut forwarding_status = 0;
-            let is_forwarded_or_being_forwarded = if is_private_object {
-                object_forwarding::thread_local_is_forwarded::<VM>(object)
-            } else {
-                forwarding_status = object_forwarding::attempt_to_forward::<VM>(object);
-                object_forwarding::state_is_forwarded_or_being_forwarded(forwarding_status)
-            };
+        if block.is_defrag_source() && is_private_object {
+            // let mut forwarding_status = 0;
+            // let is_forwarded_or_being_forwarded = if is_private_object {
+            //     object_forwarding::thread_local_is_forwarded::<VM>(object)
+            // } else {
+            //     forwarding_status = object_forwarding::attempt_to_forward::<VM>(object);
+            //     object_forwarding::state_is_forwarded_or_being_forwarded(forwarding_status)
+            // };
+            let is_forwarded_or_being_forwarded =
+                object_forwarding::thread_local_is_forwarded::<VM>(object);
             if is_forwarded_or_being_forwarded {
-                let new_object = if is_private_object {
-                    object_forwarding::thread_local_get_forwarded_object::<VM>(object)
-                } else {
-                    object_forwarding::spin_and_get_forwarded_object::<VM>(
-                        object,
-                        forwarding_status,
-                    )
-                };
+                // let new_object = if is_private_object {
+                //     object_forwarding::thread_local_get_forwarded_object::<VM>(object)
+                // } else {
+                //     object_forwarding::spin_and_get_forwarded_object::<VM>(
+                //         object,
+                //         forwarding_status,
+                //     )
+                // };
+                let new_object = object_forwarding::thread_local_get_forwarded_object::<VM>(object);
                 ThreadlocalTracedObjectType::Scanned(new_object)
             } else if self.is_marked(object) {
                 debug_assert!(self.defrag.space_exhausted(), "Forwarded object is the same as original object {} even though it should have been copied", object);
@@ -1359,6 +1363,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 ThreadlocalTracedObjectType::ToBeScanned(new_object)
             }
         } else {
+            // Also leave public object in place as well, the purpose of defrag mutator
+            // is to reduce the number of ditry blocks, public objects have no impact on
+            // producing dirty blocks
             // if the object is not in the defrag souce, then it cannot be evacuated
             // otherwise, during transitive closure phase, the stale pointer will be
             // kept
@@ -1829,6 +1836,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
             {
                 self.thread_local_trace_object_defrag(
                     mutator,
+                    _source,
                     object,
                     unsafe { &mut *_worker.unwrap() },
                     _copy.unwrap(),

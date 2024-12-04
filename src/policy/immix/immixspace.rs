@@ -914,11 +914,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         } else if self.is_marked(object) {
             // We won the forwarding race but the object is already marked so we clear the
             // forwarding status and return the unmoved object
-            debug_assert!(
-                nursery_collection || self.defrag.space_exhausted() || self.is_pinned(object) || is_private_object,
-                "Forwarded object is the same as original object {} even though it should have been copied",
-                object,
-            );
+            // debug_assert!(
+            //     nursery_collection || self.defrag.space_exhausted() || self.is_pinned(object) || is_private_object,
+            //     "Forwarded object is the same as original object {} even though it should have been copied",
+            //     object,
+            // );
             #[cfg(debug_assertions)]
             {
                 #[cfg(all(feature = "debug_publish_object", feature = "thread_local_gc"))]
@@ -1274,26 +1274,25 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let is_private_object = !crate::util::metadata::public_bit::is_public::<VM>(object);
         #[cfg(feature = "vo_bit")]
         vo_bit::helper::on_trace_object::<VM>(object);
-        if block.is_defrag_source() && is_private_object {
-            // let mut forwarding_status = 0;
-            // let is_forwarded_or_being_forwarded = if is_private_object {
-            //     object_forwarding::thread_local_is_forwarded::<VM>(object)
-            // } else {
-            //     forwarding_status = object_forwarding::attempt_to_forward::<VM>(object);
-            //     object_forwarding::state_is_forwarded_or_being_forwarded(forwarding_status)
-            // };
-            let is_forwarded_or_being_forwarded =
-                object_forwarding::thread_local_is_forwarded::<VM>(object);
+
+        if block.is_defrag_source() {
+            let mut forwarding_status = 0;
+            let is_forwarded_or_being_forwarded = if is_private_object {
+                object_forwarding::thread_local_is_forwarded::<VM>(object)
+            } else {
+                forwarding_status = object_forwarding::attempt_to_forward::<VM>(object);
+                object_forwarding::state_is_forwarded_or_being_forwarded(forwarding_status)
+            };
+
             if is_forwarded_or_being_forwarded {
-                // let new_object = if is_private_object {
-                //     object_forwarding::thread_local_get_forwarded_object::<VM>(object)
-                // } else {
-                //     object_forwarding::spin_and_get_forwarded_object::<VM>(
-                //         object,
-                //         forwarding_status,
-                //     )
-                // };
-                let new_object = object_forwarding::thread_local_get_forwarded_object::<VM>(object);
+                let new_object = if is_private_object {
+                    object_forwarding::thread_local_get_forwarded_object::<VM>(object)
+                } else {
+                    object_forwarding::spin_and_get_forwarded_object::<VM>(
+                        object,
+                        forwarding_status,
+                    )
+                };
                 ThreadlocalTracedObjectType::Scanned(new_object)
             } else if self.is_marked(object) {
                 debug_assert!(self.defrag.space_exhausted(), "Forwarded object is the same as original object {} even though it should have been copied", object);
@@ -1308,17 +1307,21 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             } else {
                 debug_assert!(self.is_marked(object) == false);
 
-                let new_object = if self.defrag.space_exhausted() {
-                    self.attempt_mark(object, self.mark_state);
-                    object_forwarding::clear_forwarding_bits::<VM>(object);
-                    block.set_state(BlockState::Marked);
-                    // conservatively set the ditry bit
-                    if is_private_object {
-                        block.taint();
+                let new_object: ThreadlocalTracedObjectType = if self.defrag.space_exhausted() {
+                    if self.attempt_mark(object, self.mark_state) {
+                        self.unlog_object_if_needed(object);
+                        object_forwarding::clear_forwarding_bits::<VM>(object);
+                        block.set_state(BlockState::Marked);
+                        // conservatively set the ditry bit
+                        if is_private_object {
+                            block.taint();
+                        }
+                        #[cfg(feature = "vo_bit")]
+                        vo_bit::helper::on_object_marked::<VM>(object);
+                        ThreadlocalTracedObjectType::ToBeScanned(object)
+                    } else {
+                        ThreadlocalTracedObjectType::Scanned(object)
                     }
-                    #[cfg(feature = "vo_bit")]
-                    vo_bit::helper::on_object_marked::<VM>(object);
-                    object
                 } else {
                     let new_object = if is_private_object {
                         // We are forwarding objects.
@@ -1357,24 +1360,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     #[cfg(feature = "vo_bit")]
                     vo_bit::helper::on_object_forwarded::<VM>(new_object);
                     self.unlog_object_if_needed(new_object);
-                    new_object
+                    ThreadlocalTracedObjectType::ToBeScanned(new_object)
                 };
-
-                ThreadlocalTracedObjectType::ToBeScanned(new_object)
+                new_object
             }
         } else {
-            // Also leave public object in place as well, the purpose of defrag mutator
-            // is to reduce the number of ditry blocks, public objects have no impact on
-            // producing dirty blocks
-            // if the object is not in the defrag souce, then it cannot be evacuated
-            // otherwise, during transitive closure phase, the stale pointer will be
-            // kept
-            debug_assert!(
-                crate::util::metadata::public_bit::is_public::<VM>(object),
-                "block: {:?}, private object: {:?} defrag source == false",
-                block,
-                object
-            );
             if self.attempt_mark(object, self.mark_state) {
                 self.unlog_object_if_needed(object);
                 // Mark block and lines
@@ -1390,6 +1380,123 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 ThreadlocalTracedObjectType::Scanned(object)
             }
         }
+
+        // if block.is_defrag_source() && is_private_object {
+        //     // let mut forwarding_status = 0;
+        //     // let is_forwarded_or_being_forwarded = if is_private_object {
+        //     //     object_forwarding::thread_local_is_forwarded::<VM>(object)
+        //     // } else {
+        //     //     forwarding_status = object_forwarding::attempt_to_forward::<VM>(object);
+        //     //     object_forwarding::state_is_forwarded_or_being_forwarded(forwarding_status)
+        //     // };
+        //     let is_forwarded_or_being_forwarded =
+        //         object_forwarding::thread_local_is_forwarded::<VM>(object);
+        //     if is_forwarded_or_being_forwarded {
+        //         // let new_object = if is_private_object {
+        //         //     object_forwarding::thread_local_get_forwarded_object::<VM>(object)
+        //         // } else {
+        //         //     object_forwarding::spin_and_get_forwarded_object::<VM>(
+        //         //         object,
+        //         //         forwarding_status,
+        //         //     )
+        //         // };
+        //         let new_object = object_forwarding::thread_local_get_forwarded_object::<VM>(object);
+        //         ThreadlocalTracedObjectType::Scanned(new_object)
+        //     } else if self.is_marked(object) {
+        //         debug_assert!(self.defrag.space_exhausted(), "Forwarded object is the same as original object {} even though it should have been copied", object);
+        //         debug_assert!(
+        //             !is_private_object || block.is_block_dirty(),
+        //             "block: {:?} should be dirty",
+        //             block
+        //         );
+
+        //         object_forwarding::clear_forwarding_bits::<VM>(object);
+        //         ThreadlocalTracedObjectType::Scanned(object)
+        //     } else {
+        //         debug_assert!(self.is_marked(object) == false);
+
+        //         let new_object = if self.defrag.space_exhausted() {
+        //             self.attempt_mark(object, self.mark_state);
+        //             object_forwarding::clear_forwarding_bits::<VM>(object);
+        //             block.set_state(BlockState::Marked);
+        //             // conservatively set the ditry bit
+        //             if is_private_object {
+        //                 block.taint();
+        //             }
+        //             #[cfg(feature = "vo_bit")]
+        //             vo_bit::helper::on_object_marked::<VM>(object);
+        //             object
+        //         } else {
+        //             let new_object = if is_private_object {
+        //                 // We are forwarding objects.
+
+        //                 // Clippy complains if the "vo_bit" feature is not enabled.
+        //                 #[allow(clippy::let_and_return)]
+        //                 let new_object = object_forwarding::thread_local_forward_object::<VM>(
+        //                     object, semantics, mutator,
+        //                 );
+        //                 #[cfg(debug_assertions)]
+        //                 {
+        //                     let block = Block::containing::<VM>(new_object);
+        //                     debug_assert_eq!(block.get_state(), BlockState::Marked);
+        //                     debug_assert!(
+        //                         block.is_block_dirty(),
+        //                         "block: {:?} should be dirty",
+        //                         block
+        //                     );
+        //                 }
+
+        //                 new_object
+        //             } else {
+        //                 // We are forwarding objects. When the copy allocator allocates the block, it should
+        //                 // mark the block. So we do not need to explicitly mark it here.
+        //                 let copy_context = _worker.get_copy_context_mut();
+        //                 let new_object = object_forwarding::forward_public_object::<VM>(
+        //                     object,
+        //                     semantics,
+        //                     copy_context,
+        //                     #[cfg(feature = "debug_publish_object")]
+        //                     mutator.mutator_id,
+        //                 );
+        //                 new_object
+        //             };
+
+        //             #[cfg(feature = "vo_bit")]
+        //             vo_bit::helper::on_object_forwarded::<VM>(new_object);
+        //             self.unlog_object_if_needed(new_object);
+        //             new_object
+        //         };
+
+        //         ThreadlocalTracedObjectType::ToBeScanned(new_object)
+        //     }
+        // } else {
+        //     // Also leave public object in place as well, the purpose of defrag mutator
+        //     // is to reduce the number of ditry blocks, public objects have no impact on
+        //     // producing dirty blocks
+        //     // if the object is not in the defrag souce, then it cannot be evacuated
+        //     // otherwise, during transitive closure phase, the stale pointer will be
+        //     // kept
+        //     debug_assert!(
+        //         crate::util::metadata::public_bit::is_public::<VM>(object),
+        //         "block: {:?}, private object: {:?} defrag source == false",
+        //         block,
+        //         object
+        //     );
+        //     if self.attempt_mark(object, self.mark_state) {
+        //         self.unlog_object_if_needed(object);
+        //         // Mark block and lines
+        //         if !super::BLOCK_ONLY {
+        //             if !super::MARK_LINE_AT_SCAN_TIME {
+        //                 self.mark_lines(object);
+        //             }
+        //         } else {
+        //             block.set_state(BlockState::Marked);
+        //         }
+        //         ThreadlocalTracedObjectType::ToBeScanned(object)
+        //     } else {
+        //         ThreadlocalTracedObjectType::Scanned(object)
+        //     }
+        // }
     }
 
     fn unlog_object_if_needed(&self, object: ObjectReference) {

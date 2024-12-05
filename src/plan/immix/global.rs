@@ -36,12 +36,12 @@ use crate::vm::VMBinding;
 use crate::Mutator;
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicU8;
 
 use atomic::Ordering;
 use enum_map::EnumMap;
 
 use mmtk_macros::{HasSpaces, PlanTraceObject};
+use portable_atomic::AtomicUsize;
 
 #[derive(HasSpaces, PlanTraceObject)]
 pub struct Immix<VM: VMBinding> {
@@ -52,7 +52,7 @@ pub struct Immix<VM: VMBinding> {
     #[parent]
     pub common: CommonPlan<VM>,
     last_gc_was_defrag: AtomicBool,
-    defrag_mutator: AtomicU8,
+    defrag_mutator: AtomicUsize,
 }
 
 /// The plan constraints for the immix plan.
@@ -65,7 +65,6 @@ pub const IMMIX_CONSTRAINTS: PlanConstraints = PlanConstraints {
 };
 
 pub const DEFRAG_MUTATOR_THRESHOLD: usize = 16;
-const MAX_DEFRAG_MUTATOR_PACKET: u8 = 4;
 
 impl<VM: VMBinding> Plan for Immix<VM> {
     fn collection_required(&self, space_full: bool, _space: Option<SpaceStats<Self::VM>>) -> bool {
@@ -172,10 +171,15 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     #[cfg(feature = "thread_local_gc_copying")]
-    fn defrag_mutator_required(&self, tls: VMMutatorThread) -> bool {
+    fn defrag_mutator_required(
+        &self,
+        mmtk: &'static crate::MMTK<VM>,
+        tls: VMMutatorThread,
+    ) -> bool {
         use crate::vm::ActivePlan;
         use std::borrow::Borrow;
-        if self.defrag_mutator.load(Ordering::Acquire) >= MAX_DEFRAG_MUTATOR_PACKET {
+        let number_of_workers = mmtk.scheduler.worker_group.worker_count();
+        if self.defrag_mutator.load(Ordering::Acquire) >= number_of_workers {
             return false;
         }
         let mutator = VM::VMActivePlan::mutator(tls);
@@ -188,24 +192,15 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         .downcast_ref::<crate::util::alloc::ImmixAllocator<VM>>()
         .unwrap();
         if immix_allocator.local_reusable_blocks.len() >= DEFRAG_MUTATOR_THRESHOLD {
-            // let count = self.defrag_mutator.fetch_add(1, Ordering::SeqCst);
-            // if count < MAX_DEFRAG_MUTATOR_PACKET {
-            //     return true;
-            // } else {
-            //     self.defrag_mutator.fetch_sub(1, Ordering::SeqCst);
-            //     return false;
-            // }
-            // // match self.defrag_mutator.compare_exchange(
-            // //     true,
-            // //     false,
-            // //     Ordering::SeqCst,
-            // //     Ordering::SeqCst,
-            // // ) {
-            // //     Ok(_) => true,
-            // //     Err(_) => false,
-            // // }
+            let count = self.defrag_mutator.fetch_add(1, Ordering::SeqCst);
+            if count < number_of_workers {
+                return true;
+            } else {
+                self.defrag_mutator.fetch_sub(1, Ordering::SeqCst);
+                return false;
+            }
 
-            true
+            // true
         } else {
             false
         }
@@ -412,7 +407,7 @@ impl<VM: VMBinding> Immix<VM> {
             ),
             common: CommonPlan::new(plan_args),
             last_gc_was_defrag: AtomicBool::new(false),
-            defrag_mutator: AtomicU8::new(0),
+            defrag_mutator: AtomicUsize::new(0),
         };
 
         immix.verify_side_metadata_sanity();

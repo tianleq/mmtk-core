@@ -64,8 +64,6 @@ pub const IMMIX_CONSTRAINTS: PlanConstraints = PlanConstraints {
     ..PlanConstraints::default()
 };
 
-pub const DEFRAG_MUTATOR_THRESHOLD: usize = 16;
-
 impl<VM: VMBinding> Plan for Immix<VM> {
     fn collection_required(&self, space_full: bool, _space: Option<SpaceStats<Self::VM>>) -> bool {
         self.base().collection_required(self, space_full)
@@ -179,6 +177,11 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         use crate::vm::ActivePlan;
         use std::borrow::Borrow;
         let number_of_workers = mmtk.scheduler.worker_group.worker_count();
+        let max_defrag_mutators = if *mmtk.options.max_concurrent_defrag_mutator != 0 {
+            usize::try_from(*mmtk.options.max_concurrent_defrag_mutator).unwrap()
+        } else {
+            number_of_workers
+        };
         if self.defrag_mutator.load(Ordering::Acquire) >= number_of_workers {
             return false;
         }
@@ -191,9 +194,11 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         }
         .downcast_ref::<crate::util::alloc::ImmixAllocator<VM>>()
         .unwrap();
-        if immix_allocator.local_reusable_blocks.len() >= DEFRAG_MUTATOR_THRESHOLD {
+        if immix_allocator.local_reusable_blocks.len()
+            >= thread_local_gc_work::DEFRAG_MUTATOR_THRESHOLD
+        {
             let count = self.defrag_mutator.fetch_add(1, Ordering::SeqCst);
-            if count < number_of_workers {
+            if count < max_defrag_mutators {
                 return true;
             } else {
                 self.defrag_mutator.fetch_sub(1, Ordering::SeqCst);

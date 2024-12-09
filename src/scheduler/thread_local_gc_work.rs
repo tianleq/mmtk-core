@@ -553,3 +553,4 @@ pub(crate) static ACTIVE_LOCAL_GC_COUNTER: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(0);
 pub(crate) static DEFAULT_MAX_CONCURRENT_LOCAL_GC: u32 = 3;
 pub(crate) static DEFAULT_MAX_LOCAL_COPY_RESERVE: u8 = 4;
+pub(crate) static DEFRAG_MUTATOR_THRESHOLD: usize = 16;

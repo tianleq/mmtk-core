@@ -1,5 +1,4 @@
 //! Mutator context for each application thread.
-
 use crate::plan::barriers::Barrier;
 use crate::plan::global::Plan;
 use crate::plan::AllocationSemantics;
@@ -125,7 +124,9 @@ pub struct Mutator<VM: VMBinding> {
     #[cfg(feature = "debug_thread_local_gc_copying")]
     pub(crate) stats: Box<crate::util::LocalGCStatistics>,
     #[cfg(feature = "thread_local_gc_copying")]
-    pub(crate) local_allocation_size: usize
+    pub(crate) local_allocation_size: usize,
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub(crate) is_compiler: bool
 }
 
 impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
@@ -144,6 +145,24 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         offset: usize,
         semantics: AllocationSemantics,
     ) -> Address {
+        #[cfg(feature = "thread_local_gc")]
+        {
+            use crate::scheduler::thread_local_gc_work::ACTIVE_LOCAL_GC_COUNTER;
+            use std::sync::atomic::Ordering;
+            use crate::vm::Collection;
+            
+            // explicitly trigger the local gc (skip the compiler thread)
+            if !self.is_compiler && self.local_allocation_size >= self.plan.options().get_thread_local_heap_size() {
+                let count = ACTIVE_LOCAL_GC_COUNTER.fetch_add(1, Ordering::SeqCst);
+                if count < self.plan.options().get_max_concurrent_local_gc() {
+                    VM::VMCollection::do_thread_local_gc(self.mutator_tls); 
+                } else {
+                    // alreay reach max concurrent local gc, simply continue
+                    ACTIVE_LOCAL_GC_COUNTER.fetch_sub(1, Ordering::SeqCst);
+    
+                }
+            }
+        }
         unsafe {
             self.allocators
                 .get_allocator_mut(self.config.allocator_mapping[semantics])
@@ -230,6 +249,7 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
                 );
             }
         }
+
 
     }
 

@@ -147,7 +147,7 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
     }
 }
 
-impl<'a, E: ProcessEdgesWork> SlotVisitor<SlotOf<E>> for ObjectsClosure<'a, E> {
+impl<E: ProcessEdgesWork> SlotVisitor<SlotOf<E>> for ObjectsClosure<'_, E> {
     #[cfg(not(feature = "debug_publish_object"))]
     fn visit_slot(&mut self, slot: SlotOf<E>) {
         #[cfg(debug_assertions)]
@@ -183,7 +183,7 @@ impl<'a, E: ProcessEdgesWork> SlotVisitor<SlotOf<E>> for ObjectsClosure<'a, E> {
     }
 }
 
-impl<'a, E: ProcessEdgesWork> Drop for ObjectsClosure<'a, E> {
+impl<E: ProcessEdgesWork> Drop for ObjectsClosure<'_, E> {
     fn drop(&mut self) {
         self.flush();
     }

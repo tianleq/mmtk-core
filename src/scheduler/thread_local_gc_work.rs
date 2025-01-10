@@ -385,7 +385,7 @@ where
         ) {
             Scanned(new_object) => {
                 debug_assert!(
-                    object.is_live::<VM>(),
+                    object.is_live(),
                     "object: {:?} is supposed to be alive.",
                     object
                 );
@@ -504,7 +504,7 @@ where
                 // mutator.finalizable_candidates.push(f);
                 continue;
             }
-            if reff.is_live::<VM>() {
+            if reff.is_live() {
                 // live object indicates that the object has already been traced/scanned during transitive closure phase
                 // so no need to do the closure again
                 let object = closure.do_object_tracing(f.get_reference());

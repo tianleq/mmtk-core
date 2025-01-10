@@ -180,7 +180,6 @@ pub fn no_cleanup() {}
 ///
 /// These are not supported at the moment. As those will change the `MockVM` type, we will have
 /// to use macros to generate a new `MockVM` type when we custimize constants or associated types.
-
 // The current implementation is not perfect, but at least it works, and it is easy enough to debug with.
 // I have tried different third-party libraries for mocking, and each has its own limitation. And
 // none of the libraries I tried can mock `VMBinding` and the associated traits out of box. Even after I attempted
@@ -522,9 +521,6 @@ impl crate::vm::ObjectModel<MockVM> for MockVM {
     fn ref_to_header(object: ObjectReference) -> Address {
         mock!(ref_to_header(object))
     }
-
-    // TODO: This is not mocked. We need a way to deal with it.
-    const IN_OBJECT_ADDRESS_OFFSET: isize = -(DEFAULT_OBJECT_REF_OFFSET as isize);
 
     fn dump_object(object: ObjectReference) {
         mock!(dump_object(object))

@@ -64,7 +64,7 @@ impl<F: Finalizable> FinalizableProcessor<F> {
     {
         for mut f in candidates {
             let reff: ObjectReference = f.get_reference();
-            debug_assert!(reff.is_live::<E::VM>(), "object: {:?} should be live", reff);
+            debug_assert!(reff.is_live(), "object: {:?} should be live", reff);
             FinalizableProcessor::<F>::forward_finalizable_reference(e, &mut f);
         }
     }
@@ -83,7 +83,7 @@ impl<F: Finalizable> FinalizableProcessor<F> {
             let reff: ObjectReference = f.get_reference();
 
             trace!("Pop {:?} for finalization", reff);
-            if reff.is_live::<E::VM>() {
+            if reff.is_live() {
                 FinalizableProcessor::<F>::forward_finalizable_reference(e, &mut f);
                 trace!("{:?} is live, push {:?} back to candidates", reff, f);
                 self.candidates.push(f);
@@ -211,7 +211,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for Finalization<E> {
                 .finalizable_candidates
                 .iter()
                 .map(|f| *f)
-                .filter(|f| !f.get_reference().is_live::<E::VM>());
+                .filter(|f| !f.get_reference().is_live());
             // .map(|f| {
             //     // publish private ready for finalize objects as they will be pushed to the global list
             //     memory_manager::mmtk_publish_object(mmtk, Some(f.get_reference()));
@@ -222,7 +222,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for Finalization<E> {
             // get rid of dead objects from local finalizable list
             mutator
                 .finalizable_candidates
-                .retain(|f| f.get_reference().is_live::<E::VM>());
+                .retain(|f| f.get_reference().is_live());
 
             // make sure local finalizable objects are up-to-date
             // This is necessary since defrag mutator might evacuate private objects

@@ -994,6 +994,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     |_new_object| {
                         #[cfg(feature = "vo_bit")]
                         vo_bit::helper::on_object_forwarded::<VM>(_new_object);
+                        #[cfg(feature = "debug_publish_object")]
+                        crate::util::metadata::public_bit::set_public_bit::<VM>(
+                            _new_object,
+                            Some(u32::MAX),
+                        );
+                        #[cfg(not(feature = "debug_publish_object"))]
+                        crate::util::metadata::public_bit::set_public_bit::<VM>(_new_object);
                     },
                 );
 

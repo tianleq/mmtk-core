@@ -139,7 +139,7 @@ pub struct EndOfThreadLocalGC {
 impl EndOfThreadLocalGC {
     pub fn execute<VM: VMBinding>(&mut self, _mmtk: &'static MMTK<VM>) {
         #[cfg(feature = "extreme_assertions")]
-        if crate::util::edge_logger::should_check_duplicate_edges(&*mmtk.plan) {
+        if crate::util::edge_logger::should_check_duplicate_edges(&*_mmtk.plan) {
             // reset the logging info at the end of each GC
             mmtk.edge_logger.reset();
         }

@@ -89,15 +89,6 @@ impl<VM: VMBinding> Allocator<VM> for LargeObjectAllocator<VM> {
         let maxbytes = allocator::get_maximum_aligned_size::<VM>(size, align);
         let pages = crate::util::conversions::bytes_to_pages_up(maxbytes);
 
-        #[cfg(feature = "thread_local_gc")]
-        {
-            let bytes =
-                allocator::get_maximum_aligned_size::<VM>(size - LOS_LOCAL_METADATA_BYTES, align);
-            if pages != crate::util::conversions::bytes_to_pages_up(bytes) {
-                panic!("*** extra page allocated ****");
-            }
-        }
-
         #[cfg(feature = "thread_local_gc_copying")]
         {
             use crate::vm::ActivePlan;

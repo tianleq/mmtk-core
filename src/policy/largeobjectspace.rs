@@ -413,7 +413,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             if self.test_and_mark(object, self.mark_state) {
                 trace!("LOS object {} is being marked now", object);
 
-                // When enabling thread_local_gc, local/private objects are not in the global tredmill
+                // When enabling thread_local_gc, local/private objects are not in the global treadmill
                 // So only copy public objects
                 if crate::util::metadata::public_bit::is_public::<VM>(object) {
                     self.treadmill.copy(object, nursery_object);
@@ -679,6 +679,13 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
 
             let mutator = VM::VMActivePlan::mutator(_tls);
             mutator.stats.los_bytes_published += VM::VMObjectModel::get_current_size(_object);
+        }
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn flush_thread_local_los_objects(&self, objects: &[ObjectReference]) {
+        for object in objects {
+            self.treadmill.add_to_treadmill(*object, false);
         }
     }
 

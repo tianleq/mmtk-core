@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use super::allocator::{align_allocation_no_fill, fill_alignment_gap, AllocatorContext};
 use super::BumpPointer;
-use crate::policy::immix::block::Block;
 use crate::policy::immix::line::*;
 use crate::policy::immix::ImmixSpace;
 use crate::policy::space::Space;
@@ -93,7 +92,7 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
             fill_alignment_gap::<VM>(self.bump_pointer.cursor, result);
             #[cfg(feature = "immix_utilization_analysis")]
             {
-                let block = Block::from_unaligned_address(result);
+                let block = crate::policy::immix::block::Block::from_unaligned_address(result);
                 block.increase_live_bytes_simple(
                     u32::try_from(size).unwrap(),
                     self.bump_pointer.cursor,
@@ -213,14 +212,14 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             self.request_for_large = false;
             #[cfg(feature = "immix_utilization_analysis")]
             {
-                let block = Block::from_unaligned_address(rtn);
-                block.increase_live_lines(Block::LINES as u32);
+                let block = crate::policy::immix::block::Block::from_unaligned_address(rtn);
+                block.increase_live_lines(crate::policy::immix::block::Block::LINES as u32);
             }
             rtn
         } else {
             #[cfg(feature = "immix_utilization_analysis")]
             {
-                let block = Block::from_unaligned_address(start);
+                let block = crate::policy::immix::block::Block::from_unaligned_address(start);
                 block.increase_live_bytes(u32::try_from(size).unwrap());
             }
             fill_alignment_gap::<VM>(self.large_bump_pointer.cursor, start);
@@ -254,8 +253,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             let rtn = self.alloc_slow_inline(size, align, offset);
             #[cfg(feature = "immix_utilization_analysis")]
             {
-                let block = Block::from_unaligned_address(rtn);
-                block.increase_live_lines(Block::LINES as u32);
+                let block = crate::policy::immix::block::Block::from_unaligned_address(rtn);
+                block.increase_live_lines(crate::policy::immix::block::Block::LINES as u32);
             }
             rtn
         }

@@ -766,11 +766,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[allow(clippy::assertions_on_constants)]
     pub fn mark_lines(&self, object: ObjectReference) {
         debug_assert!(!super::BLOCK_ONLY);
-        let (start_line, end_line) =
+        let (_start_line, _end_line) =
             Line::mark_lines_for_object::<VM>(object, self.line_mark_state.load(Ordering::Acquire));
-        let iter = RegionIterator::<Line>::new(start_line, end_line);
-        for line in iter {
-            self.line_set.lock().unwrap().insert(line);
+        #[cfg(feature = "immix_utilization_analysis")]
+        {
+            let iter = RegionIterator::<Line>::new(_start_line, _end_line);
+            for line in iter {
+                self.line_set.lock().unwrap().insert(line);
+            }
         }
     }
 

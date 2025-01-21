@@ -9,7 +9,7 @@ use super::worker_monitor::{LastParkedResult, WorkerMonitor};
 use super::*;
 use crate::global_state::GcStatus;
 use crate::mmtk::MMTK;
-use crate::util::linear_scan::Region;
+
 use crate::util::opaque_pointer::*;
 use crate::util::options::AffinityKind;
 use crate::util::rust_util::array_from_fn;
@@ -566,6 +566,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         }
         #[cfg(feature = "immix_utilization_analysis")]
         {
+            use crate::util::linear_scan::Region;
             use std::io::Write;
             // output utilization stats
             let mut file = std::fs::OpenOptions::new()

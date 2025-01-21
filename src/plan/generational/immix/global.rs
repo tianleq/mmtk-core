@@ -92,7 +92,12 @@ impl<VM: VMBinding> Plan for GenImmix<VM> {
             )
     }
 
-    fn collection_required(&self, space_full: bool, space: Option<SpaceStats<Self::VM>>) -> bool
+    fn collection_required(
+        &self,
+        space_full: bool,
+        space: Option<SpaceStats<Self::VM>>,
+        #[cfg(feature = "immix_utilization_analysis")] _tls: crate::util::VMMutatorThread,
+    ) -> bool
     where
         Self: Sized,
     {

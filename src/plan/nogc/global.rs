@@ -46,7 +46,12 @@ impl<VM: VMBinding> Plan for NoGC<VM> {
         &NOGC_CONSTRAINTS
     }
 
-    fn collection_required(&self, space_full: bool, _space: Option<SpaceStats<Self::VM>>) -> bool {
+    fn collection_required(
+        &self,
+        space_full: bool,
+        _space: Option<SpaceStats<Self::VM>>,
+        #[cfg(feature = "immix_utilization_analysis")] _tls: crate::util::VMMutatorThread,
+    ) -> bool {
         self.base().collection_required(self, space_full)
     }
 

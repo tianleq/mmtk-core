@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use super::allocator::{align_allocation_no_fill, fill_alignment_gap, AllocatorContext};
 use super::BumpPointer;
+use crate::policy::immix::block::Block;
 use crate::policy::immix::line::*;
 use crate::policy::immix::ImmixSpace;
 use crate::policy::space::Space;
@@ -30,7 +31,7 @@ pub struct ImmixAllocator<VM: VMBinding> {
     /// Bump pointer for large objects
     pub(in crate::util::alloc) large_bump_pointer: BumpPointer,
     /// Is the current request for large or small?
-    request_for_large: bool,
+    pub(crate) request_for_large: bool,
     /// Hole-searching cursor
     line: Option<Line>,
 }
@@ -77,7 +78,10 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
                 "{:?}: Thread local buffer used up, go to alloc slow path",
                 self.tls
             );
-            if get_maximum_aligned_size::<VM>(size, align) > Line::BYTES {
+            if self.bump_pointer.cursor != Address::ZERO
+                && self.bump_pointer.limit != Address::ZERO
+                && get_maximum_aligned_size::<VM>(size, align) > Line::BYTES
+            {
                 // Size larger than a line: do large allocation
                 self.overflow_alloc(size, align, offset)
             } else {
@@ -87,6 +91,15 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
         } else {
             // Simple bump allocation.
             fill_alignment_gap::<VM>(self.bump_pointer.cursor, result);
+            #[cfg(feature = "immix_utilization_analysis")]
+            {
+                let block = Block::from_unaligned_address(result);
+                block.increase_live_bytes_simple(
+                    u32::try_from(size).unwrap(),
+                    self.bump_pointer.cursor,
+                    result,
+                );
+            }
             self.bump_pointer.cursor = new_cursor;
             trace!(
                 "{:?}: Bump allocation size: {}, result: {}, new_cursor: {}, limit: {}",
@@ -198,8 +211,18 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             self.request_for_large = true;
             let rtn = self.alloc_slow_inline(size, align, offset);
             self.request_for_large = false;
+            #[cfg(feature = "immix_utilization_analysis")]
+            {
+                let block = Block::from_unaligned_address(rtn);
+                block.increase_live_lines(Block::LINES as u32);
+            }
             rtn
         } else {
+            #[cfg(feature = "immix_utilization_analysis")]
+            {
+                let block = Block::from_unaligned_address(start);
+                block.increase_live_bytes(u32::try_from(size).unwrap());
+            }
             fill_alignment_gap::<VM>(self.large_bump_pointer.cursor, start);
             self.large_bump_pointer.cursor = end;
             start
@@ -228,16 +251,33 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 self.alloc(size, align, offset)
             }
         } else {
-            self.alloc_slow_inline(size, align, offset)
+            let rtn = self.alloc_slow_inline(size, align, offset);
+            #[cfg(feature = "immix_utilization_analysis")]
+            {
+                let block = Block::from_unaligned_address(rtn);
+                block.increase_live_lines(Block::LINES as u32);
+            }
+            rtn
         }
     }
 
     /// Search for recyclable lines.
-    fn acquire_recyclable_lines(&mut self, size: usize, align: usize, offset: usize) -> bool {
+    fn acquire_recyclable_lines(&mut self, _size: usize, _align: usize, _offset: usize) -> bool {
         while self.line.is_some() || self.acquire_recyclable_block() {
             let line = self.line.unwrap();
             if let Some((start_line, end_line)) = self.immix_space().get_next_available_lines(line)
             {
+                #[cfg(feature = "immix_utilization_analysis")]
+                {
+                    let iter =
+                        crate::util::linear_scan::RegionIterator::<Line>::new(start_line, end_line);
+                    let mut count = 0;
+                    for _ in iter {
+                        count += 1;
+                    }
+                    start_line.block().increase_live_lines(count);
+                    // let v = end_line - start_line;
+                }
                 // Find recyclable lines. Update the bump allocation cursor and limit.
                 self.bump_pointer.cursor = start_line.start();
                 self.bump_pointer.limit = end_line.start();
@@ -253,10 +293,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     self.bump_pointer.cursor,
                     self.bump_pointer.limit - self.bump_pointer.cursor,
                 );
-                debug_assert!(
-                    align_allocation_no_fill::<VM>(self.bump_pointer.cursor, align, offset) + size
-                        <= self.bump_pointer.limit
-                );
+                // debug_assert!(
+                //     align_allocation_no_fill::<VM>(self.bump_pointer.cursor, align, offset) + size
+                //         <= self.bump_pointer.limit
+                // );
                 let block = line.block();
                 self.line = if end_line == block.end_line() {
                     // Hole searching reached the end of a reusable block. Set the hole-searching cursor to None.

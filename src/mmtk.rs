@@ -327,6 +327,17 @@ impl<VM: VMBinding> MMTK<VM> {
         self.inside_harness.store(true, Ordering::SeqCst);
         self.stats.start_all();
         self.scheduler.enable_stat();
+        #[cfg(feature = "immix_utilization_analysis")]
+        {
+            let path = "/home/tianleq/misc/utilization.log";
+            if let Ok(_) = std::fs::exists(path) {
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .truncate(true)
+                    .open(path)
+                    .unwrap();
+            }
+        }
     }
 
     /// Generic hook to allow benchmarks to be harnessed. MMTk will stop collecting

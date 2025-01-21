@@ -214,7 +214,12 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
     /// # Arguments
     /// * `space_full`: the allocation to a specific space failed, must recover pages within 'space'.
     /// * `space`: an option to indicate if there is a space that has failed in an allocation.
-    fn collection_required(&self, space_full: bool, space: Option<SpaceStats<Self::VM>>) -> bool;
+    fn collection_required(
+        &self,
+        space_full: bool,
+        space: Option<SpaceStats<Self::VM>>,
+        #[cfg(feature = "immix_utilization_analysis")] tls: VMMutatorThread,
+    ) -> bool;
 
     // Note: The following methods are about page accounting. The default implementation should
     // work fine for non-copying plans. For copying plans, the plan should override any of these methods

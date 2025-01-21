@@ -146,7 +146,12 @@ impl<VM: VMBinding> Plan for StickyImmix<VM> {
             .set_last_gc_was_defrag(was_defrag, Ordering::Relaxed);
     }
 
-    fn collection_required(&self, space_full: bool, space: Option<SpaceStats<Self::VM>>) -> bool {
+    fn collection_required(
+        &self,
+        space_full: bool,
+        space: Option<SpaceStats<Self::VM>>,
+        #[cfg(feature = "immix_utilization_analysis")] tls: crate::util::VMMutatorThread,
+    ) -> bool {
         let nursery_full = self.immix.immix_space.get_pages_allocated()
             > self.base().gc_trigger.get_max_nursery_pages();
         if space_full
@@ -155,7 +160,12 @@ impl<VM: VMBinding> Plan for StickyImmix<VM> {
         {
             self.next_gc_full_heap.store(true, Ordering::SeqCst);
         }
-        self.immix.collection_required(space_full, space) || nursery_full
+        self.immix.collection_required(
+            space_full,
+            space,
+            #[cfg(feature = "immix_utilization_analysis")]
+            tls,
+        ) || nursery_full
     }
 
     fn last_collection_was_exhaustive(&self) -> bool {

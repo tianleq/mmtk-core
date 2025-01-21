@@ -55,6 +55,14 @@ pub struct ImmixSpace<VM: VMBinding> {
     scheduler: Arc<GCWorkScheduler<VM>>,
     /// Some settings for this space
     space_args: ImmixSpaceArgs,
+    #[cfg(feature = "immix_utilization_analysis")]
+    pub(crate) line_set: std::sync::Mutex<std::collections::HashSet<Line>>,
+    #[cfg(feature = "immix_utilization_analysis")]
+    pub(crate) line_counter: AtomicUsize,
+    #[cfg(feature = "immix_utilization_analysis")]
+    pub(crate) weird_block_counter: AtomicUsize,
+    #[cfg(feature = "immix_utilization_analysis")]
+    pub(crate) clean_block_counter: AtomicUsize,
 }
 
 /// Some arguments for Immix Space.
@@ -261,6 +269,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
                 MetadataSpec::OnSide(Block::MARK_TABLE),
                 MetadataSpec::OnSide(ChunkMap::ALLOC_TABLE),
+                #[cfg(feature = "immix_utilization_analysis")]
+                MetadataSpec::OnSide(Block::BYTES_UTILIZATION_TABLE),
+                #[cfg(feature = "immix_utilization_analysis")]
+                MetadataSpec::OnSide(Block::LINES_UTILIZATION_TABLE),
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
                 *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC,
                 *VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC,
@@ -273,6 +285,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
                 MetadataSpec::OnSide(Block::MARK_TABLE),
                 MetadataSpec::OnSide(ChunkMap::ALLOC_TABLE),
+                #[cfg(feature = "immix_utilization_analysis")]
+                MetadataSpec::OnSide(Block::BYTES_UTILIZATION_TABLE),
+                #[cfg(feature = "immix_utilization_analysis")]
+                MetadataSpec::OnSide(Block::LINES_UTILIZATION_TABLE),
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
                 *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC,
                 *VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC,
@@ -334,6 +350,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             mark_state: Self::MARKED_STATE,
             scheduler: scheduler.clone(),
             space_args,
+            #[cfg(feature = "immix_utilization_analysis")]
+            line_set: std::sync::Mutex::new(std::collections::HashSet::new()),
+            #[cfg(feature = "immix_utilization_analysis")]
+            line_counter: AtomicUsize::new(0),
+            #[cfg(feature = "immix_utilization_analysis")]
+            weird_block_counter: AtomicUsize::new(0),
+            #[cfg(feature = "immix_utilization_analysis")]
+            clean_block_counter: AtomicUsize::new(0),
         }
     }
 
@@ -455,6 +479,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 self.scheduler.work_buckets[WorkBucketStage::ClearVOBits].bulk_add(work_packets);
             }
         }
+        #[cfg(feature = "immix_utilization_analysis")]
+        {
+            self.line_set.lock().unwrap().clear();
+            self.line_counter.store(0, Ordering::SeqCst);
+            self.weird_block_counter.store(0, Ordering::SeqCst);
+            self.clean_block_counter.store(0, Ordering::SeqCst);
+        }
     }
 
     /// Release for the immix space.
@@ -486,6 +517,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if super::DEFRAG {
             self.defrag.reset_in_defrag();
         }
+        #[cfg(feature = "immix_utilization_analysis")]
+        println!(
+            "clean block counter: {}, weird block counter: {}, line counter: {}",
+            self.clean_block_counter.load(Ordering::SeqCst),
+            self.weird_block_counter.load(Ordering::SeqCst),
+            self.line_counter.load(Ordering::SeqCst)
+        );
         did_defrag
     }
 
@@ -513,6 +551,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     pub fn release_block(&self, block: Block) {
         block.deinit();
         self.pr.release_block(block);
+        #[cfg(feature = "immix_utilization_analysis")]
+        {
+            info!("block: {:?} released", block);
+            block.set_live_bytes(0);
+            block.set_live_lines(0);
+        }
     }
 
     /// Allocate a clean block.
@@ -581,7 +625,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
             #[cfg(feature = "vo_bit")]
             vo_bit::helper::on_object_marked::<VM>(object);
-
+            #[cfg(feature = "immix_utilization_analysis")]
+            {
+                let block = Block::containing(object);
+                block.increase_live_bytes(
+                    u32::try_from(VM::VMObjectModel::get_current_size(object)).unwrap(),
+                );
+            }
             // Visit node
             queue.enqueue(object);
             self.unlog_object_if_needed(object);
@@ -655,6 +705,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     self.mark_lines(object);
                 }
 
+                #[cfg(feature = "immix_utilization_analysis")]
+                {
+                    let block = Block::containing(object);
+                    let bytes = u32::try_from(VM::VMObjectModel::get_current_size(object)).unwrap();
+                    block.increase_live_bytes(bytes);
+                }
+
                 object
             } else {
                 // We are forwarding objects. When the copy allocator allocates the block, it should
@@ -709,7 +766,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[allow(clippy::assertions_on_constants)]
     pub fn mark_lines(&self, object: ObjectReference) {
         debug_assert!(!super::BLOCK_ONLY);
-        Line::mark_lines_for_object::<VM>(object, self.line_mark_state.load(Ordering::Acquire));
+        let (start_line, end_line) =
+            Line::mark_lines_for_object::<VM>(object, self.line_mark_state.load(Ordering::Acquire));
+        let iter = RegionIterator::<Line>::new(start_line, end_line);
+        for line in iter {
+            self.line_set.lock().unwrap().insert(line);
+        }
     }
 
     /// Atomically mark an object.
@@ -895,6 +957,41 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
             block.set_state(BlockState::Unmarked);
             debug_assert!(!block.get_state().is_reusable());
             debug_assert_ne!(block.get_state(), BlockState::Marked);
+            #[cfg(feature = "immix_utilization_analysis")]
+            {
+                let mut map = _worker
+                    .mmtk
+                    .state
+                    .pre_block_utilization_stats
+                    .lock()
+                    .unwrap();
+                assert!(
+                    block.get_live_bytes() as usize <= Block::BYTES,
+                    "Block {:?} has more live bytes {} than bytes in Block!",
+                    block,
+                    block.get_live_bytes()
+                );
+                assert!(
+                    block.get_live_lines() as usize <= Block::LINES,
+                    "Block {:?} has more live lines {} than number of lines in Block!",
+                    block,
+                    block.get_live_lines()
+                );
+                // assert!(
+                //     !(block.get_live_bytes() == 0 && block.get_live_lines() != 0),
+                //     "block: {:?}, state: {:?}, bytes == {} and lines == {}",
+                //     block,
+                //     block.get_state(),
+                //     block.get_live_bytes(),
+                //     block.get_live_lines()
+                // );
+                map.insert(
+                    block.start(),
+                    (block.get_live_bytes(), block.get_live_lines()),
+                );
+                block.set_live_bytes(0);
+                block.set_live_lines(0);
+            }
         }
     }
 }
@@ -955,6 +1052,19 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
             if !block.sweep(self.space, &mut histogram, line_mark_state) {
                 // Block is live. Increment the allocated block count.
                 allocated_blocks += 1;
+                #[cfg(feature = "immix_utilization_analysis")]
+                {
+                    _worker
+                        .mmtk
+                        .state
+                        .post_block_utilization_stats
+                        .lock()
+                        .unwrap()
+                        .insert(
+                            block.start(),
+                            (block.get_live_bytes(), block.get_live_lines()),
+                        );
+                }
             }
         }
         probe!(mmtk, sweep_chunk, allocated_blocks);

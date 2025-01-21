@@ -5,8 +5,8 @@ use crate::plan::gc_requester::GCRequester;
 use crate::plan::Plan;
 use crate::policy::space::Space;
 use crate::util::constants::BYTES_IN_PAGE;
-use crate::util::conversions;
 use crate::util::options::{GCTriggerSelector, Options, DEFAULT_MAX_NURSERY, DEFAULT_MIN_NURSERY};
+use crate::util::{conversions, VMMutatorThread};
 use crate::vm::VMBinding;
 use crate::MMTK;
 use std::mem::MaybeUninit;
@@ -70,12 +70,20 @@ impl<VM: VMBinding> GCTrigger<VM> {
     /// Arguments:
     /// * `space_full`: Space request failed, must recover pages within 'space'.
     /// * `space`: The space that triggered the poll. This could `None` if the poll is not triggered by a space.
-    pub fn poll(&self, space_full: bool, space: Option<&dyn Space<VM>>) -> bool {
+    pub fn poll(
+        &self,
+        space_full: bool,
+        space: Option<&dyn Space<VM>>,
+        #[cfg(feature = "immix_utilization_analysis")] tls: VMMutatorThread,
+    ) -> bool {
         let plan = unsafe { self.plan.assume_init() };
-        if self
-            .policy
-            .is_gc_required(space_full, space.map(|s| SpaceStats::new(s)), plan)
-        {
+        if self.policy.is_gc_required(
+            space_full,
+            space.map(|s| SpaceStats::new(s)),
+            plan,
+            #[cfg(feature = "immix_utilization_analysis")]
+            tls,
+        ) {
             info!(
                 "[POLL] {}{} ({}/{} pages)",
                 if let Some(space) = space {
@@ -217,6 +225,7 @@ pub trait GCTriggerPolicy<VM: VMBinding>: Sync + Send {
         space_full: bool,
         space: Option<SpaceStats<VM>>,
         plan: &dyn Plan<VM = VM>,
+        #[cfg(feature = "immix_utilization_analysis")] tls: VMMutatorThread,
     ) -> bool;
     /// Is current heap full?
     fn is_heap_full(&self, plan: &dyn Plan<VM = VM>) -> bool;
@@ -238,9 +247,15 @@ impl<VM: VMBinding> GCTriggerPolicy<VM> for FixedHeapSizeTrigger {
         space_full: bool,
         space: Option<SpaceStats<VM>>,
         plan: &dyn Plan<VM = VM>,
+        #[cfg(feature = "immix_utilization_analysis")] tls: VMMutatorThread,
     ) -> bool {
         // Let the plan decide
-        plan.collection_required(space_full, space)
+        plan.collection_required(
+            space_full,
+            space,
+            #[cfg(feature = "immix_utilization_analysis")]
+            tls,
+        )
     }
 
     fn is_heap_full(&self, plan: &dyn Plan<VM = VM>) -> bool {
@@ -435,9 +450,15 @@ impl<VM: VMBinding> GCTriggerPolicy<VM> for MemBalancerTrigger {
         space_full: bool,
         space: Option<SpaceStats<VM>>,
         plan: &dyn Plan<VM = VM>,
+        #[cfg(feature = "immix_utilization_analysis")] tls: VMMutatorThread,
     ) -> bool {
         // Let the plan decide
-        plan.collection_required(space_full, space)
+        plan.collection_required(
+            space_full,
+            space,
+            #[cfg(feature = "immix_utilization_analysis")]
+            tls,
+        )
     }
 
     fn on_pending_allocation(&self, pages: usize) {

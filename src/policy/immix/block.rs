@@ -68,7 +68,7 @@ impl BlockState {
 
 /// Data structure to reference an immix block.
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialOrd, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Eq, Hash)]
 pub struct Block(Address);
 
 impl Region for Block {
@@ -110,6 +110,14 @@ impl Block {
     /// Block mark table (side)
     pub const MARK_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_MARK;
+
+    #[cfg(feature = "immix_utilization_analysis")]
+    pub const BYTES_UTILIZATION_TABLE: SideMetadataSpec =
+        crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_BYTES_UTILIZATION;
+
+    #[cfg(feature = "immix_utilization_analysis")]
+    pub const LINES_UTILIZATION_TABLE: SideMetadataSpec =
+        crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_LINE_UTILIZATION;
 
     /// Get the chunk containing the block.
     pub fn chunk(&self) -> Chunk {
@@ -163,6 +171,69 @@ impl Block {
         let byte = Self::DEFRAG_STATE_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst);
         debug_assert_ne!(byte, Self::DEFRAG_SOURCE_STATE);
         byte as usize
+    }
+
+    #[cfg(feature = "immix_utilization_analysis")]
+    pub fn increase_live_bytes(&self, bytes: u32) {
+        let prev = Self::BYTES_UTILIZATION_TABLE.fetch_add_atomic::<u32>(
+            self.start(),
+            bytes,
+            Ordering::SeqCst,
+        );
+        assert!(
+            (prev + bytes) as usize <= Block::BYTES,
+            "Increased live bytes to {}, size {} for Block {:?} which is greater than bytes in block",
+            prev + bytes,
+            bytes,
+            self
+        );
+    }
+
+    #[cfg(feature = "immix_utilization_analysis")]
+    pub fn increase_live_bytes_simple(&self, bytes: u32, cursor: Address, result: Address) {
+        let prev = Self::BYTES_UTILIZATION_TABLE.fetch_add_atomic::<u32>(
+            self.start(),
+            bytes,
+            Ordering::SeqCst,
+        );
+        assert!(
+            (prev + bytes) as usize <= Block::BYTES,
+            "Simple: Increased live bytes to {}, size {} for Block {:?} which is greater than bytes in block | cursor: {}, result: {}",
+            prev + bytes,
+            bytes,
+            self,
+            cursor,
+            result
+        );
+    }
+
+    #[cfg(feature = "immix_utilization_analysis")]
+    pub fn increase_live_lines(&self, lines: u32) {
+        Self::LINES_UTILIZATION_TABLE.fetch_add_atomic::<u32>(
+            self.start(),
+            lines,
+            Ordering::SeqCst,
+        );
+    }
+
+    #[cfg(feature = "immix_utilization_analysis")]
+    pub fn get_live_bytes(&self) -> u32 {
+        Self::BYTES_UTILIZATION_TABLE.load_atomic::<u32>(self.start(), Ordering::SeqCst)
+    }
+
+    #[cfg(feature = "immix_utilization_analysis")]
+    pub fn get_live_lines(&self) -> u32 {
+        Self::LINES_UTILIZATION_TABLE.load_atomic::<u32>(self.start(), Ordering::SeqCst)
+    }
+
+    #[cfg(feature = "immix_utilization_analysis")]
+    pub fn set_live_bytes(&self, bytes: u32) {
+        Self::BYTES_UTILIZATION_TABLE.store_atomic::<u32>(self.start(), bytes, Ordering::SeqCst);
+    }
+
+    #[cfg(feature = "immix_utilization_analysis")]
+    pub fn set_live_lines(&self, lines: u32) {
+        Self::LINES_UTILIZATION_TABLE.store_atomic::<u32>(self.start(), lines, Ordering::SeqCst);
     }
 
     /// Initialize a clean block after acquired from page-resource.
@@ -239,8 +310,15 @@ impl Block {
             let mut prev_line_is_marked = true;
             let line_mark_state = line_mark_state.unwrap();
 
+            let mut weird_block = false;
             for line in self.lines() {
                 if line.is_marked(line_mark_state) {
+                    #[cfg(feature = "immix_utilization_analysis")]
+                    if !space.line_set.lock().unwrap().contains(&line) {
+                        space.line_counter.fetch_add(1, Ordering::SeqCst);
+                        weird_block = true;
+                    }
+
                     marked_lines += 1;
                     prev_line_is_marked = true;
                 } else {
@@ -258,6 +336,14 @@ impl Block {
                     }
 
                     prev_line_is_marked = false;
+                }
+            }
+
+            #[cfg(feature = "immix_utilization_analysis")]
+            if weird_block {
+                space.weird_block_counter.fetch_add(1, Ordering::SeqCst);
+                if self.get_live_bytes() == 0 {
+                    space.clean_block_counter.fetch_add(1, Ordering::SeqCst);
                 }
             }
 
@@ -288,6 +374,30 @@ impl Block {
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_region_swept::<VM, _>(self, true);
 
+                #[cfg(feature = "immix_utilization_analysis")]
+                {
+                    let bytes = self.get_live_bytes();
+                    let lines = marked_lines;
+                    // assert!(
+                    //     !(bytes == 0 && lines != 0),
+                    //     "block: {:?}, block state: {:?}, line mark state: {}, bytes == {} and lines == {}",
+                    //     self,
+                    //     self.get_state(),
+                    //     line_mark_state,
+                    //     bytes,
+                    //     lines
+                    // );
+                    assert!(
+                        lines * Line::BYTES >= bytes as usize,
+                        "block: {:?}, block state: {:?}, line mark state: {}, bytes == {} and lines == {}",
+                        self,
+                        self.get_state(),
+                        line_mark_state,
+                        bytes,
+                        lines
+                    );
+                    self.set_live_lines(u32::try_from(marked_lines).unwrap());
+                }
                 false
             }
         }

@@ -103,7 +103,14 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         trace!("Pages reserved");
         trace!("Polling ..");
 
-        if should_poll && self.get_gc_trigger().poll(false, Some(self.as_space())) {
+        if should_poll
+            && self.get_gc_trigger().poll(
+                false,
+                Some(self.as_space()),
+                #[cfg(feature = "immix_utilization_analysis")]
+                VMMutatorThread(tls),
+            )
+        {
             debug!("Collection required");
             assert!(allow_gc, "GC is not allowed here: collection is not initialized (did you call initialize_collection()?).");
 
@@ -224,7 +231,12 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
                         "Physical allocation failed when GC is not allowed!"
                     );
 
-                    let gc_performed = self.get_gc_trigger().poll(true, Some(self.as_space()));
+                    let gc_performed = self.get_gc_trigger().poll(
+                        true,
+                        Some(self.as_space()),
+                        #[cfg(feature = "immix_utilization_analysis")]
+                        VMMutatorThread(tls),
+                    );
                     debug_assert!(gc_performed, "GC not performed when forced.");
 
                     // Clear the request, and inform GC trigger about the pending allocation.

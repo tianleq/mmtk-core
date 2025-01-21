@@ -160,7 +160,12 @@ impl<VM: VMBinding> Plan for MarkCompact<VM> {
             .add(crate::util::sanity::sanity_checker::ScheduleSanityGC::<Self>::new(self));
     }
 
-    fn collection_required(&self, space_full: bool, _space: Option<SpaceStats<Self::VM>>) -> bool {
+    fn collection_required(
+        &self,
+        space_full: bool,
+        _space: Option<SpaceStats<Self::VM>>,
+        #[cfg(feature = "immix_utilization_analysis")] _tls: crate::util::VMMutatorThread,
+    ) -> bool {
         self.base().collection_required(self, space_full)
     }
 

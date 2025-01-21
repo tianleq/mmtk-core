@@ -8,7 +8,7 @@ use crate::{
 
 /// Data structure to reference a line within an immix block.
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Eq, Hash)]
 pub struct Line(Address);
 
 impl Region for Line {
@@ -62,7 +62,10 @@ impl Line {
     }
 
     /// Mark all lines the object is spanned to.
-    pub fn mark_lines_for_object<VM: VMBinding>(object: ObjectReference, state: u8) -> usize {
+    pub fn mark_lines_for_object<VM: VMBinding>(
+        object: ObjectReference,
+        state: u8,
+    ) -> (Line, Line) {
         debug_assert!(!super::BLOCK_ONLY);
         let start = object.to_object_start::<VM>();
         let end = start + VM::VMObjectModel::get_current_size(object);
@@ -71,14 +74,19 @@ impl Line {
         if !Line::is_aligned(end) {
             end_line = end_line.next();
         }
-        let mut marked_lines = 0;
+
         let iter = RegionIterator::<Line>::new(start_line, end_line);
         for line in iter {
-            if !line.is_marked(state) {
-                marked_lines += 1;
-            }
             line.mark(state)
         }
-        marked_lines
+        #[cfg(feature = "immix_utilization_analysis")]
+        {
+            assert!(
+                Block::containing(object).get_live_bytes() != 0,
+                "block: {:?} 's live bytes counter is incorrect",
+                Block::containing(object)
+            );
+        }
+        (start_line, end_line)
     }
 }

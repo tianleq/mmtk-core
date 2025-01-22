@@ -560,7 +560,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             info!("block: {:?} released", block);
             block.set_live_bytes(0);
             block.set_live_lines(0);
-            Line::MARK_TABLE.bzero_metadata(block.start(), Block::BYTES);
         }
     }
 

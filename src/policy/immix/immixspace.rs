@@ -518,12 +518,16 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.defrag.reset_in_defrag();
         }
         #[cfg(feature = "immix_utilization_analysis")]
-        println!(
-            "clean block counter: {}, weird block counter: {}, line counter: {}",
-            self.clean_block_counter.load(Ordering::SeqCst),
-            self.weird_block_counter.load(Ordering::SeqCst),
-            self.line_counter.load(Ordering::SeqCst)
-        );
+        if self.weird_block_counter.load(Ordering::SeqCst) != 0 {
+            println!(
+                "clean block counter: {}, weird block counter: {}, line counter: {}, line mark state: {}",
+                self.clean_block_counter.load(Ordering::SeqCst),
+                self.weird_block_counter.load(Ordering::SeqCst),
+                self.line_counter.load(Ordering::SeqCst),
+                self.line_mark_state.load(Ordering::SeqCst)
+            );
+        }
+
         did_defrag
     }
 
@@ -556,6 +560,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             info!("block: {:?} released", block);
             block.set_live_bytes(0);
             block.set_live_lines(0);
+            Line::MARK_TABLE.bzero_metadata(block.start(), Block::BYTES);
         }
     }
 

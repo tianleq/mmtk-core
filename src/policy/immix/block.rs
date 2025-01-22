@@ -332,6 +332,7 @@ impl Block {
                         if line_mark_state > Line::MAX_MARK_STATE - 2 {
                             line.mark(0);
                         }
+                        // line.mark(0);
                     }
                     #[cfg(feature = "immix_zero_on_release")]
                     crate::util::memory::zero(line.start(), Line::BYTES);

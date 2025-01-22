@@ -310,6 +310,7 @@ impl Block {
             let mut prev_line_is_marked = true;
             let line_mark_state = line_mark_state.unwrap();
 
+            #[cfg(feature = "immix_utilization_analysis")]
             let mut weird_block = false;
             for line in self.lines() {
                 if line.is_marked(line_mark_state) {

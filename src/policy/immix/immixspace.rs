@@ -63,6 +63,8 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub(crate) weird_block_counter: AtomicUsize,
     #[cfg(feature = "immix_utilization_analysis")]
     pub(crate) clean_block_counter: AtomicUsize,
+    #[cfg(feature = "immix_utilization_analysis")]
+    pub(crate) hole_size_histogram: std::sync::Mutex<[usize; Block::LINES]>,
 }
 
 /// Some arguments for Immix Space.
@@ -358,6 +360,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             weird_block_counter: AtomicUsize::new(0),
             #[cfg(feature = "immix_utilization_analysis")]
             clean_block_counter: AtomicUsize::new(0),
+            #[cfg(feature = "immix_utilization_analysis")]
+            hole_size_histogram: std::sync::Mutex::new([0; Block::LINES]),
         }
     }
 
@@ -518,14 +522,16 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.defrag.reset_in_defrag();
         }
         #[cfg(feature = "immix_utilization_analysis")]
-        if self.weird_block_counter.load(Ordering::SeqCst) != 0 {
-            println!(
-                "clean block counter: {}, weird block counter: {}, line counter: {}, line mark state: {}",
-                self.clean_block_counter.load(Ordering::SeqCst),
-                self.weird_block_counter.load(Ordering::SeqCst),
-                self.line_counter.load(Ordering::SeqCst),
-                self.line_mark_state.load(Ordering::SeqCst)
-            );
+        {
+            if self.weird_block_counter.load(Ordering::SeqCst) != 0 {
+                println!(
+                    "clean block counter: {}, weird block counter: {}, line counter: {}, line mark state: {}",
+                    self.clean_block_counter.load(Ordering::SeqCst),
+                    self.weird_block_counter.load(Ordering::SeqCst),
+                    self.line_counter.load(Ordering::SeqCst),
+                    self.line_mark_state.load(Ordering::SeqCst)
+                );
+            }
         }
 
         did_defrag

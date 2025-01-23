@@ -312,12 +312,24 @@ impl Block {
 
             #[cfg(feature = "immix_utilization_analysis")]
             let mut weird_block = false;
+            #[cfg(feature = "immix_utilization_analysis")]
+            let mut hole_size: u32 = 0;
             for line in self.lines() {
                 if line.is_marked(line_mark_state) {
                     #[cfg(feature = "immix_utilization_analysis")]
-                    if !space.line_set.lock().unwrap().contains(&line) {
-                        space.line_counter.fetch_add(1, Ordering::SeqCst);
-                        weird_block = true;
+                    {
+                        if !space.line_set.lock().unwrap().contains(&line) {
+                            space.line_counter.fetch_add(1, Ordering::SeqCst);
+                            weird_block = true;
+                        }
+                        if hole_size != 0 {
+                            hole_size = if hole_size.is_power_of_two() {
+                                hole_size
+                            } else {
+                                hole_size.next_power_of_two() >> 1
+                            };
+                            space.hole_size_histogram.lock().unwrap()[hole_size as usize] += 1;
+                        }
                     }
 
                     marked_lines += 1;
@@ -325,6 +337,10 @@ impl Block {
                 } else {
                     if prev_line_is_marked {
                         holes += 1;
+                        #[cfg(feature = "immix_utilization_analysis")]
+                        {
+                            hole_size = 0;
+                        }
                     }
                     #[cfg(feature = "immix_utilization_analysis")]
                     {
@@ -333,6 +349,7 @@ impl Block {
                             line.mark(0);
                         }
                         // line.mark(0);
+                        hole_size += 1;
                     }
                     #[cfg(feature = "immix_zero_on_release")]
                     crate::util::memory::zero(line.start(), Line::BYTES);

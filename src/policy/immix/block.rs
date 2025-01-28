@@ -323,12 +323,8 @@ impl Block {
                             weird_block = true;
                         }
                         if hole_size != 0 {
-                            hole_size = if hole_size.is_power_of_two() {
-                                hole_size
-                            } else {
-                                hole_size.next_power_of_two() >> 1
-                            };
-                            space.hole_size_histogram.lock().unwrap()[hole_size as usize] += 1;
+                            space.hole_size_histogram.lock().unwrap()
+                                [hole_size.ilog2() as usize] += 1;
                         }
                     }
 

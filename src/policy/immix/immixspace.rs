@@ -64,7 +64,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     #[cfg(feature = "immix_utilization_analysis")]
     pub(crate) clean_block_counter: AtomicUsize,
     #[cfg(feature = "immix_utilization_analysis")]
-    pub(crate) hole_size_histogram: std::sync::Mutex<[usize; Block::LINES]>,
+    pub(crate) hole_size_histogram: std::sync::Mutex<[usize; Block::LOG_LINES]>,
 }
 
 /// Some arguments for Immix Space.
@@ -361,7 +361,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             #[cfg(feature = "immix_utilization_analysis")]
             clean_block_counter: AtomicUsize::new(0),
             #[cfg(feature = "immix_utilization_analysis")]
-            hole_size_histogram: std::sync::Mutex::new([0; Block::LINES]),
+            hole_size_histogram: std::sync::Mutex::new([0; Block::LOG_LINES]),
         }
     }
 
@@ -489,6 +489,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.line_counter.store(0, Ordering::SeqCst);
             self.weird_block_counter.store(0, Ordering::SeqCst);
             self.clean_block_counter.store(0, Ordering::SeqCst);
+            self.hole_size_histogram
+                .lock()
+                .unwrap()
+                .swap_with_slice([0; Block::LOG_LINES].as_mut_slice());
         }
     }
 
@@ -523,6 +527,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         #[cfg(feature = "immix_utilization_analysis")]
         {
+            use std::io::Write;
+
             if self.weird_block_counter.load(Ordering::SeqCst) != 0 {
                 println!(
                     "clean block counter: {}, weird block counter: {}, line counter: {}, line mark state: {}",
@@ -532,6 +538,18 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     self.line_mark_state.load(Ordering::SeqCst)
                 );
             }
+            let histogram = self.hole_size_histogram.lock().unwrap();
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open("/home/tianleq/misc/holes.log")
+                .unwrap();
+            for i in 0..histogram.len() {
+                if histogram[i] != 0 {
+                    writeln!(file, "hole size: {}, hole: {}", 1 << i, histogram[i]).unwrap();
+                }
+            }
+            writeln!(file, "--------").unwrap();
         }
 
         did_defrag

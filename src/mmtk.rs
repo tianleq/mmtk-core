@@ -329,12 +329,19 @@ impl<VM: VMBinding> MMTK<VM> {
         self.scheduler.enable_stat();
         #[cfg(feature = "immix_utilization_analysis")]
         {
-            let path = "/home/tianleq/misc/utilization.log";
-            if let Ok(_) = std::fs::exists(path) {
+            let base_path = "/home/tianleq/misc";
+            if let Ok(_) = std::fs::exists(format!("{}/utilization.log", base_path)) {
                 std::fs::OpenOptions::new()
                     .write(true)
                     .truncate(true)
-                    .open(path)
+                    .open(format!("{}/utilization.log", base_path))
+                    .unwrap();
+            }
+            if let Ok(_) = std::fs::exists(format!("{}/holes.log", base_path)) {
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .truncate(true)
+                    .open(format!("{}/holes.log", base_path))
                     .unwrap();
             }
         }

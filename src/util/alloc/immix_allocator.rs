@@ -1641,6 +1641,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     block.start(),
                     block.end()
                 );
+                // Bulk clear stale line mark state
+                Line::MARK_TABLE
+                    .bzero_metadata(block.start(), crate::policy::immix::block::Block::BYTES);
 
                 #[cfg(feature = "thread_local_gc")]
                 {

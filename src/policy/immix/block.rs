@@ -311,20 +311,13 @@ impl Block {
             let line_mark_state = line_mark_state.unwrap();
 
             #[cfg(feature = "immix_utilization_analysis")]
-            let mut weird_block = false;
-            #[cfg(feature = "immix_utilization_analysis")]
             let mut hole_size: u32 = 0;
             for line in self.lines() {
                 if line.is_marked(line_mark_state) {
                     #[cfg(feature = "immix_utilization_analysis")]
                     {
-                        if !space.line_set.lock().unwrap().contains(&line) {
-                            space.line_counter.fetch_add(1, Ordering::SeqCst);
-                            weird_block = true;
-                        }
                         if hole_size != 0 {
-                            space.hole_size_histogram.lock().unwrap()
-                                [hole_size.ilog2() as usize] += 1;
+                            space.hole_size_histogram.lock().unwrap()[hole_size as usize] += 1;
                         }
                     }
 
@@ -338,13 +331,12 @@ impl Block {
                             hole_size = 0;
                         }
                     }
+                    // reset the line state twice per epoch
+                    if line_mark_state > Line::MAX_MARK_STATE - 2 {
+                        line.mark(0);
+                    }
                     #[cfg(feature = "immix_utilization_analysis")]
                     {
-                        // reset the line state twice per epoch
-                        if line_mark_state > Line::MAX_MARK_STATE - 2 {
-                            line.mark(0);
-                        }
-                        // line.mark(0);
                         hole_size += 1;
                     }
                     #[cfg(feature = "immix_zero_on_release")]
@@ -360,18 +352,13 @@ impl Block {
                 }
             }
 
-            #[cfg(feature = "immix_utilization_analysis")]
-            if weird_block {
-                space.weird_block_counter.fetch_add(1, Ordering::SeqCst);
-                if self.get_live_bytes() == 0 {
-                    space.clean_block_counter.fetch_add(1, Ordering::SeqCst);
-                }
-            }
-
             if marked_lines == 0 {
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_region_swept::<VM, _>(self, false);
-
+                #[cfg(feature = "immix_utilization_analysis")]
+                {
+                    space.hole_size_histogram.lock().unwrap()[0] += 1;
+                }
                 // Release the block if non of its lines are marked.
                 space.release_block(*self);
                 true

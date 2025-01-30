@@ -56,15 +56,11 @@ pub struct ImmixSpace<VM: VMBinding> {
     /// Some settings for this space
     space_args: ImmixSpaceArgs,
     #[cfg(feature = "immix_utilization_analysis")]
-    pub(crate) line_set: std::sync::Mutex<std::collections::HashSet<Line>>,
+    pub(crate) block_counter: AtomicUsize,
     #[cfg(feature = "immix_utilization_analysis")]
-    pub(crate) line_counter: AtomicUsize,
-    #[cfg(feature = "immix_utilization_analysis")]
-    pub(crate) weird_block_counter: AtomicUsize,
-    #[cfg(feature = "immix_utilization_analysis")]
-    pub(crate) clean_block_counter: AtomicUsize,
-    #[cfg(feature = "immix_utilization_analysis")]
-    pub(crate) hole_size_histogram: std::sync::Mutex<[usize; Block::LOG_LINES]>,
+    pub(crate) hole_size_histogram: std::sync::Mutex<[usize; Block::LINES]>,
+    // #[cfg(feature = "immix_utilization_analysis")]
+    // pub(crate) hole_set: std::sync::Mutex<std::collections::HashSet<Block>>,
 }
 
 /// Some arguments for Immix Space.
@@ -353,15 +349,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             scheduler: scheduler.clone(),
             space_args,
             #[cfg(feature = "immix_utilization_analysis")]
-            line_set: std::sync::Mutex::new(std::collections::HashSet::new()),
+            block_counter: AtomicUsize::new(0),
             #[cfg(feature = "immix_utilization_analysis")]
-            line_counter: AtomicUsize::new(0),
-            #[cfg(feature = "immix_utilization_analysis")]
-            weird_block_counter: AtomicUsize::new(0),
-            #[cfg(feature = "immix_utilization_analysis")]
-            clean_block_counter: AtomicUsize::new(0),
-            #[cfg(feature = "immix_utilization_analysis")]
-            hole_size_histogram: std::sync::Mutex::new([0; Block::LOG_LINES]),
+            hole_size_histogram: std::sync::Mutex::new([0; Block::LINES]),
+            // #[cfg(feature = "immix_utilization_analysis")]
+            // hole_set: std::sync::Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -408,6 +400,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     pub fn prepare(&mut self, major_gc: bool, plan_stats: StatsForDefrag) {
+        #[cfg(feature = "immix_utilization_analysis")]
+        {
+            self.hole_size_histogram
+                .lock()
+                .unwrap()
+                .swap_with_slice([0; Block::LINES].as_mut_slice());
+        }
         if major_gc {
             // Update mark_state
             if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
@@ -483,17 +482,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 self.scheduler.work_buckets[WorkBucketStage::ClearVOBits].bulk_add(work_packets);
             }
         }
-        #[cfg(feature = "immix_utilization_analysis")]
-        {
-            self.line_set.lock().unwrap().clear();
-            self.line_counter.store(0, Ordering::SeqCst);
-            self.weird_block_counter.store(0, Ordering::SeqCst);
-            self.clean_block_counter.store(0, Ordering::SeqCst);
-            self.hole_size_histogram
-                .lock()
-                .unwrap()
-                .swap_with_slice([0; Block::LOG_LINES].as_mut_slice());
-        }
     }
 
     /// Release for the immix space.
@@ -529,15 +517,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         {
             use std::io::Write;
 
-            if self.weird_block_counter.load(Ordering::SeqCst) != 0 {
-                println!(
-                    "clean block counter: {}, weird block counter: {}, line counter: {}, line mark state: {}",
-                    self.clean_block_counter.load(Ordering::SeqCst),
-                    self.weird_block_counter.load(Ordering::SeqCst),
-                    self.line_counter.load(Ordering::SeqCst),
-                    self.line_mark_state.load(Ordering::SeqCst)
-                );
-            }
             let histogram = self.hole_size_histogram.lock().unwrap();
             let mut file = std::fs::OpenOptions::new()
                 .append(true)
@@ -546,10 +525,18 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 .unwrap();
             for i in 0..histogram.len() {
                 if histogram[i] != 0 {
-                    writeln!(file, "hole size: {}, hole: {}", 1 << i, histogram[i]).unwrap();
+                    let hole_size = if i == 0 { 128 } else { i };
+                    writeln!(file, "hole size: {}, hole: {}", hole_size, histogram[i]).unwrap();
                 }
             }
-            writeln!(file, "--------").unwrap();
+            writeln!(
+                file,
+                "----{}----",
+                self.block_counter.load(Ordering::Acquire)
+            )
+            .unwrap();
+
+            self.block_counter.store(0, Ordering::Release);
         }
 
         did_defrag
@@ -794,15 +781,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     #[allow(clippy::assertions_on_constants)]
     pub fn mark_lines(&self, object: ObjectReference) {
         debug_assert!(!super::BLOCK_ONLY);
-        let (_start_line, _end_line) =
-            Line::mark_lines_for_object::<VM>(object, self.line_mark_state.load(Ordering::Acquire));
-        #[cfg(feature = "immix_utilization_analysis")]
-        {
-            let iter = RegionIterator::<Line>::new(_start_line, _end_line);
-            for line in iter {
-                self.line_set.lock().unwrap().insert(line);
-            }
-        }
+        Line::mark_lines_for_object::<VM>(object, self.line_mark_state.load(Ordering::Acquire));
     }
 
     /// Atomically mark an object.
@@ -969,6 +948,10 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
             if state == BlockState::Unallocated {
                 continue;
             }
+            #[cfg(feature = "immix_utilization_analysis")]
+            {
+                self.space.block_counter.fetch_add(1, Ordering::SeqCst);
+            }
             // Check if this block needs to be defragmented.
             let is_defrag_source = if !super::DEFRAG {
                 // Do not set any block as defrag source if defrag is disabled.
@@ -990,24 +973,24 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
             debug_assert_ne!(block.get_state(), BlockState::Marked);
             #[cfg(feature = "immix_utilization_analysis")]
             {
-                let mut map = _worker
-                    .mmtk
-                    .state
-                    .pre_block_utilization_stats
-                    .lock()
-                    .unwrap();
-                assert!(
-                    block.get_live_bytes() as usize <= Block::BYTES,
-                    "Block {:?} has more live bytes {} than bytes in Block!",
-                    block,
-                    block.get_live_bytes()
-                );
-                assert!(
-                    block.get_live_lines() as usize <= Block::LINES,
-                    "Block {:?} has more live lines {} than number of lines in Block!",
-                    block,
-                    block.get_live_lines()
-                );
+                // let mut map = _worker
+                //     .mmtk
+                //     .state
+                //     .pre_block_utilization_stats
+                //     .lock()
+                //     .unwrap();
+                // assert!(
+                //     block.get_live_bytes() as usize <= Block::BYTES,
+                //     "Block {:?} has more live bytes {} than bytes in Block!",
+                //     block,
+                //     block.get_live_bytes()
+                // );
+                // assert!(
+                //     block.get_live_lines() as usize <= Block::LINES,
+                //     "Block {:?} has more live lines {} than number of lines in Block!",
+                //     block,
+                //     block.get_live_lines()
+                // );
                 // assert!(
                 //     !(block.get_live_bytes() == 0 && block.get_live_lines() != 0),
                 //     "block: {:?}, state: {:?}, bytes == {} and lines == {}",
@@ -1016,10 +999,10 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
                 //     block.get_live_bytes(),
                 //     block.get_live_lines()
                 // );
-                map.insert(
-                    block.start(),
-                    (block.get_live_bytes(), block.get_live_lines()),
-                );
+                // map.insert(
+                //     block.start(),
+                //     (block.get_live_bytes(), block.get_live_lines()),
+                // );
                 block.set_live_bytes(0);
                 block.set_live_lines(0);
             }
@@ -1083,19 +1066,19 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
             if !block.sweep(self.space, &mut histogram, line_mark_state) {
                 // Block is live. Increment the allocated block count.
                 allocated_blocks += 1;
-                #[cfg(feature = "immix_utilization_analysis")]
-                {
-                    _worker
-                        .mmtk
-                        .state
-                        .post_block_utilization_stats
-                        .lock()
-                        .unwrap()
-                        .insert(
-                            block.start(),
-                            (block.get_live_bytes(), block.get_live_lines()),
-                        );
-                }
+                // #[cfg(feature = "immix_utilization_analysis")]
+                // {
+                //     _worker
+                //         .mmtk
+                //         .state
+                //         .post_block_utilization_stats
+                //         .lock()
+                //         .unwrap()
+                //         .insert(
+                //             block.start(),
+                //             (block.get_live_bytes(), block.get_live_lines()),
+                //         );
+                // }
             }
         }
         probe!(mmtk, sweep_chunk, allocated_blocks);

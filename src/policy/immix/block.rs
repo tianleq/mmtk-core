@@ -111,13 +111,13 @@ impl Block {
     pub const MARK_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_MARK;
 
-    #[cfg(feature = "immix_utilization_analysis")]
-    pub const BYTES_UTILIZATION_TABLE: SideMetadataSpec =
-        crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_BYTES_UTILIZATION;
+    // #[cfg(feature = "immix_utilization_analysis")]
+    // pub const BYTES_UTILIZATION_TABLE: SideMetadataSpec =
+    //     crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_BYTES_UTILIZATION;
 
-    #[cfg(feature = "immix_utilization_analysis")]
-    pub const LINES_UTILIZATION_TABLE: SideMetadataSpec =
-        crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_LINE_UTILIZATION;
+    // #[cfg(feature = "immix_utilization_analysis")]
+    // pub const LINES_UTILIZATION_TABLE: SideMetadataSpec =
+    //     crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_LINE_UTILIZATION;
 
     /// Get the chunk containing the block.
     pub fn chunk(&self) -> Chunk {
@@ -174,66 +174,10 @@ impl Block {
     }
 
     #[cfg(feature = "immix_utilization_analysis")]
-    pub fn increase_live_bytes(&self, bytes: u32) {
-        let prev = Self::BYTES_UTILIZATION_TABLE.fetch_add_atomic::<u32>(
-            self.start(),
-            bytes,
-            Ordering::SeqCst,
-        );
-        assert!(
-            (prev + bytes) as usize <= Block::BYTES,
-            "Increased live bytes to {}, size {} for Block {:?} which is greater than bytes in block",
-            prev + bytes,
-            bytes,
-            self
-        );
-    }
-
-    #[cfg(feature = "immix_utilization_analysis")]
-    pub fn increase_live_bytes_simple(&self, bytes: u32, cursor: Address, result: Address) {
-        let prev = Self::BYTES_UTILIZATION_TABLE.fetch_add_atomic::<u32>(
-            self.start(),
-            bytes,
-            Ordering::SeqCst,
-        );
-        assert!(
-            (prev + bytes) as usize <= Block::BYTES,
-            "Simple: Increased live bytes to {}, size {} for Block {:?} which is greater than bytes in block | cursor: {}, result: {}",
-            prev + bytes,
-            bytes,
-            self,
-            cursor,
-            result
-        );
-    }
-
-    #[cfg(feature = "immix_utilization_analysis")]
-    pub fn increase_live_lines(&self, lines: u32) {
-        Self::LINES_UTILIZATION_TABLE.fetch_add_atomic::<u32>(
-            self.start(),
-            lines,
-            Ordering::SeqCst,
-        );
-    }
-
-    #[cfg(feature = "immix_utilization_analysis")]
-    pub fn get_live_bytes(&self) -> u32 {
-        Self::BYTES_UTILIZATION_TABLE.load_atomic::<u32>(self.start(), Ordering::SeqCst)
-    }
-
-    #[cfg(feature = "immix_utilization_analysis")]
-    pub fn get_live_lines(&self) -> u32 {
-        Self::LINES_UTILIZATION_TABLE.load_atomic::<u32>(self.start(), Ordering::SeqCst)
-    }
-
-    #[cfg(feature = "immix_utilization_analysis")]
-    pub fn set_live_bytes(&self, bytes: u32) {
-        Self::BYTES_UTILIZATION_TABLE.store_atomic::<u32>(self.start(), bytes, Ordering::SeqCst);
-    }
-
-    #[cfg(feature = "immix_utilization_analysis")]
-    pub fn set_live_lines(&self, lines: u32) {
-        Self::LINES_UTILIZATION_TABLE.store_atomic::<u32>(self.start(), lines, Ordering::SeqCst);
+    pub fn mark_all_lines(&self, line_mark_state: u8) {
+        for line in self.lines() {
+            line.mark(line_mark_state);
+        }
     }
 
     /// Initialize a clean block after acquired from page-resource.
@@ -266,6 +210,7 @@ impl Block {
         RegionIterator::<Line>::new(self.start_line(), self.end_line())
     }
 
+    #[cfg(not(feature = "immix_utilization_analysis"))]
     /// Sweep this block.
     /// Return true if the block is swept.
     pub fn sweep<VM: VMBinding>(
@@ -310,35 +255,19 @@ impl Block {
             let mut prev_line_is_marked = true;
             let line_mark_state = line_mark_state.unwrap();
 
-            #[cfg(feature = "immix_utilization_analysis")]
-            let mut hole_size: u32 = 0;
             for line in self.lines() {
                 if line.is_marked(line_mark_state) {
-                    #[cfg(feature = "immix_utilization_analysis")]
-                    {
-                        if hole_size != 0 {
-                            space.hole_size_histogram.lock().unwrap()[hole_size as usize] += 1;
-                        }
-                    }
-
                     marked_lines += 1;
                     prev_line_is_marked = true;
                 } else {
                     if prev_line_is_marked {
                         holes += 1;
-                        #[cfg(feature = "immix_utilization_analysis")]
-                        {
-                            hole_size = 0;
-                        }
                     }
                     // reset the line state twice per epoch
                     if line_mark_state > Line::MAX_MARK_STATE - 2 {
                         line.mark(0);
                     }
-                    #[cfg(feature = "immix_utilization_analysis")]
-                    {
-                        hole_size += 1;
-                    }
+
                     #[cfg(feature = "immix_zero_on_release")]
                     crate::util::memory::zero(line.start(), Line::BYTES);
 
@@ -355,10 +284,7 @@ impl Block {
             if marked_lines == 0 {
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_region_swept::<VM, _>(self, false);
-                #[cfg(feature = "immix_utilization_analysis")]
-                {
-                    space.hole_size_histogram.lock().unwrap()[0] += 1;
-                }
+
                 // Release the block if non of its lines are marked.
                 space.release_block(*self);
                 true
@@ -382,30 +308,158 @@ impl Block {
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_region_swept::<VM, _>(self, true);
 
-                #[cfg(feature = "immix_utilization_analysis")]
-                {
-                    let bytes = self.get_live_bytes();
-                    let lines = marked_lines;
-                    // assert!(
-                    //     !(bytes == 0 && lines != 0),
-                    //     "block: {:?}, block state: {:?}, line mark state: {}, bytes == {} and lines == {}",
-                    //     self,
-                    //     self.get_state(),
-                    //     line_mark_state,
-                    //     bytes,
-                    //     lines
-                    // );
-                    assert!(
-                        lines * Line::BYTES >= bytes as usize,
-                        "block: {:?}, block state: {:?}, line mark state: {}, bytes == {} and lines == {}",
-                        self,
-                        self.get_state(),
-                        line_mark_state,
-                        bytes,
-                        lines
-                    );
-                    self.set_live_lines(u32::try_from(marked_lines).unwrap());
+                false
+            }
+        }
+    }
+
+    #[cfg(feature = "immix_utilization_analysis")]
+    /// Sweep this block.
+    /// Return true if the block is swept.
+    pub fn sweep<VM: VMBinding>(
+        &self,
+        space: &ImmixSpace<VM>,
+        mark_histogram: &mut Histogram,
+        line_mark_state: Option<u8>,
+    ) -> bool {
+        use crate::policy::immix::hole::Hole;
+        use std::collections::HashMap;
+
+        if super::BLOCK_ONLY {
+            match self.get_state() {
+                BlockState::Unallocated => false,
+                BlockState::Unmarked => {
+                    #[cfg(feature = "vo_bit")]
+                    vo_bit::helper::on_region_swept::<VM, _>(self, false);
+
+                    // If the pin bit is not on the side, we cannot bulk zero.
+                    // We shouldn't need to clear it here in that case, since the pin bit
+                    // should be overwritten at each object allocation. The same applies below
+                    // when we are sweeping on a line granularity.
+                    #[cfg(feature = "object_pinning")]
+                    if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_PINNING_BIT_SPEC {
+                        side.bzero_metadata(self.start(), Block::BYTES);
+                    }
+
+                    // Release the block if it is allocated but not marked by the current GC.
+                    space.release_block(*self);
+                    true
                 }
+                BlockState::Marked => {
+                    #[cfg(feature = "vo_bit")]
+                    vo_bit::helper::on_region_swept::<VM, _>(self, true);
+
+                    // The block is live.
+                    false
+                }
+                _ => unreachable!(),
+            }
+        } else {
+            // Calculate number of marked lines and holes.
+            let mut marked_lines = 0;
+            let mut holes = 0;
+            let mut prev_line_is_marked = true;
+            let line_mark_state = line_mark_state.unwrap();
+
+            let mut hole_size: u32 = 0;
+
+            let mut hole = super::hole::Hole::default();
+            let mut local_hole_map: HashMap<usize, Vec<Hole>> = HashMap::new();
+            for line in self.lines() {
+                if line.is_marked(line_mark_state) {
+                    if hole_size != 0 {
+                        space.post_hole_size_histogram.lock().unwrap()[hole_size as usize] += 1;
+                        assert!(
+                            hole.size == hole_size as usize * Line::BYTES,
+                            "invalid hole size: {}",
+                            hole.size
+                        );
+                        let key = if hole_size.is_power_of_two() {
+                            hole_size as usize
+                        } else {
+                            (hole_size.next_power_of_two() >> 1) as usize
+                        };
+
+                        if local_hole_map.contains_key(&key) {
+                            local_hole_map.get_mut(&key).unwrap().push(hole);
+                        } else {
+                            let holes = vec![hole];
+                            local_hole_map.insert(key, holes);
+                        }
+                    }
+
+                    marked_lines += 1;
+                    prev_line_is_marked = true;
+                } else {
+                    if prev_line_is_marked {
+                        holes += 1;
+
+                        hole_size = 0;
+                        hole.size = 0;
+                        hole.start = line.start();
+                    }
+                    // reset the line state twice per epoch
+                    // if line_mark_state > Line::MAX_MARK_STATE - 2 {
+                    //     line.mark(0);
+                    // }
+                    line.mark(0);
+                    hole_size += 1;
+                    hole.size += Line::BYTES;
+
+                    #[cfg(feature = "immix_zero_on_release")]
+                    crate::util::memory::zero(line.start(), Line::BYTES);
+
+                    // We need to clear the pin bit if it is on the side, as this line can be reused
+                    #[cfg(feature = "object_pinning")]
+                    if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_PINNING_BIT_SPEC {
+                        side.bzero_metadata(line.start(), Line::BYTES);
+                    }
+
+                    prev_line_is_marked = false;
+                }
+            }
+
+            let mut hole_map = space.hole_map.lock().unwrap();
+            for (hole_size, mut holes) in local_hole_map {
+                match hole_map.get_mut(&hole_size) {
+                    Some(v) => {
+                        v.append(&mut holes);
+                    }
+                    None => {
+                        hole_map.insert(hole_size, holes);
+                    }
+                }
+            }
+
+            if marked_lines == 0 {
+                #[cfg(feature = "vo_bit")]
+                vo_bit::helper::on_region_swept::<VM, _>(self, false);
+
+                space.post_hole_size_histogram.lock().unwrap()[0] += 1;
+
+                // Release the block if non of its lines are marked.
+                space.release_block(*self);
+                true
+            } else {
+                // There are some marked lines. Keep the block live.
+                if marked_lines != Block::LINES {
+                    // There are holes. Mark the block as reusable.
+                    self.set_state(BlockState::Reusable {
+                        unavailable_lines: marked_lines as _,
+                    });
+                    // space.reusable_blocks.push(*self)
+                } else {
+                    // Clear mark state.
+                    self.set_state(BlockState::Unmarked);
+                }
+                // Update mark_histogram
+                mark_histogram[holes] += marked_lines;
+                // Record number of holes in block side metadata.
+                self.set_holes(holes);
+
+                #[cfg(feature = "vo_bit")]
+                vo_bit::helper::on_region_swept::<VM, _>(self, true);
+
                 false
             }
         }

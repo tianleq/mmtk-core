@@ -90,15 +90,7 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
         } else {
             // Simple bump allocation.
             fill_alignment_gap::<VM>(self.bump_pointer.cursor, result);
-            #[cfg(feature = "immix_utilization_analysis")]
-            {
-                let block = crate::policy::immix::block::Block::from_unaligned_address(result);
-                block.increase_live_bytes_simple(
-                    u32::try_from(size).unwrap(),
-                    self.bump_pointer.cursor,
-                    result,
-                );
-            }
+
             self.bump_pointer.cursor = new_cursor;
             trace!(
                 "{:?}: Bump allocation size: {}, result: {}, new_cursor: {}, limit: {}",
@@ -172,6 +164,32 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
         ret
     }
 
+    /// Bump allocate small objects into recyclable lines (i.e. holes).
+    fn alloc_slow_hot(&mut self, size: usize, align: usize, offset: usize) -> Address {
+        trace!("{:?}: alloc_slow_hot", self.tls);
+        if self.acquire_recyclable_lines(size, align, offset) {
+            // If stress test is active, then we need to go to the slow path instead of directly
+            // calling `alloc()`. This is because the `acquire_recyclable_lines()` function
+            // manipulates the cursor and limit if a line can be recycled and if we directly call
+            // `alloc()` after recyling a line, then we will miss updating the `allocation_bytes`
+            // as the newly recycled line will service the allocation request. If we set the stress
+            // factor limit directly in `acquire_recyclable_lines()`, then we risk running into an
+            // loop of failing the fastpath (i.e. `alloc()`) and then trying to allocate from a
+            // recyclable line.  Hence, we bring the "if we're in stress test" check up a level and
+            // directly call `alloc_slow_inline()` which will properly account for the allocation
+            // request as well as allocate from the newly recycled line
+            let stress_test = self.context.options.is_stress_test_gc_enabled();
+            let precise_stress = *self.context.options.precise_stress;
+            if unlikely(stress_test && precise_stress) {
+                self.alloc_slow_inline(size, align, offset)
+            } else {
+                self.alloc(size, align, offset)
+            }
+        } else {
+            self.alloc_slow_inline(size, align, offset)
+        }
+    }
+
     fn get_tls(&self) -> VMThread {
         self.tls
     }
@@ -201,6 +219,42 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         self.space
     }
 
+    #[cfg(feature = "immix_utilization_analysis")]
+    /// Large-object (larger than a line) bump allocation.
+    fn overflow_alloc(&mut self, size: usize, align: usize, offset: usize) -> Address {
+        trace!("{:?}: overflow_alloc", self.tls);
+        let start = align_allocation_no_fill::<VM>(self.large_bump_pointer.cursor, align, offset);
+        let end = start + size;
+        if end > self.large_bump_pointer.limit {
+            self.request_for_large = true;
+            // Try using large holes first, if it does not fit, then use clean blocks
+            let rtn = self.alloc_slow_hot(size, align, offset);
+            self.request_for_large = false;
+
+            rtn
+        } else {
+            fill_alignment_gap::<VM>(self.large_bump_pointer.cursor, start);
+            self.large_bump_pointer.cursor = end;
+            if !self.copy {
+                let state = self
+                    .space
+                    .line_mark_state
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                for line in crate::util::linear_scan::RegionIterator::<Line>::new(
+                    Line::from_unaligned_address(start),
+                    Line::from_unaligned_address(end),
+                ) {
+                    line.mark(state);
+                }
+
+                Line::from_unaligned_address(end).mark(state);
+            }
+
+            start
+        }
+    }
+
+    #[cfg(not(feature = "immix_utilization_analysis"))]
     /// Large-object (larger than a line) bump allocation.
     fn overflow_alloc(&mut self, size: usize, align: usize, offset: usize) -> Address {
         trace!("{:?}: overflow_alloc", self.tls);
@@ -213,70 +267,129 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             #[cfg(feature = "immix_utilization_analysis")]
             {
                 let block = crate::policy::immix::block::Block::from_unaligned_address(rtn);
-                block.increase_live_lines(crate::policy::immix::block::Block::LINES as u32);
+                // block.increase_live_lines(crate::policy::immix::block::Block::LINES as u32);
+                block.mark_all_lines(
+                    self.space
+                        .line_mark_state
+                        .load(std::sync::atomic::Ordering::Relaxed),
+                );
             }
             rtn
         } else {
-            #[cfg(feature = "immix_utilization_analysis")]
-            {
-                let block = crate::policy::immix::block::Block::from_unaligned_address(start);
-                block.increase_live_bytes(u32::try_from(size).unwrap());
-            }
             fill_alignment_gap::<VM>(self.large_bump_pointer.cursor, start);
             self.large_bump_pointer.cursor = end;
             start
         }
     }
 
-    /// Bump allocate small objects into recyclable lines (i.e. holes).
-    fn alloc_slow_hot(&mut self, size: usize, align: usize, offset: usize) -> Address {
-        trace!("{:?}: alloc_slow_hot", self.tls);
-        if self.acquire_recyclable_lines(size, align, offset) {
-            // If stress test is active, then we need to go to the slow path instead of directly
-            // calling `alloc()`. This is because the `acquire_recyclable_lines()` function
-            // manipulates the cursor and limit if a line can be recycled and if we directly call
-            // `alloc()` after recyling a line, then we will miss updating the `allocation_bytes`
-            // as the newly recycled line will service the allocation request. If we set the stress
-            // factor limit directly in `acquire_recyclable_lines()`, then we risk running into an
-            // loop of failing the fastpath (i.e. `alloc()`) and then trying to allocate from a
-            // recyclable line.  Hence, we bring the "if we're in stress test" check up a level and
-            // directly call `alloc_slow_inline()` which will properly account for the allocation
-            // request as well as allocate from the newly recycled line
-            let stress_test = self.context.options.is_stress_test_gc_enabled();
-            let precise_stress = *self.context.options.precise_stress;
-            if unlikely(stress_test && precise_stress) {
-                self.alloc_slow_inline(size, align, offset)
-            } else {
-                self.alloc(size, align, offset)
-            }
+    #[cfg(feature = "immix_utilization_analysis")]
+    fn acquire_recyclable_lines(&mut self, size: usize, _align: usize, _offset: usize) -> bool {
+        use crate::policy::immix::hole::Hole;
+
+        let required_lines =
+            crate::util::conversions::raw_align_up(size, Line::BYTES) >> Line::LOG_BYTES;
+        let mut key = if required_lines.is_power_of_two() {
+            required_lines
         } else {
-            let rtn = self.alloc_slow_inline(size, align, offset);
-            #[cfg(feature = "immix_utilization_analysis")]
-            {
-                let block = crate::policy::immix::block::Block::from_unaligned_address(rtn);
-                block.increase_live_lines(crate::policy::immix::block::Block::LINES as u32);
+            required_lines.next_power_of_two() >> 1
+        };
+        let mut hole_map = self.space.hole_map.lock().unwrap();
+        while hole_map.get(&key).is_some_and(|v| !v.is_empty())
+            || (key + 1).next_power_of_two() < crate::policy::immix::block::Block::LINES
+        {
+            match hole_map.get_mut(&key) {
+                Some(holes) => {
+                    if !holes.is_empty() {
+                        let mut found = false;
+                        let mut candidate = Hole::new(Address::ZERO, 0);
+                        for hole in holes.iter() {
+                            if hole.size >= size
+                            // && (!self.copy || !hole.start_line().block().is_defrag_source())
+                            // skip defrag source when allocating in GC
+                            {
+                                candidate = std::cmp::max(candidate, *hole);
+
+                                // candidate = *hole;
+                                found = true;
+                                // break;
+                            }
+                        }
+                        if found {
+                            candidate.init(self.copy);
+                            #[cfg(debug_assertions)]
+                            if !self.copy {
+                                candidate.mark_all_lines(
+                                    self.space
+                                        .line_mark_state
+                                        .load(std::sync::atomic::Ordering::SeqCst),
+                                );
+                            }
+
+                            debug_assert!(
+                                candidate.start.is_aligned_to(Line::BYTES),
+                                "invalid hole: {:?}",
+                                candidate
+                            );
+                            debug_assert!(
+                                (candidate.start + candidate.size).is_aligned_to(Line::BYTES),
+                                "invalid hole: {:?}",
+                                candidate
+                            );
+                            self.bump_pointer.cursor = candidate.start;
+                            self.bump_pointer.limit = candidate.start + candidate.size;
+                            trace!(
+                                "{:?}: acquire_recyclable_lines -> {:?} [{:?}, {:?}) {:?}",
+                                self.tls,
+                                self.line,
+                                candidate.start_line(),
+                                candidate.end_line(),
+                                self.tls
+                            );
+                            crate::util::memory::zero(
+                                self.bump_pointer.cursor,
+                                self.bump_pointer.limit - self.bump_pointer.cursor,
+                            );
+
+                            holes.retain(|&hole| hole != candidate);
+                            return true;
+                        } else {
+                            // look for holes in the next bucket
+                            key = (key + 1).next_power_of_two();
+                        }
+                    } else {
+                        // look for holes in the next bucket
+                        key = (key + 1).next_power_of_two();
+                    }
+                }
+                None => key = (key + 1).next_power_of_two(),
             }
-            rtn
         }
+
+        for (lines, holes) in hole_map.iter() {
+            if !holes.is_empty() {
+                println!("{} -> {}", lines, holes.len());
+                println!("--------");
+            }
+        }
+
+        assert!(
+            hole_map
+                .get(&(key + 1).next_power_of_two())
+                .is_none_or(|holes| holes.is_empty()),
+            "size: {}, required lines: {}",
+            size,
+            required_lines
+        );
+        false
     }
 
+    #[cfg(not(feature = "immix_utilization_analysis"))]
     /// Search for recyclable lines.
     fn acquire_recyclable_lines(&mut self, _size: usize, _align: usize, _offset: usize) -> bool {
         while self.line.is_some() || self.acquire_recyclable_block() {
             let line = self.line.unwrap();
             if let Some((start_line, end_line)) = self.immix_space().get_next_available_lines(line)
             {
-                #[cfg(feature = "immix_utilization_analysis")]
-                {
-                    let iter =
-                        crate::util::linear_scan::RegionIterator::<Line>::new(start_line, end_line);
-                    let mut count = 0;
-                    for _ in iter {
-                        count += 1;
-                    }
-                    start_line.block().increase_live_lines(count);
-                    // let v = end_line - start_line;
-                }
                 // Find recyclable lines. Update the bump allocation cursor and limit.
                 self.bump_pointer.cursor = start_line.start();
                 self.bump_pointer.limit = end_line.start();

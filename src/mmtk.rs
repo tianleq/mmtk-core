@@ -330,19 +330,23 @@ impl<VM: VMBinding> MMTK<VM> {
         #[cfg(feature = "immix_utilization_analysis")]
         {
             let base_path = "/home/tianleq/misc";
-            if let Ok(_) = std::fs::exists(format!("{}/utilization.log", base_path)) {
-                std::fs::OpenOptions::new()
-                    .write(true)
-                    .truncate(true)
-                    .open(format!("{}/utilization.log", base_path))
-                    .unwrap();
+            if let Ok(exist) = std::fs::exists(format!("{}/utilization.log", base_path)) {
+                if exist {
+                    std::fs::OpenOptions::new()
+                        .write(true)
+                        .truncate(true)
+                        .open(format!("{}/utilization.log", base_path))
+                        .unwrap();
+                }
             }
-            if let Ok(_) = std::fs::exists(format!("{}/holes.log", base_path)) {
-                std::fs::OpenOptions::new()
-                    .write(true)
-                    .truncate(true)
-                    .open(format!("{}/holes.log", base_path))
-                    .unwrap();
+            if let Ok(exist) = std::fs::exists(format!("{}/holes.log", base_path)) {
+                if exist {
+                    std::fs::OpenOptions::new()
+                        .write(true)
+                        .truncate(true)
+                        .open(format!("{}/holes.log", base_path))
+                        .unwrap();
+                }
             }
         }
     }

@@ -1,4 +1,5 @@
 use super::defrag::StatsForDefrag;
+use super::hole::Hole;
 use super::line::*;
 use super::{block::*, defrag::Defrag};
 use crate::plan::VectorObjectQueue;
@@ -21,6 +22,7 @@ use crate::util::object_enum::ObjectEnumerator;
 use crate::util::object_forwarding;
 use crate::util::{copy::*, epilogue, object_enum};
 use crate::util::{Address, ObjectReference};
+
 use crate::vm::*;
 use crate::{
     plan::ObjectQueue,
@@ -58,9 +60,11 @@ pub struct ImmixSpace<VM: VMBinding> {
     #[cfg(feature = "immix_utilization_analysis")]
     pub(crate) block_counter: AtomicUsize,
     #[cfg(feature = "immix_utilization_analysis")]
-    pub(crate) hole_size_histogram: std::sync::Mutex<[usize; Block::LINES]>,
-    // #[cfg(feature = "immix_utilization_analysis")]
-    // pub(crate) hole_set: std::sync::Mutex<std::collections::HashSet<Block>>,
+    pub(crate) post_hole_size_histogram: std::sync::Mutex<[usize; Block::LINES]>,
+    #[cfg(feature = "immix_utilization_analysis")]
+    pub(crate) pre_hole_size_histogram: std::sync::Mutex<[usize; Block::LINES]>,
+    #[cfg(feature = "immix_utilization_analysis")]
+    pub(crate) hole_map: std::sync::Mutex<std::collections::HashMap<usize, Vec<Hole>>>,
 }
 
 /// Some arguments for Immix Space.
@@ -267,10 +271,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
                 MetadataSpec::OnSide(Block::MARK_TABLE),
                 MetadataSpec::OnSide(ChunkMap::ALLOC_TABLE),
-                #[cfg(feature = "immix_utilization_analysis")]
-                MetadataSpec::OnSide(Block::BYTES_UTILIZATION_TABLE),
-                #[cfg(feature = "immix_utilization_analysis")]
-                MetadataSpec::OnSide(Block::LINES_UTILIZATION_TABLE),
+                // #[cfg(feature = "immix_utilization_analysis")]
+                // MetadataSpec::OnSide(Block::BYTES_UTILIZATION_TABLE),
+                // #[cfg(feature = "immix_utilization_analysis")]
+                // MetadataSpec::OnSide(Block::LINES_UTILIZATION_TABLE),
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
                 *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC,
                 *VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC,
@@ -283,10 +287,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
                 MetadataSpec::OnSide(Block::MARK_TABLE),
                 MetadataSpec::OnSide(ChunkMap::ALLOC_TABLE),
-                #[cfg(feature = "immix_utilization_analysis")]
-                MetadataSpec::OnSide(Block::BYTES_UTILIZATION_TABLE),
-                #[cfg(feature = "immix_utilization_analysis")]
-                MetadataSpec::OnSide(Block::LINES_UTILIZATION_TABLE),
+                // #[cfg(feature = "immix_utilization_analysis")]
+                // MetadataSpec::OnSide(Block::BYTES_UTILIZATION_TABLE),
+                // #[cfg(feature = "immix_utilization_analysis")]
+                // MetadataSpec::OnSide(Block::LINES_UTILIZATION_TABLE),
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
                 *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC,
                 *VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC,
@@ -351,9 +355,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             #[cfg(feature = "immix_utilization_analysis")]
             block_counter: AtomicUsize::new(0),
             #[cfg(feature = "immix_utilization_analysis")]
-            hole_size_histogram: std::sync::Mutex::new([0; Block::LINES]),
-            // #[cfg(feature = "immix_utilization_analysis")]
-            // hole_set: std::sync::Mutex::new(std::collections::HashSet::new()),
+            post_hole_size_histogram: std::sync::Mutex::new([0; Block::LINES]),
+            #[cfg(feature = "immix_utilization_analysis")]
+            pre_hole_size_histogram: std::sync::Mutex::new([0; Block::LINES]),
+            #[cfg(feature = "immix_utilization_analysis")]
+            hole_map: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -402,10 +408,19 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     pub fn prepare(&mut self, major_gc: bool, plan_stats: StatsForDefrag) {
         #[cfg(feature = "immix_utilization_analysis")]
         {
-            self.hole_size_histogram
+            self.post_hole_size_histogram
                 .lock()
                 .unwrap()
                 .swap_with_slice([0; Block::LINES].as_mut_slice());
+            // let hole_map = self.hole_map.lock().unwrap();
+            // for (lines, holes) in hole_map.iter() {
+            //     if !holes.is_empty() {
+            //         println!("********");
+            //         println!("{} -> {}", lines, holes.len());
+            //         println!("********");
+            //     }
+            // }
+            self.block_counter.store(0, Ordering::Relaxed);
         }
         if major_gc {
             // Update mark_state
@@ -499,11 +514,20 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if !super::BLOCK_ONLY {
             self.reusable_blocks.reset();
         }
+
         // Sweep chunks and blocks
         let work_packets = self.generate_sweep_tasks();
         self.scheduler().work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
 
         self.lines_consumed.store(0, Ordering::Relaxed);
+
+        #[cfg(feature = "immix_utilization_analysis")]
+        {
+            self.pre_hole_size_histogram
+                .lock()
+                .unwrap()
+                .swap_with_slice([0; Block::LINES].as_mut_slice());
+        }
     }
 
     /// This is called when a GC finished.
@@ -513,37 +537,74 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         if super::DEFRAG {
             self.defrag.reset_in_defrag();
         }
+
         #[cfg(feature = "immix_utilization_analysis")]
         {
-            use std::io::Write;
-
-            let histogram = self.hole_size_histogram.lock().unwrap();
-            let mut file = std::fs::OpenOptions::new()
-                .append(true)
-                .create(true)
-                .open("/home/tianleq/misc/holes.log")
-                .unwrap();
-            for i in 0..histogram.len() {
-                if histogram[i] != 0 {
-                    let hole_size = if i == 0 { 128 } else { i };
-                    writeln!(file, "hole size: {}, hole: {}", hole_size, histogram[i]).unwrap();
-                }
+            let block_counter = self.block_counter.load(Ordering::Relaxed);
+            if block_counter == 0 {
+                println!("no free blocks have been found after the GC");
             }
-            writeln!(
-                file,
-                "----{}----",
-                self.block_counter.load(Ordering::Acquire)
-            )
-            .unwrap();
-
-            self.block_counter.store(0, Ordering::Release);
         }
+
+        // #[cfg(feature = "immix_utilization_analysis")]
+        // {
+        //     use std::io::Write;
+
+        //     let base_path = std::path::Path::new("/home/tianleq/misc");
+        //     {
+        //         let histogram = self.pre_hole_size_histogram.lock().unwrap();
+        //         let mut file = std::fs::OpenOptions::new()
+        //             .append(true)
+        //             .create(true)
+        //             .open(base_path.join("pre_holes.log"))
+        //             .unwrap();
+        //         for i in 0..histogram.len() {
+        //             if histogram[i] != 0 {
+        //                 let hole_size = if i == 0 { 128 } else { i };
+        //                 writeln!(file, "hole size: {}, hole: {}", hole_size, histogram[i]).unwrap();
+        //             }
+        //         }
+        //         writeln!(
+        //             file,
+        //             "----{}----",
+        //             self.block_counter.load(Ordering::Acquire)
+        //         )
+        //         .unwrap();
+        //     }
+        //     {
+        //         let histogram = self.post_hole_size_histogram.lock().unwrap();
+        //         let mut file = std::fs::OpenOptions::new()
+        //             .append(true)
+        //             .create(true)
+        //             .open(base_path.join("post_holes.log"))
+        //             .unwrap();
+        //         for i in 0..histogram.len() {
+        //             if histogram[i] != 0 {
+        //                 let hole_size = if i == 0 { 128 } else { i };
+        //                 writeln!(file, "hole size: {}, hole: {}", hole_size, histogram[i]).unwrap();
+        //             }
+        //         }
+        //         writeln!(
+        //             file,
+        //             "----{}----",
+        //             self.block_counter.load(Ordering::Acquire)
+        //         )
+        //         .unwrap();
+        //     }
+        //     self.block_counter.store(0, Ordering::Release);
+        // }
 
         did_defrag
     }
 
     /// Generate chunk sweep tasks
     fn generate_sweep_tasks(&self) -> Vec<Box<dyn GCWork<VM>>> {
+        #[cfg(feature = "immix_utilization_analysis")]
+        {
+            // clear the map so that it can be rebuilt, leaving stale holes in the map
+            // is incorrect, those holes may be in a complete free block
+            self.hole_map.lock().unwrap().clear();
+        }
         self.defrag.mark_histograms.lock().clear();
         // # Safety: ImmixSpace reference is always valid within this collection cycle.
         let space = unsafe { &*(self as *const Self) };
@@ -566,12 +627,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     pub fn release_block(&self, block: Block) {
         block.deinit();
         self.pr.release_block(block);
-        #[cfg(feature = "immix_utilization_analysis")]
-        {
-            info!("block: {:?} released", block);
-            block.set_live_bytes(0);
-            block.set_live_lines(0);
-        }
     }
 
     /// Allocate a clean block.
@@ -640,13 +695,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
             #[cfg(feature = "vo_bit")]
             vo_bit::helper::on_object_marked::<VM>(object);
-            #[cfg(feature = "immix_utilization_analysis")]
-            {
-                let block = Block::containing(object);
-                block.increase_live_bytes(
-                    u32::try_from(VM::VMObjectModel::get_current_size(object)).unwrap(),
-                );
-            }
+            // #[cfg(feature = "immix_utilization_analysis")]
+            // {
+            //     let block = Block::containing(object);
+            //     block.increase_live_bytes(
+            //         u32::try_from(VM::VMObjectModel::get_current_size(object)).unwrap(),
+            //     );
+            // }
             // Visit node
             queue.enqueue(object);
             self.unlog_object_if_needed(object);
@@ -720,12 +775,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     self.mark_lines(object);
                 }
 
-                #[cfg(feature = "immix_utilization_analysis")]
-                {
-                    let block = Block::containing(object);
-                    let bytes = u32::try_from(VM::VMObjectModel::get_current_size(object)).unwrap();
-                    block.increase_live_bytes(bytes);
-                }
+                // #[cfg(feature = "immix_utilization_analysis")]
+                // {
+                //     let block = Block::containing(object);
+                //     let bytes = u32::try_from(VM::VMObjectModel::get_current_size(object)).unwrap();
+                //     block.increase_live_bytes(bytes);
+                // }
 
                 object
             } else {
@@ -950,7 +1005,24 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
             }
             #[cfg(feature = "immix_utilization_analysis")]
             {
-                self.space.block_counter.fetch_add(1, Ordering::SeqCst);
+                let mut hole_size = 0;
+                let mut prev_line_is_marked = true;
+                let line_mark_state = self.space.line_unavail_state.load(Ordering::Relaxed);
+                for line in block.lines() {
+                    if line.is_marked(line_mark_state) {
+                        if hole_size != 0 {
+                            self.space.pre_hole_size_histogram.lock().unwrap()
+                                [hole_size as usize] += 1;
+                        }
+                        prev_line_is_marked = true;
+                    } else {
+                        if prev_line_is_marked {
+                            hole_size = 0;
+                        }
+                        hole_size += 1;
+                        prev_line_is_marked = false;
+                    }
+                }
             }
             // Check if this block needs to be defragmented.
             let is_defrag_source = if !super::DEFRAG {
@@ -971,41 +1043,6 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
             block.set_state(BlockState::Unmarked);
             debug_assert!(!block.get_state().is_reusable());
             debug_assert_ne!(block.get_state(), BlockState::Marked);
-            #[cfg(feature = "immix_utilization_analysis")]
-            {
-                // let mut map = _worker
-                //     .mmtk
-                //     .state
-                //     .pre_block_utilization_stats
-                //     .lock()
-                //     .unwrap();
-                // assert!(
-                //     block.get_live_bytes() as usize <= Block::BYTES,
-                //     "Block {:?} has more live bytes {} than bytes in Block!",
-                //     block,
-                //     block.get_live_bytes()
-                // );
-                // assert!(
-                //     block.get_live_lines() as usize <= Block::LINES,
-                //     "Block {:?} has more live lines {} than number of lines in Block!",
-                //     block,
-                //     block.get_live_lines()
-                // );
-                // assert!(
-                //     !(block.get_live_bytes() == 0 && block.get_live_lines() != 0),
-                //     "block: {:?}, state: {:?}, bytes == {} and lines == {}",
-                //     block,
-                //     block.get_state(),
-                //     block.get_live_bytes(),
-                //     block.get_live_lines()
-                // );
-                // map.insert(
-                //     block.start(),
-                //     (block.get_live_bytes(), block.get_live_lines()),
-                // );
-                block.set_live_bytes(0);
-                block.set_live_lines(0);
-            }
         }
     }
 }
@@ -1066,19 +1103,9 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
             if !block.sweep(self.space, &mut histogram, line_mark_state) {
                 // Block is live. Increment the allocated block count.
                 allocated_blocks += 1;
-                // #[cfg(feature = "immix_utilization_analysis")]
-                // {
-                //     _worker
-                //         .mmtk
-                //         .state
-                //         .post_block_utilization_stats
-                //         .lock()
-                //         .unwrap()
-                //         .insert(
-                //             block.start(),
-                //             (block.get_live_bytes(), block.get_live_lines()),
-                //         );
-                // }
+            } else {
+                #[cfg(feature = "immix_utilization_analysis")]
+                self.space.block_counter.fetch_add(1, Ordering::SeqCst);
             }
         }
         probe!(mmtk, sweep_chunk, allocated_blocks);

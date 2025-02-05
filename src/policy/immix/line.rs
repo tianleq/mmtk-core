@@ -79,14 +79,14 @@ impl Line {
         for line in iter {
             line.mark(state)
         }
-        #[cfg(feature = "immix_utilization_analysis")]
-        {
-            assert!(
-                Block::containing(object).get_live_bytes() != 0,
-                "block: {:?} 's live bytes counter is incorrect",
-                Block::containing(object)
-            );
-        }
+        // #[cfg(feature = "immix_utilization_analysis")]
+        // {
+        //     assert!(
+        //         Block::containing(object).get_live_bytes() != 0,
+        //         "block: {:?} 's live bytes counter is incorrect",
+        //         Block::containing(object)
+        //     );
+        // }
         (start_line, end_line)
     }
 }

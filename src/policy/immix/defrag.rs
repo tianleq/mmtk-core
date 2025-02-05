@@ -78,6 +78,9 @@ impl Defrag {
                 || !exhausted_reusable_space
                 || super::STRESS_DEFRAG
                 || (collect_whole_heap && user_triggered && full_heap_system_gc));
+        if in_defrag {
+            println!("defrag true!");
+        }
         info!("Defrag: {}", in_defrag);
         probe!(mmtk, immix_defrag, in_defrag);
         self.in_defrag_collection

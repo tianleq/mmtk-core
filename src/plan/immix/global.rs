@@ -50,35 +50,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         &self,
         space_full: bool,
         _space: Option<SpaceStats<Self::VM>>,
-        #[cfg(feature = "immix_utilization_analysis")] tls: crate::util::VMMutatorThread,
+        #[cfg(feature = "immix_utilization_analysis")] _tls: crate::util::VMMutatorThread,
     ) -> bool {
-        let required = self.base().collection_required(self, space_full);
-        // #[cfg(feature = "immix_utilization_analysis")]
-        // if required {
-        //     use crate::vm::ActivePlan;
-
-        //     let len = self.immix_space.reusable_blocks.len();
-        //     if len != 0 {
-        //         let mutator = VM::VMActivePlan::mutator(tls);
-        //         let allocator = unsafe {
-        //             mutator
-        //                 .allocators
-        //                 .get_allocator_mut(
-        //                     mutator.config.allocator_mapping[AllocationSemantics::Default],
-        //                 )
-        //                 .downcast_mut::<crate::util::alloc::ImmixAllocator<VM>>()
-        //                 .unwrap()
-        //         };
-
-        //         println!(
-        //             "{} -> {} | {} reusable blocks left",
-        //             _space.unwrap().0.get_name(),
-        //             allocator.request_for_large,
-        //             len
-        //         );
-        //     }
-        // }
-        required
+        self.base().collection_required(self, space_full)
     }
 
     fn last_collection_was_exhaustive(&self) -> bool {

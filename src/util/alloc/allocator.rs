@@ -246,9 +246,13 @@ pub trait Allocator<VM: VMBinding>: Downcast {
                 let need_poll = is_mutator && self.get_context().gc_trigger.should_do_stress_gc();
                 self.alloc_slow_once_precise_stress(size, align, offset, need_poll)
             } else {
-                // If we are not doing precise stress GC, just call the normal alloc_slow_once().
-                // Normal stress test only checks for stress GC in the slowpath.
-                self.alloc_slow_once_traced(size, align, offset)
+                if previous_result_zero {
+                    self.alloc_slow_hot(size, align, offset)
+                } else {
+                    // If we are not doing precise stress GC, just call the normal alloc_slow_once().
+                    // Normal stress test only checks for stress GC in the slowpath.
+                    self.alloc_slow_once_traced(size, align, offset)
+                }
             };
 
             if !is_mutator {
@@ -368,6 +372,10 @@ pub trait Allocator<VM: VMBinding>: Downcast {
     /// * `align`: the required alignment in bytes.
     /// * `offset` the required offset in bytes.
     fn alloc_slow_once(&mut self, size: usize, align: usize, offset: usize) -> Address;
+
+    fn alloc_slow_hot(&mut self, size: usize, align: usize, offset: usize) -> Address {
+        self.alloc_slow_once_traced(size, align, offset)
+    }
 
     /// A wrapper method for [`alloc_slow_once`](Allocator::alloc_slow_once) to insert USDT tracepoints.
     ///

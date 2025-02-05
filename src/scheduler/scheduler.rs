@@ -564,60 +564,60 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 );
             }
         }
-        #[cfg(feature = "immix_utilization_analysis")]
-        {
-            // use crate::util::linear_scan::Region;
-            // use std::io::Write;
-            // // output utilization stats
-            // let mut file = std::fs::OpenOptions::new()
-            //     .append(true)
-            //     .create(true)
-            //     .open("/home/tianleq/misc/utilization.log")
-            //     .unwrap();
-            // for info in mmtk
-            //     .state
-            //     .pre_block_utilization_stats
-            //     .lock()
-            //     .unwrap()
-            //     .iter()
-            // {
-            //     writeln!(
-            //         file,
-            //         "pre|{}, {}, {}",
-            //         info.0,
-            //         info.1 .0 as f64 * 100.0 / crate::policy::immix::block::Block::BYTES as f64,
-            //         info.1 .1 as f64 * 100.0 / crate::policy::immix::block::Block::LINES as f64,
-            //     )
-            //     .unwrap();
-            // }
-            // for info in mmtk
-            //     .state
-            //     .post_block_utilization_stats
-            //     .lock()
-            //     .unwrap()
-            //     .iter()
-            // {
-            //     writeln!(
-            //         file,
-            //         "post|{}, {}, {}",
-            //         info.0,
-            //         info.1 .0 as f64 * 100.0 / crate::policy::immix::block::Block::BYTES as f64,
-            //         info.1 .1 as f64 * 100.0 / crate::policy::immix::block::Block::LINES as f64,
-            //     )
-            //     .unwrap();
-            // }
-            // writeln!(file, "--------").unwrap();
-            mmtk.state
-                .pre_block_utilization_stats
-                .lock()
-                .unwrap()
-                .clear();
-            mmtk.state
-                .post_block_utilization_stats
-                .lock()
-                .unwrap()
-                .clear();
-        }
+        // #[cfg(feature = "immix_utilization_analysis")]
+        // {
+        //     // use crate::util::linear_scan::Region;
+        //     // use std::io::Write;
+        //     // // output utilization stats
+        //     // let mut file = std::fs::OpenOptions::new()
+        //     //     .append(true)
+        //     //     .create(true)
+        //     //     .open("/home/tianleq/misc/utilization.log")
+        //     //     .unwrap();
+        //     // for info in mmtk
+        //     //     .state
+        //     //     .pre_block_utilization_stats
+        //     //     .lock()
+        //     //     .unwrap()
+        //     //     .iter()
+        //     // {
+        //     //     writeln!(
+        //     //         file,
+        //     //         "pre|{}, {}, {}",
+        //     //         info.0,
+        //     //         info.1 .0 as f64 * 100.0 / crate::policy::immix::block::Block::BYTES as f64,
+        //     //         info.1 .1 as f64 * 100.0 / crate::policy::immix::block::Block::LINES as f64,
+        //     //     )
+        //     //     .unwrap();
+        //     // }
+        //     // for info in mmtk
+        //     //     .state
+        //     //     .post_block_utilization_stats
+        //     //     .lock()
+        //     //     .unwrap()
+        //     //     .iter()
+        //     // {
+        //     //     writeln!(
+        //     //         file,
+        //     //         "post|{}, {}, {}",
+        //     //         info.0,
+        //     //         info.1 .0 as f64 * 100.0 / crate::policy::immix::block::Block::BYTES as f64,
+        //     //         info.1 .1 as f64 * 100.0 / crate::policy::immix::block::Block::LINES as f64,
+        //     //     )
+        //     //     .unwrap();
+        //     // }
+        //     // writeln!(file, "--------").unwrap();
+        //     // mmtk.state
+        //     //     .pre_block_utilization_stats
+        //     //     .lock()
+        //     //     .unwrap()
+        //     //     .clear();
+        //     // mmtk.state
+        //     //     .post_block_utilization_stats
+        //     //     .lock()
+        //     //     .unwrap()
+        //     //     .clear();
+        // }
 
         #[cfg(feature = "extreme_assertions")]
         if crate::util::slot_logger::should_check_duplicate_slots(mmtk.get_plan()) {

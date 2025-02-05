@@ -47,13 +47,12 @@ pub struct GlobalState {
     pub(crate) malloc_bytes: AtomicUsize,
     /// This stores the live bytes and the used bytes (by pages) for each space in last GC. This counter is only updated in the GC release phase.
     pub(crate) live_bytes_in_last_gc: AtomicRefCell<HashMap<&'static str, LiveBytesStats>>,
-
-    #[cfg(feature = "immix_utilization_analysis")]
-    pub(crate) pre_block_utilization_stats:
-        std::sync::Mutex<std::collections::HashMap<crate::util::Address, (u32, u32)>>,
-    #[cfg(feature = "immix_utilization_analysis")]
-    pub(crate) post_block_utilization_stats:
-        std::sync::Mutex<std::collections::HashMap<crate::util::Address, (u32, u32)>>,
+    // #[cfg(feature = "immix_utilization_analysis")]
+    // pub(crate) pre_block_utilization_stats:
+    //     std::sync::Mutex<std::collections::HashMap<crate::util::Address, (u32, u32)>>,
+    // #[cfg(feature = "immix_utilization_analysis")]
+    // pub(crate) post_block_utilization_stats:
+    //     std::sync::Mutex<std::collections::HashMap<crate::util::Address, (u32, u32)>>,
 }
 
 impl GlobalState {
@@ -210,10 +209,10 @@ impl Default for GlobalState {
             #[cfg(feature = "malloc_counted_size")]
             malloc_bytes: AtomicUsize::new(0),
             live_bytes_in_last_gc: AtomicRefCell::new(HashMap::new()),
-            #[cfg(feature = "immix_utilization_analysis")]
-            pre_block_utilization_stats: std::sync::Mutex::new(std::collections::HashMap::new()),
-            #[cfg(feature = "immix_utilization_analysis")]
-            post_block_utilization_stats: std::sync::Mutex::new(std::collections::HashMap::new()),
+            // #[cfg(feature = "immix_utilization_analysis")]
+            // pre_block_utilization_stats: std::sync::Mutex::new(std::collections::HashMap::new()),
+            // #[cfg(feature = "immix_utilization_analysis")]
+            // post_block_utilization_stats: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 }

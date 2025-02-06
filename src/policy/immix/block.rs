@@ -111,6 +111,11 @@ impl Block {
     pub const MARK_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_MARK;
 
+    #[cfg(feature = "immix_allocation_policy")]
+    /// Block hole size table (side)
+    pub const HOLE_SIZE_TABLE: SideMetadataSpec =
+        crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_MARK;
+
     /// Get the chunk containing the block.
     pub fn chunk(&self) -> Chunk {
         Chunk::from_unaligned_address(self.0)
@@ -163,6 +168,16 @@ impl Block {
         let byte = Self::DEFRAG_STATE_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst);
         debug_assert_ne!(byte, Self::DEFRAG_SOURCE_STATE);
         byte as usize
+    }
+
+    #[cfg(feature = "immix_allocation_policy")]
+    pub fn set_hole_size(&self, hole_size: u8) {
+        Self::HOLE_SIZE_TABLE.store_atomic::<u8>(self.start(), hole_size, Ordering::SeqCst);
+    }
+
+    #[cfg(feature = "immix_allocation_policy")]
+    pub fn get_hole_size(&self) -> u8 {
+        Self::HOLE_SIZE_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst)
     }
 
     /// Initialize a clean block after acquired from page-resource.
@@ -233,6 +248,10 @@ impl Block {
                 _ => unreachable!(),
             }
         } else {
+            #[cfg(feature = "immix_allocation_policy")]
+            let mut hole_size = 0;
+            #[cfg(feature = "immix_allocation_policy")]
+            let mut max_hole_size = 0;
             // Calculate number of marked lines and holes.
             let mut marked_lines = 0;
             let mut holes = 0;
@@ -246,12 +265,22 @@ impl Block {
                 } else {
                     if prev_line_is_marked {
                         holes += 1;
+                        #[cfg(feature = "immix_allocation_policy")]
+                        {
+                            max_hole_size = std::cmp::max(hole_size, max_hole_size);
+                            hole_size = 0;
+                        }
                     }
                     // We need to clear the line mark state at least twice in every 128 GC
                     // otherwise, the line mark state of the last GC will stick around
                     if line_mark_state > Line::MAX_MARK_STATE - 2 {
                         line.mark(0);
                     }
+                    #[cfg(feature = "immix_allocation_policy")]
+                    {
+                        hole_size += 1;
+                    }
+
                     #[cfg(feature = "immix_zero_on_release")]
                     crate::util::memory::zero(line.start(), Line::BYTES);
 
@@ -263,6 +292,19 @@ impl Block {
 
                     prev_line_is_marked = false;
                 }
+            }
+            #[cfg(feature = "immix_allocation_policy")]
+            {
+                // If the hole ends up at the block boundry(last line of a block)
+                // its size needs to be compared against the current max here
+                // as there is no more marked lines after it and the comparision
+                // is not done in the previous loop
+                if prev_line_is_marked == false {
+                    if hole_size != 0 {
+                        max_hole_size = std::cmp::max(hole_size, max_hole_size);
+                    }
+                }
+                self.set_hole_size(max_hole_size);
             }
 
             if marked_lines == 0 {
@@ -279,6 +321,15 @@ impl Block {
                     self.set_state(BlockState::Reusable {
                         unavailable_lines: marked_lines as _,
                     });
+                    #[cfg(feature = "immix_allocation_policy")]
+                    {
+                        if max_hole_size as usize >= Block::LINES >> 1 {
+                            space.overflow_reusable_blocks.push(*self);
+                        } else {
+                            space.reusable_blocks.push(*self);
+                        }
+                    }
+                    #[cfg(not(feature = "immix_allocation_policy"))]
                     space.reusable_blocks.push(*self)
                 } else {
                     // Clear mark state.

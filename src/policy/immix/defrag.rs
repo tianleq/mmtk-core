@@ -160,6 +160,17 @@ impl Defrag {
             spill_avail_histograms[bucket] += available_lines;
             total_available_lines += available_lines;
         });
+        #[cfg(feature = "immix_allocation_policy")]
+        space.overflow_reusable_blocks.iterate_blocks(|block| {
+            let bucket = block.get_holes();
+            let unavailable_lines = match block.get_state() {
+                BlockState::Reusable { unavailable_lines } => unavailable_lines as usize,
+                s => unreachable!("{:?} {:?}", block, s),
+            };
+            let available_lines = Block::LINES - unavailable_lines;
+            spill_avail_histograms[bucket] += available_lines;
+            total_available_lines += available_lines;
+        });
         total_available_lines
     }
 

@@ -33,6 +33,11 @@ pub struct ImmixAllocator<VM: VMBinding> {
     request_for_large: bool,
     /// Hole-searching cursor
     line: Option<Line>,
+    #[cfg(feature = "immix_allocation_policy")]
+    /// Hole-searching cursor
+    overflow_line: Option<Line>,
+    #[cfg(feature = "immix_allocation_policy")]
+    overflow_reusable_blocks: Box<std::collections::VecDeque<crate::policy::immix::block::Block>>,
 }
 
 impl<VM: VMBinding> ImmixAllocator<VM> {
@@ -182,6 +187,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             large_bump_pointer: BumpPointer::default(),
             request_for_large: false,
             line: None,
+            #[cfg(feature = "immix_allocation_policy")]
+            overflow_line: None,
+            #[cfg(feature = "immix_allocation_policy")]
+            overflow_reusable_blocks: Box::new(std::collections::VecDeque::new()),
         }
     }
 
@@ -196,13 +205,56 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         let end = start + size;
         if end > self.large_bump_pointer.limit {
             self.request_for_large = true;
+            #[cfg(feature = "immix_allocation_policy")]
+            let rtn = self.overflow_alloc_slow_hot(size, align, offset);
+            #[cfg(not(feature = "immix_allocation_policy"))]
             let rtn = self.alloc_slow_inline(size, align, offset);
             self.request_for_large = false;
             rtn
         } else {
             fill_alignment_gap::<VM>(self.large_bump_pointer.cursor, start);
             self.large_bump_pointer.cursor = end;
+            #[cfg(feature = "immix_allocation_policy")]
+            {
+                use crate::util::linear_scan::RegionIterator;
+                use std::sync::atomic::Ordering;
+                // mark lines so that those lines will become unavailable (the block may be used by normal allocation later)
+                let state = self.space.line_mark_state.load(Ordering::Relaxed);
+                for line in RegionIterator::new(
+                    Line::from_unaligned_address(start),
+                    Line::from_unaligned_address(end).next(),
+                ) {
+                    line.mark(state);
+                }
+            }
             start
+        }
+    }
+
+    #[cfg(feature = "immix_allocation_policy")]
+    /// Bump allocate small objects into recyclable lines (i.e. holes).
+    fn overflow_alloc_slow_hot(&mut self, size: usize, align: usize, offset: usize) -> Address {
+        trace!("{:?}: overflow_alloc_slow_hot", self.tls);
+        if self.acquire_overflow_recyclable_lines(size, align, offset) {
+            // If stress test is active, then we need to go to the slow path instead of directly
+            // calling `alloc()`. This is because the `acquire_recyclable_lines()` function
+            // manipulates the cursor and limit if a line can be recycled and if we directly call
+            // `alloc()` after recyling a line, then we will miss updating the `allocation_bytes`
+            // as the newly recycled line will service the allocation request. If we set the stress
+            // factor limit directly in `acquire_recyclable_lines()`, then we risk running into an
+            // loop of failing the fastpath (i.e. `alloc()`) and then trying to allocate from a
+            // recyclable line.  Hence, we bring the "if we're in stress test" check up a level and
+            // directly call `alloc_slow_inline()` which will properly account for the allocation
+            // request as well as allocate from the newly recycled line
+            let stress_test = self.context.options.is_stress_test_gc_enabled();
+            let precise_stress = *self.context.options.precise_stress;
+            if unlikely(stress_test && precise_stress) {
+                self.alloc_slow_inline(size, align, offset)
+            } else {
+                self.alloc(size, align, offset)
+            }
+        } else {
+            self.alloc_slow_inline(size, align, offset)
         }
     }
 
@@ -274,13 +326,111 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         false
     }
 
+    #[cfg(feature = "immix_allocation_policy")]
+    /// Search for recyclable lines.
+    fn acquire_overflow_recyclable_lines(
+        &mut self,
+        size: usize,
+        align: usize,
+        offset: usize,
+    ) -> bool {
+        while self.overflow_line.is_some() || self.acquire_overflow_recyclable_block(size) {
+            let overflow_line = self.overflow_line.unwrap();
+            if let Some((start_line, end_line)) = self
+                .immix_space()
+                .get_next_available_overflow_lines(overflow_line, size)
+            {
+                // Find recyclable lines. Update the bump allocation cursor and limit.
+                self.large_bump_pointer.cursor = start_line.start();
+                self.large_bump_pointer.limit = end_line.start();
+                trace!(
+                    "{:?}: acquire_overflow_recyclable_lines -> {:?} [{:?}, {:?}) {:?}",
+                    self.tls,
+                    self.line,
+                    start_line,
+                    end_line,
+                    self.tls
+                );
+                crate::util::memory::zero(
+                    self.large_bump_pointer.cursor,
+                    self.large_bump_pointer.limit - self.large_bump_pointer.cursor,
+                );
+                debug_assert!(
+                    align_allocation_no_fill::<VM>(self.large_bump_pointer.cursor, align, offset)
+                        + size
+                        <= self.large_bump_pointer.limit
+                );
+                let block = overflow_line.block();
+                self.overflow_line = if end_line == block.end_line() {
+                    // large holes have been exhausted, but it may have small holes that can be used
+                    debug_assert!(
+                        !self.overflow_reusable_blocks.contains(&block),
+                        "block: {:?} already exists in the local list",
+                        block
+                    );
+                    self.overflow_reusable_blocks.push_back(block);
+                    // Hole searching reached the end of a reusable block. Set the hole-searching cursor to None.
+                    None
+                } else {
+                    // Update the hole-searching cursor to None.
+                    Some(end_line)
+                };
+                return true;
+            } else {
+                let block = overflow_line.block();
+                debug_assert!(
+                    !self.overflow_reusable_blocks.contains(&block),
+                    "block: {:?} already exists in the local list",
+                    block
+                );
+                // large holes have been exhausted, but it may have small holes that can be used
+                self.overflow_reusable_blocks.push_back(block);
+                // No more recyclable lines. Set the hole-searching cursor to None.
+                self.overflow_line = None;
+            }
+        }
+        false
+    }
+
     /// Get a recyclable block from ImmixSpace.
     fn acquire_recyclable_block(&mut self) -> bool {
+        // Looking for free lines in local reusable block queue first
+        // Those blocks are originally used by overflow allocation
+        if let Some(block) = self.overflow_reusable_blocks.pop_front() {
+            trace!("{:?}: acquire_recyclable_block -> {:?}", self.tls, block);
+            // Set the hole-searching cursor to the start of this block.
+            self.line = Some(block.start_line());
+            return true;
+        }
+
         match self.immix_space().get_reusable_block(self.copy) {
             Some(block) => {
                 trace!("{:?}: acquire_recyclable_block -> {:?}", self.tls, block);
                 // Set the hole-searching cursor to the start of this block.
                 self.line = Some(block.start_line());
+                true
+            }
+            _ => false,
+        }
+    }
+
+    #[cfg(feature = "immix_allocation_policy")]
+    /// Get a recyclable block from ImmixSpace.
+    fn acquire_overflow_recyclable_block(&mut self, _size: usize) -> bool {
+        debug_assert!(
+            self.request_for_large,
+            "should not reach here during normal allocation"
+        );
+        match self.immix_space().get_overflow_reusable_block(self.copy) {
+            Some(block) => {
+                trace!(
+                    "{:?}: acquire_overflow_recyclable_block -> {:?}",
+                    self.tls,
+                    block
+                );
+                // Set the hole-searching cursor to the start of this block.
+                self.overflow_line = Some(block.start_line());
+
                 true
             }
             _ => false,

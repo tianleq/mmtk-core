@@ -148,6 +148,8 @@ immix_smaller_block = []
 # Zero the unmarked lines after a GC cycle in immix. This helps debug untraced objects.
 immix_zero_on_release = []
 
+immix_allocation_policy = []
+
 # Run sanity GC
 sanity = []
 # Run analysis

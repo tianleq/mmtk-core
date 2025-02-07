@@ -339,6 +339,22 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         align: usize,
         offset: usize,
     ) -> bool {
+        if self.overflow_line.is_none()
+            && self.large_bump_pointer.cursor != Address::ZERO
+            && self.large_bump_pointer.limit != Address::ZERO
+        {
+            let block = crate::policy::immix::block::Block::from_unaligned_address(
+                self.large_bump_pointer.cursor,
+            );
+            debug_assert!(
+                !self.overflow_reusable_blocks.contains(&block),
+                "block: {:?} already exists in the local list",
+                block
+            );
+            // large holes have been exhausted, but it may have small holes that can be used
+            self.overflow_reusable_blocks.push_back(block);
+        }
+
         while self.overflow_line.is_some() || self.acquire_overflow_recyclable_block(size) {
             let overflow_line = self.overflow_line.unwrap();
             if let Some((start_line, end_line)) = self
@@ -367,13 +383,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 );
                 let block = overflow_line.block();
                 self.overflow_line = if end_line == block.end_line() {
-                    // large holes have been exhausted, but it may have small holes that can be used
-                    debug_assert!(
-                        !self.overflow_reusable_blocks.contains(&block),
-                        "block: {:?} already exists in the local list",
-                        block
-                    );
-                    self.overflow_reusable_blocks.push_back(block);
+                    // cannot add the block to local list here,
+                    // the block is still being used by overflow alloc
+
                     // Hole searching reached the end of a reusable block. Set the hole-searching cursor to None.
                     None
                 } else {

@@ -905,6 +905,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     .all(|line| !line.is_marked(unavail_state) && !line.is_marked(current_state)));
                 return Some((start, end));
             }
+            debug_assert!(cursor <= mark_data.len(), "cursor overflows");
         }
     }
 

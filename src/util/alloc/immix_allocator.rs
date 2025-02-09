@@ -343,6 +343,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             && self.large_bump_pointer.cursor != Address::ZERO
             && self.large_bump_pointer.limit != Address::ZERO
         {
+            // even if it is a collector, it does not matter
+            // the local list will be reset when releasing
             let block = crate::policy::immix::block::Block::from_unaligned_address(
                 self.large_bump_pointer.cursor,
             );
@@ -394,6 +396,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 };
                 return true;
             } else {
+                // even if it is a collector, it does not matter
+                // the local list will be reset when releasing
                 let block = overflow_line.block();
                 debug_assert!(
                     !self.overflow_reusable_blocks.contains(&block),
@@ -402,6 +406,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 );
                 // large holes have been exhausted, but it may have small holes that can be used
                 self.overflow_reusable_blocks.push_back(block);
+
                 // No more recyclable lines. Set the hole-searching cursor to None.
                 self.overflow_line = None;
             }
@@ -415,6 +420,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         // Those blocks are originally used by overflow allocation
         if let Some(block) = self.overflow_reusable_blocks.pop_front() {
             trace!("{:?}: acquire_recyclable_block -> {:?}", self.tls, block);
+            #[cfg(feature = "immix_allocation_policy")]
+            block.convert_block_status();
             // Set the hole-searching cursor to the start of this block.
             self.line = Some(block.start_line());
             return true;
@@ -425,6 +432,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 trace!("{:?}: acquire_recyclable_block -> {:?}", self.tls, block);
                 // Set the hole-searching cursor to the start of this block.
                 self.line = Some(block.start_line());
+                #[cfg(feature = "immix_allocation_policy")]
+                block.set_block_status(crate::policy::immix::block::Block::NORMAL_REUSABLE);
                 true
             }
             _ => false,
@@ -434,6 +443,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     #[cfg(feature = "immix_allocation_policy")]
     /// Get a recyclable block from ImmixSpace.
     fn acquire_overflow_recyclable_block(&mut self, _size: usize) -> bool {
+        use crate::policy::immix::block::Block;
+
         debug_assert!(
             self.request_for_large,
             "should not reach here during normal allocation"
@@ -447,7 +458,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 );
                 // Set the hole-searching cursor to the start of this block.
                 self.overflow_line = Some(block.start_line());
-
+                block.set_block_status(Block::OVERFLOW_REUSABLE);
                 true
             }
             _ => false,

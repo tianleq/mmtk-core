@@ -113,8 +113,12 @@ impl Block {
 
     #[cfg(feature = "immix_allocation_policy")]
     /// Block hole size table (side)
-    pub const HOLE_SIZE_TABLE: SideMetadataSpec =
-        crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_MARK;
+    pub const BLOCK_STATUS: SideMetadataSpec =
+        crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_HOLE_STATUS;
+    #[cfg(feature = "immix_allocation_policy")]
+    pub const NORMAL_REUSABLE: u8 = 1;
+    #[cfg(feature = "immix_allocation_policy")]
+    pub const OVERFLOW_REUSABLE: u8 = 2;
 
     /// Get the chunk containing the block.
     pub fn chunk(&self) -> Chunk {
@@ -171,13 +175,22 @@ impl Block {
     }
 
     #[cfg(feature = "immix_allocation_policy")]
-    pub fn set_hole_size(&self, hole_size: u8) {
-        Self::HOLE_SIZE_TABLE.store_atomic::<u8>(self.start(), hole_size, Ordering::SeqCst);
+    pub fn set_block_status(&self, status: u8) {
+        Self::BLOCK_STATUS.store_atomic::<u8>(self.start(), status, Ordering::SeqCst);
     }
 
     #[cfg(feature = "immix_allocation_policy")]
-    pub fn get_hole_size(&self) -> u8 {
-        Self::HOLE_SIZE_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst)
+    pub fn convert_block_status(&self) {
+        let val = Self::BLOCK_STATUS
+            .fetch_update_atomic(self.start(), Ordering::SeqCst, Ordering::SeqCst, |_| {
+                Some(Self::NORMAL_REUSABLE)
+            })
+            .unwrap();
+        debug_assert!(
+            val == Self::OVERFLOW_REUSABLE,
+            "reusable block {:?} status invalid",
+            self
+        );
     }
 
     /// Initialize a clean block after acquired from page-resource.
@@ -304,13 +317,12 @@ impl Block {
                         max_hole_size = std::cmp::max(hole_size, max_hole_size);
                     }
                 }
-                self.set_hole_size(max_hole_size);
             }
 
             if marked_lines == 0 {
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_region_swept::<VM, _>(self, false);
-
+                self.set_block_status(0);
                 // Release the block if non of its lines are marked.
                 space.release_block(*self);
                 true
@@ -325,8 +337,10 @@ impl Block {
                     {
                         if max_hole_size as usize >= Block::LINES >> 1 {
                             space.overflow_reusable_blocks.push(*self);
+                            self.set_block_status(Self::OVERFLOW_REUSABLE);
                         } else {
                             space.reusable_blocks.push(*self);
+                            self.set_block_status(Self::NORMAL_REUSABLE);
                         }
                     }
                     #[cfg(not(feature = "immix_allocation_policy"))]
@@ -334,6 +348,7 @@ impl Block {
                 } else {
                     // Clear mark state.
                     self.set_state(BlockState::Unmarked);
+                    self.set_block_status(0);
                 }
                 // Update mark_histogram
                 mark_histogram[holes] += marked_lines;

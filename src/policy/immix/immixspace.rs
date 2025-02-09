@@ -263,7 +263,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
                 MetadataSpec::OnSide(Block::MARK_TABLE),
                 #[cfg(feature = "immix_allocation_policy")]
-                MetadataSpec::OnSide(Block::HOLE_SIZE_TABLE),
+                MetadataSpec::OnSide(Block::BLOCK_STATUS),
                 MetadataSpec::OnSide(ChunkMap::ALLOC_TABLE),
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
                 *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC,
@@ -277,7 +277,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
                 MetadataSpec::OnSide(Block::MARK_TABLE),
                 #[cfg(feature = "immix_allocation_policy")]
-                MetadataSpec::OnSide(Block::HOLE_SIZE_TABLE),
+                MetadataSpec::OnSide(Block::BLOCK_STATUS),
                 MetadataSpec::OnSide(ChunkMap::ALLOC_TABLE),
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
                 *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC,

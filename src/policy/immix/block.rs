@@ -180,7 +180,12 @@ impl Block {
     }
 
     #[cfg(feature = "immix_allocation_policy")]
-    pub fn convert_block_status(&self) {
+    pub fn get_block_status(&self) -> u8 {
+        Self::BLOCK_STATUS.load_atomic(self.start(), Ordering::SeqCst)
+    }
+
+    #[cfg(feature = "immix_allocation_policy")]
+    pub fn convert_overflow_block(&self) {
         let val = Self::BLOCK_STATUS
             .fetch_update_atomic(self.start(), Ordering::SeqCst, Ordering::SeqCst, |_| {
                 Some(Self::NORMAL_REUSABLE)

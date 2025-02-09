@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use super::allocator::{align_allocation_no_fill, fill_alignment_gap, AllocatorContext};
 use super::BumpPointer;
+use crate::policy::immix::block::Block;
 use crate::policy::immix::line::*;
 use crate::policy::immix::ImmixSpace;
 use crate::policy::space::Space;
@@ -421,7 +422,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         if let Some(block) = self.overflow_reusable_blocks.pop_front() {
             trace!("{:?}: acquire_recyclable_block -> {:?}", self.tls, block);
             #[cfg(feature = "immix_allocation_policy")]
-            block.convert_block_status();
+            block.convert_overflow_block();
             // Set the hole-searching cursor to the start of this block.
             self.line = Some(block.start_line());
             return true;
@@ -433,7 +434,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 // Set the hole-searching cursor to the start of this block.
                 self.line = Some(block.start_line());
                 #[cfg(feature = "immix_allocation_policy")]
-                block.set_block_status(crate::policy::immix::block::Block::NORMAL_REUSABLE);
+                {
+                    let status = block.get_block_status();
+                    debug_assert_eq!(status, Block::NORMAL_REUSABLE);
+                }
                 true
             }
             _ => false,
@@ -458,7 +462,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 );
                 // Set the hole-searching cursor to the start of this block.
                 self.overflow_line = Some(block.start_line());
-                block.set_block_status(Block::OVERFLOW_REUSABLE);
+                let status = block.get_block_status();
+                debug_assert_eq!(status, Block::OVERFLOW_REUSABLE);
                 true
             }
             _ => false,

@@ -593,7 +593,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     _ => unreachable!("{:?} {:?}", block, block.get_state()),
                 };
                 self.lines_consumed.fetch_add(lines_delta, Ordering::SeqCst);
-
+                debug_assert_eq!(block.get_block_status(), Block::OVERFLOW_REUSABLE);
                 block.init(copy);
                 return Some(block);
             } else {
@@ -889,7 +889,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 return None;
             }
             start_cursor = cursor;
-            start = search_start.next_nth(cursor - start_cursor);
+            start = search_start.next_nth(cursor - search_start_cursor);
             // Find limit
             while cursor < mark_data.len() {
                 let mark = mark_data.get(cursor);
@@ -898,13 +898,17 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 }
                 cursor += 1;
             }
-            end = search_start.next_nth(cursor - start_cursor);
+            end = search_start.next_nth(cursor - search_start_cursor);
             // check if the hole is large enough
             if cursor - start_cursor >= required_lines {
                 debug_assert!(RegionIterator::<Line>::new(start, end)
                     .all(|line| !line.is_marked(unavail_state) && !line.is_marked(current_state)));
                 return Some((start, end));
             }
+            debug_assert!(
+                end.get_index_within_block() == cursor
+                    || (cursor == Block::LINES && end.get_index_within_block() == 0)
+            );
             debug_assert!(cursor <= mark_data.len(), "cursor overflows");
         }
     }

@@ -171,6 +171,32 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
         ret
     }
 
+    /// Bump allocate small objects into recyclable lines (i.e. holes).
+    fn alloc_slow_hot(&mut self, size: usize, align: usize, offset: usize) -> Address {
+        trace!("{:?}: alloc_slow_hot", self.tls);
+        if self.acquire_recyclable_lines(size, align, offset) {
+            // If stress test is active, then we need to go to the slow path instead of directly
+            // calling `alloc()`. This is because the `acquire_recyclable_lines()` function
+            // manipulates the cursor and limit if a line can be recycled and if we directly call
+            // `alloc()` after recyling a line, then we will miss updating the `allocation_bytes`
+            // as the newly recycled line will service the allocation request. If we set the stress
+            // factor limit directly in `acquire_recyclable_lines()`, then we risk running into an
+            // loop of failing the fastpath (i.e. `alloc()`) and then trying to allocate from a
+            // recyclable line.  Hence, we bring the "if we're in stress test" check up a level and
+            // directly call `alloc_slow_inline()` which will properly account for the allocation
+            // request as well as allocate from the newly recycled line
+            let stress_test = self.context.options.is_stress_test_gc_enabled();
+            let precise_stress = *self.context.options.precise_stress;
+            if unlikely(stress_test && precise_stress) {
+                self.alloc_slow_inline(size, align, offset)
+            } else {
+                self.alloc(size, align, offset)
+            }
+        } else {
+            self.alloc_slow_inline(size, align, offset)
+        }
+    }
+
     fn get_tls(&self) -> VMThread {
         self.tls
     }
@@ -264,32 +290,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         }
     }
 
-    /// Bump allocate small objects into recyclable lines (i.e. holes).
-    fn alloc_slow_hot(&mut self, size: usize, align: usize, offset: usize) -> Address {
-        trace!("{:?}: alloc_slow_hot", self.tls);
-        if self.acquire_recyclable_lines(size, align, offset) {
-            // If stress test is active, then we need to go to the slow path instead of directly
-            // calling `alloc()`. This is because the `acquire_recyclable_lines()` function
-            // manipulates the cursor and limit if a line can be recycled and if we directly call
-            // `alloc()` after recyling a line, then we will miss updating the `allocation_bytes`
-            // as the newly recycled line will service the allocation request. If we set the stress
-            // factor limit directly in `acquire_recyclable_lines()`, then we risk running into an
-            // loop of failing the fastpath (i.e. `alloc()`) and then trying to allocate from a
-            // recyclable line.  Hence, we bring the "if we're in stress test" check up a level and
-            // directly call `alloc_slow_inline()` which will properly account for the allocation
-            // request as well as allocate from the newly recycled line
-            let stress_test = self.context.options.is_stress_test_gc_enabled();
-            let precise_stress = *self.context.options.precise_stress;
-            if unlikely(stress_test && precise_stress) {
-                self.alloc_slow_inline(size, align, offset)
-            } else {
-                self.alloc(size, align, offset)
-            }
-        } else {
-            self.alloc_slow_inline(size, align, offset)
-        }
-    }
-
     /// Search for recyclable lines.
     fn acquire_recyclable_lines(&mut self, size: usize, align: usize, offset: usize) -> bool {
         while self.line.is_some() || self.acquire_recyclable_block() {
@@ -347,15 +347,25 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             // even if it is a collector, it does not matter
             // the local list will be reset when releasing
             let block = crate::policy::immix::block::Block::from_unaligned_address(
-                self.large_bump_pointer.cursor,
+                self.large_bump_pointer.cursor - 8,
             );
-            debug_assert!(
-                !self.overflow_reusable_blocks.contains(&block),
-                "block: {:?} already exists in the local list",
-                block
-            );
-            // large holes have been exhausted, but it may have small holes that can be used
-            self.overflow_reusable_blocks.push_back(block);
+
+            if block.get_block_status() != Block::NONE_REUSABLE {
+                debug_assert!(
+                    !self.overflow_reusable_blocks.contains(&block),
+                    "block: {:?} already exists in the local list",
+                    block
+                );
+                debug_assert!(
+                    block.get_block_status() == Block::OVERFLOW_REUSABLE,
+                    "block: {:?}, cursor: {:?}, limit: {:?}",
+                    block,
+                    self.large_bump_pointer.cursor,
+                    self.large_bump_pointer.limit
+                );
+                // large holes have been exhausted, but it may have small holes that can be used
+                self.overflow_reusable_blocks.push_back(block);
+            }
         }
 
         while self.overflow_line.is_some() || self.acquire_overflow_recyclable_block(size) {
@@ -400,14 +410,16 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 // even if it is a collector, it does not matter
                 // the local list will be reset when releasing
                 let block = overflow_line.block();
-                debug_assert!(
-                    !self.overflow_reusable_blocks.contains(&block),
-                    "block: {:?} already exists in the local list",
-                    block
-                );
-                // large holes have been exhausted, but it may have small holes that can be used
-                self.overflow_reusable_blocks.push_back(block);
-
+                if block.get_block_status() != Block::NONE_REUSABLE {
+                    debug_assert!(
+                        !self.overflow_reusable_blocks.contains(&block),
+                        "block: {:?} already exists in the local list",
+                        block
+                    );
+                    debug_assert_eq!(block.get_block_status(), Block::OVERFLOW_REUSABLE);
+                    // large holes have been exhausted, but it may have small holes that can be used
+                    self.overflow_reusable_blocks.push_back(block);
+                }
                 // No more recyclable lines. Set the hole-searching cursor to None.
                 self.overflow_line = None;
             }
@@ -481,6 +493,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     block.start(),
                     block.end()
                 );
+                #[cfg(feature = "immix_allocation_policy")]
+                {
+                    debug_assert_eq!(block.get_block_status(), Block::NONE_REUSABLE);
+                }
                 // Bulk clear stale line mark state
                 Line::MARK_TABLE
                     .bzero_metadata(block.start(), crate::policy::immix::block::Block::BYTES);

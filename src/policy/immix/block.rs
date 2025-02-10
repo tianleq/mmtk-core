@@ -119,6 +119,8 @@ impl Block {
     pub const NORMAL_REUSABLE: u8 = 1;
     #[cfg(feature = "immix_allocation_policy")]
     pub const OVERFLOW_REUSABLE: u8 = 2;
+    #[cfg(feature = "immix_allocation_policy")]
+    pub const NONE_REUSABLE: u8 = 0;
 
     /// Get the chunk containing the block.
     pub fn chunk(&self) -> Chunk {
@@ -193,8 +195,9 @@ impl Block {
             .unwrap();
         debug_assert!(
             val == Self::OVERFLOW_REUSABLE,
-            "reusable block {:?} status invalid",
-            self
+            "reusable block {:?} status {:?} invalid",
+            self,
+            val
         );
     }
 
@@ -327,7 +330,7 @@ impl Block {
             if marked_lines == 0 {
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_region_swept::<VM, _>(self, false);
-                self.set_block_status(0);
+                self.set_block_status(Self::NONE_REUSABLE);
                 // Release the block if non of its lines are marked.
                 space.release_block(*self);
                 true
@@ -341,11 +344,11 @@ impl Block {
                     #[cfg(feature = "immix_allocation_policy")]
                     {
                         if max_hole_size as usize >= Block::LINES >> 1 {
-                            space.overflow_reusable_blocks.push(*self);
                             self.set_block_status(Self::OVERFLOW_REUSABLE);
+                            space.overflow_reusable_blocks.push(*self);
                         } else {
-                            space.reusable_blocks.push(*self);
                             self.set_block_status(Self::NORMAL_REUSABLE);
+                            space.reusable_blocks.push(*self);
                         }
                     }
                     #[cfg(not(feature = "immix_allocation_policy"))]
@@ -353,7 +356,7 @@ impl Block {
                 } else {
                     // Clear mark state.
                     self.set_state(BlockState::Unmarked);
-                    self.set_block_status(0);
+                    self.set_block_status(Self::NONE_REUSABLE);
                 }
                 // Update mark_histogram
                 mark_histogram[holes] += marked_lines;

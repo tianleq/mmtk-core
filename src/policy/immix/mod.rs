@@ -15,7 +15,8 @@ pub const MAX_IMMIX_OBJECT_SIZE: usize = Block::BYTES >> 1;
 pub const BLOCK_ONLY: bool = false;
 
 /// Do we allow Immix to do defragmentation?
-pub const DEFRAG: bool = !cfg!(feature = "immix_non_moving"); // defrag if we are allowed to move.
+// pub const DEFRAG: bool = !cfg!(feature = "immix_non_moving"); // defrag if we are allowed to move.
+pub const DEFRAG: bool = false;
 
 // STRESS COPYING: Set the feature 'immix_stress_copying' so that Immix will copy as many objects as possible.
 // Useful for debugging copying GC if you cannot use SemiSpace.

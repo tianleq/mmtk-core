@@ -57,6 +57,8 @@ pub struct ImmixSpace<VM: VMBinding> {
     space_args: ImmixSpaceArgs,
     #[cfg(feature = "immix_allocation_policy")]
     pub(crate) overflow_reusable_blocks: ReusableBlockPool,
+    #[cfg(feature = "immix_allocation_policy")]
+    pub(crate) holes: std::sync::Mutex<std::collections::VecDeque<super::hole::Hole>>,
 }
 
 /// Some arguments for Immix Space.
@@ -342,6 +344,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             space_args,
             #[cfg(feature = "immix_allocation_policy")]
             overflow_reusable_blocks: ReusableBlockPool::new(scheduler.num_workers()),
+            #[cfg(feature = "immix_allocation_policy")]
+            holes: std::sync::Mutex::new(std::collections::VecDeque::new()),
         }
     }
 
@@ -484,6 +488,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             #[cfg(feature = "immix_allocation_policy")]
             self.overflow_reusable_blocks.reset();
         }
+        #[cfg(feature = "immix_allocation_policy")]
+        self.holes.lock().unwrap().clear();
         // Sweep chunks and blocks
         let work_packets = self.generate_sweep_tasks();
         self.scheduler().work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
@@ -564,36 +570,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 };
                 self.lines_consumed.fetch_add(lines_delta, Ordering::SeqCst);
 
-                block.init(copy);
-                return Some(block);
-            } else {
-                return None;
-            }
-        }
-    }
-
-    #[cfg(feature = "immix_allocation_policy")]
-    pub fn get_overflow_reusable_block(&self, copy: bool) -> Option<Block> {
-        if super::BLOCK_ONLY {
-            return None;
-        }
-        loop {
-            if let Some(block) = self.overflow_reusable_blocks.pop() {
-                // Skip blocks that should be evacuated.
-                if copy && block.is_defrag_source() {
-                    continue;
-                }
-
-                // Get available lines. Do this before block.init which will reset block state.
-                let lines_delta = match block.get_state() {
-                    BlockState::Reusable { unavailable_lines } => {
-                        Block::LINES - unavailable_lines as usize
-                    }
-                    BlockState::Unmarked => Block::LINES,
-                    _ => unreachable!("{:?} {:?}", block, block.get_state()),
-                };
-                self.lines_consumed.fetch_add(lines_delta, Ordering::SeqCst);
-                debug_assert_eq!(block.get_block_status(), Block::OVERFLOW_REUSABLE);
                 block.init(copy);
                 return Some(block);
             } else {
@@ -846,71 +822,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         debug_assert!(RegionIterator::<Line>::new(start, end)
             .all(|line| !line.is_marked(unavail_state) && !line.is_marked(current_state)));
         Some((start, end))
-    }
-
-    #[cfg(feature = "immix_allocation_policy")]
-    /// Hole searching.
-    ///
-    /// Linearly scan lines in a block to search for the next
-    /// hole, starting from the given line. If we find available lines,
-    /// return a tuple of the start line and the end line (non-inclusive).
-    ///
-    /// Returns None if the search could not find any more holes.
-    #[allow(clippy::assertions_on_constants)]
-    pub fn get_next_available_overflow_lines(
-        &self,
-        search_start: Line,
-        size: usize,
-    ) -> Option<(Line, Line)> {
-        use crate::util::conversions;
-
-        let required_lines = conversions::raw_align_up(size, Line::BYTES) >> Line::LOG_BYTES;
-
-        debug_assert!(!super::BLOCK_ONLY);
-        let unavail_state = self.line_unavail_state.load(Ordering::Acquire);
-        let current_state = self.line_mark_state.load(Ordering::Acquire);
-        let block = search_start.block();
-        let mark_data = block.line_mark_table();
-        let search_start_cursor = search_start.get_index_within_block();
-        let mut start_cursor = search_start_cursor;
-        let mut cursor = start_cursor;
-        let mut start;
-        let mut end;
-        loop {
-            // Find start
-            while cursor < mark_data.len() {
-                let mark = mark_data.get(cursor);
-                if mark != unavail_state && mark != current_state {
-                    break;
-                }
-                cursor += 1;
-            }
-            if cursor == mark_data.len() {
-                return None;
-            }
-            start_cursor = cursor;
-            start = search_start.next_nth(cursor - search_start_cursor);
-            // Find limit
-            while cursor < mark_data.len() {
-                let mark = mark_data.get(cursor);
-                if mark == unavail_state || mark == current_state {
-                    break;
-                }
-                cursor += 1;
-            }
-            end = search_start.next_nth(cursor - search_start_cursor);
-            // check if the hole is large enough
-            if cursor - start_cursor >= required_lines {
-                debug_assert!(RegionIterator::<Line>::new(start, end)
-                    .all(|line| !line.is_marked(unavail_state) && !line.is_marked(current_state)));
-                return Some((start, end));
-            }
-            debug_assert!(
-                end.get_index_within_block() == cursor
-                    || (cursor == Block::LINES && end.get_index_within_block() == 0)
-            );
-            debug_assert!(cursor <= mark_data.len(), "cursor overflows");
-        }
     }
 
     pub fn is_last_gc_exhaustive(did_defrag_for_last_gc: bool) -> bool {

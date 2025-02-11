@@ -1,5 +1,7 @@
 pub mod block;
 pub mod defrag;
+#[cfg(feature = "immix_allocation_policy")]
+pub mod hole;
 pub mod immixspace;
 pub mod line;
 

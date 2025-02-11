@@ -116,11 +116,13 @@ impl Block {
     pub const BLOCK_STATUS: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_HOLE_STATUS;
     #[cfg(feature = "immix_allocation_policy")]
-    pub const NORMAL_REUSABLE: u8 = 1;
+    pub const NONE_REUSABLE: u8 = 2;
     #[cfg(feature = "immix_allocation_policy")]
-    pub const OVERFLOW_REUSABLE: u8 = 2;
+    pub const AVAILABLE_REUSABLE: u8 = 1;
     #[cfg(feature = "immix_allocation_policy")]
-    pub const NONE_REUSABLE: u8 = 0;
+    pub const UNAVALIABLE_REUSABLE: u8 = 0;
+    #[cfg(feature = "immix_allocation_policy")]
+    pub const HUGE_HOLE_SIZE: u8 = 64;
 
     /// Get the chunk containing the block.
     pub fn chunk(&self) -> Chunk {
@@ -177,6 +179,19 @@ impl Block {
     }
 
     #[cfg(feature = "immix_allocation_policy")]
+    pub fn try_update_block_status(&self, status: u8) -> bool {
+        Self::BLOCK_STATUS
+            .compare_exchange_atomic::<u8>(
+                self.start(),
+                Self::AVAILABLE_REUSABLE,
+                status,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
+    }
+
+    #[cfg(feature = "immix_allocation_policy")]
     pub fn set_block_status(&self, status: u8) {
         Self::BLOCK_STATUS.store_atomic::<u8>(self.start(), status, Ordering::SeqCst);
     }
@@ -184,21 +199,6 @@ impl Block {
     #[cfg(feature = "immix_allocation_policy")]
     pub fn get_block_status(&self) -> u8 {
         Self::BLOCK_STATUS.load_atomic(self.start(), Ordering::SeqCst)
-    }
-
-    #[cfg(feature = "immix_allocation_policy")]
-    pub fn convert_overflow_block(&self) {
-        let val = Self::BLOCK_STATUS
-            .fetch_update_atomic(self.start(), Ordering::SeqCst, Ordering::SeqCst, |_| {
-                Some(Self::NORMAL_REUSABLE)
-            })
-            .unwrap();
-        debug_assert!(
-            val == Self::OVERFLOW_REUSABLE,
-            "reusable block {:?} status {:?} invalid",
-            self,
-            val
-        );
     }
 
     /// Initialize a clean block after acquired from page-resource.
@@ -273,6 +273,8 @@ impl Block {
             let mut hole_size = 0;
             #[cfg(feature = "immix_allocation_policy")]
             let mut max_hole_size = 0;
+            #[cfg(feature = "immix_allocation_policy")]
+            let mut hole = super::hole::Hole::default();
             // Calculate number of marked lines and holes.
             let mut marked_lines = 0;
             let mut holes = 0;
@@ -281,6 +283,17 @@ impl Block {
 
             for line in self.lines() {
                 if line.is_marked(line_mark_state) {
+                    #[cfg(feature = "immix_allocation_policy")]
+                    if hole_size != 0 {
+                        assert!(
+                            hole.size == hole_size as usize * Line::BYTES,
+                            "invalid hole size: {}",
+                            hole.size
+                        );
+                        if hole_size >= Self::HUGE_HOLE_SIZE {
+                            space.holes.lock().unwrap().push_back(hole);
+                        }
+                    }
                     marked_lines += 1;
                     prev_line_is_marked = true;
                 } else {
@@ -290,16 +303,21 @@ impl Block {
                         {
                             max_hole_size = std::cmp::max(hole_size, max_hole_size);
                             hole_size = 0;
+                            hole.size = 0;
+                            hole.start = line.start();
                         }
                     }
+
                     // We need to clear the line mark state at least twice in every 128 GC
                     // otherwise, the line mark state of the last GC will stick around
                     if line_mark_state > Line::MAX_MARK_STATE - 2 {
                         line.mark(0);
                     }
+
                     #[cfg(feature = "immix_allocation_policy")]
                     {
                         hole_size += 1;
+                        hole.size += Line::BYTES;
                     }
 
                     #[cfg(feature = "immix_zero_on_release")]
@@ -321,8 +339,11 @@ impl Block {
                 // as there is no more marked lines after it and the comparision
                 // is not done in the previous loop
                 if prev_line_is_marked == false {
-                    if hole_size != 0 {
-                        max_hole_size = std::cmp::max(hole_size, max_hole_size);
+                    // if hole_size != 0 {
+                    //     max_hole_size = std::cmp::max(hole_size, max_hole_size);
+                    // }
+                    if hole_size >= Self::HUGE_HOLE_SIZE {
+                        space.holes.lock().unwrap().push_back(hole);
                     }
                 }
             }
@@ -343,13 +364,18 @@ impl Block {
                     });
                     #[cfg(feature = "immix_allocation_policy")]
                     {
-                        if max_hole_size as usize >= Block::LINES >> 1 {
-                            self.set_block_status(Self::OVERFLOW_REUSABLE);
-                            space.overflow_reusable_blocks.push(*self);
-                        } else {
-                            self.set_block_status(Self::NORMAL_REUSABLE);
-                            space.reusable_blocks.push(*self);
-                        }
+                        // if max_hole_size as usize >= Block::LINES >> 1 {
+                        //     self.set_block_status(Self::OVERFLOW_REUSABLE);
+                        //     space.overflow_reusable_blocks.push(*self);
+                        // } else {
+                        //     self.set_block_status(Self::NORMAL_REUSABLE);
+                        //     space.reusable_blocks.push(*self);
+                        // }
+                        // All reusable blocks will be normal initially
+                        // it will become overflow reusable once a large
+                        // hole is grabbed to do overflow allocation
+                        self.set_block_status(Self::AVAILABLE_REUSABLE);
+                        space.reusable_blocks.push(*self);
                     }
                     #[cfg(not(feature = "immix_allocation_policy"))]
                     space.reusable_blocks.push(*self)

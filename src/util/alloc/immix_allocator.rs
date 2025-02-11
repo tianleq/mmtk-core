@@ -246,19 +246,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         } else {
             fill_alignment_gap::<VM>(self.large_bump_pointer.cursor, start);
             self.large_bump_pointer.cursor = end;
-            #[cfg(feature = "immix_allocation_policy")]
-            {
-                use crate::util::linear_scan::RegionIterator;
-                use std::sync::atomic::Ordering;
-                // mark lines so that those lines will become unavailable (the block may be used by normal allocation later)
-                let state = self.space.line_mark_state.load(Ordering::Relaxed);
-                for line in RegionIterator::new(
-                    Line::from_unaligned_address(start),
-                    Line::from_unaligned_address(end).next(),
-                ) {
-                    line.mark(state);
-                }
-            }
             start
         }
     }
@@ -290,12 +277,62 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         }
     }
 
+    #[cfg(feature = "immix_allocation_policy")]
+    /// Search for recyclable lines.
+    fn acquire_overflow_recyclable_lines(
+        &mut self,
+        size: usize,
+        align: usize,
+        offset: usize,
+    ) -> bool {
+        let mut holes = self.space.holes.lock().unwrap();
+        while !holes.is_empty() {
+            let hole = holes.pop_front().unwrap();
+            let block = Block::from_unaligned_address(hole.start);
+            if !block.try_update_block_status(Block::UNAVALIABLE_REUSABLE) {
+                continue;
+            }
+
+            self.large_bump_pointer.cursor = hole.start;
+            self.large_bump_pointer.limit = hole.start + hole.size;
+            crate::util::memory::zero(
+                self.large_bump_pointer.cursor,
+                self.large_bump_pointer.limit - self.bump_pointer.cursor,
+            );
+            debug_assert!(
+                align_allocation_no_fill::<VM>(self.large_bump_pointer.cursor, align, offset)
+                    + size
+                    <= self.large_bump_pointer.limit
+            );
+            return true;
+        }
+        false
+    }
+
     /// Search for recyclable lines.
     fn acquire_recyclable_lines(&mut self, size: usize, align: usize, offset: usize) -> bool {
         while self.line.is_some() || self.acquire_recyclable_block() {
             let line = self.line.unwrap();
             if let Some((start_line, end_line)) = self.immix_space().get_next_available_lines(line)
             {
+                #[cfg(feature = "immix_allocation_policy")]
+                {
+                    let hole_size = (end_line.start() - start_line.start()) >> Line::LOG_BYTES;
+                    let block = line.block();
+                    if hole_size >= Block::HUGE_HOLE_SIZE as usize {
+                        // check if the large hole is still available or not
+                        if !block.try_update_block_status(Block::UNAVALIABLE_REUSABLE) {
+                            self.line = if end_line == block.end_line() {
+                                // Hole searching reached the end of a reusable block. Set the hole-searching cursor to None.
+                                None
+                            } else {
+                                // Update the hole-searching cursor to None.
+                                Some(end_line)
+                            };
+                            continue;
+                        }
+                    }
+                }
                 // Find recyclable lines. Update the bump allocation cursor and limit.
                 self.bump_pointer.cursor = start_line.start();
                 self.bump_pointer.limit = end_line.start();
@@ -332,109 +369,12 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         false
     }
 
-    #[cfg(feature = "immix_allocation_policy")]
-    /// Search for recyclable lines.
-    fn acquire_overflow_recyclable_lines(
-        &mut self,
-        size: usize,
-        align: usize,
-        offset: usize,
-    ) -> bool {
-        if self.overflow_line.is_none()
-            && self.large_bump_pointer.cursor != Address::ZERO
-            && self.large_bump_pointer.limit != Address::ZERO
-        {
-            // even if it is a collector, it does not matter
-            // the local list will be reset when releasing
-            let block = crate::policy::immix::block::Block::from_unaligned_address(
-                self.large_bump_pointer.cursor - 8,
-            );
-
-            if block.get_block_status() != Block::NONE_REUSABLE {
-                debug_assert!(
-                    !self.overflow_reusable_blocks.contains(&block),
-                    "block: {:?} already exists in the local list",
-                    block
-                );
-                debug_assert!(
-                    block.get_block_status() == Block::OVERFLOW_REUSABLE,
-                    "block: {:?}, cursor: {:?}, limit: {:?}",
-                    block,
-                    self.large_bump_pointer.cursor,
-                    self.large_bump_pointer.limit
-                );
-                // large holes have been exhausted, but it may have small holes that can be used
-                self.overflow_reusable_blocks.push_back(block);
-            }
-        }
-
-        while self.overflow_line.is_some() || self.acquire_overflow_recyclable_block(size) {
-            let overflow_line = self.overflow_line.unwrap();
-            if let Some((start_line, end_line)) = self
-                .immix_space()
-                .get_next_available_overflow_lines(overflow_line, size)
-            {
-                // Find recyclable lines. Update the bump allocation cursor and limit.
-                self.large_bump_pointer.cursor = start_line.start();
-                self.large_bump_pointer.limit = end_line.start();
-                trace!(
-                    "{:?}: acquire_overflow_recyclable_lines -> {:?} [{:?}, {:?}) {:?}",
-                    self.tls,
-                    self.line,
-                    start_line,
-                    end_line,
-                    self.tls
-                );
-                crate::util::memory::zero(
-                    self.large_bump_pointer.cursor,
-                    self.large_bump_pointer.limit - self.large_bump_pointer.cursor,
-                );
-                debug_assert!(
-                    align_allocation_no_fill::<VM>(self.large_bump_pointer.cursor, align, offset)
-                        + size
-                        <= self.large_bump_pointer.limit
-                );
-                let block = overflow_line.block();
-                self.overflow_line = if end_line == block.end_line() {
-                    // cannot add the block to local list here,
-                    // the block is still being used by overflow alloc
-
-                    // Hole searching reached the end of a reusable block. Set the hole-searching cursor to None.
-                    None
-                } else {
-                    // Update the hole-searching cursor to None.
-                    Some(end_line)
-                };
-                return true;
-            } else {
-                // even if it is a collector, it does not matter
-                // the local list will be reset when releasing
-                let block = overflow_line.block();
-                if block.get_block_status() != Block::NONE_REUSABLE {
-                    debug_assert!(
-                        !self.overflow_reusable_blocks.contains(&block),
-                        "block: {:?} already exists in the local list",
-                        block
-                    );
-                    debug_assert_eq!(block.get_block_status(), Block::OVERFLOW_REUSABLE);
-                    // large holes have been exhausted, but it may have small holes that can be used
-                    self.overflow_reusable_blocks.push_back(block);
-                }
-                // No more recyclable lines. Set the hole-searching cursor to None.
-                self.overflow_line = None;
-            }
-        }
-        false
-    }
-
     /// Get a recyclable block from ImmixSpace.
     fn acquire_recyclable_block(&mut self) -> bool {
         // Looking for free lines in local reusable block queue first
         // Those blocks are originally used by overflow allocation
         if let Some(block) = self.overflow_reusable_blocks.pop_front() {
             trace!("{:?}: acquire_recyclable_block -> {:?}", self.tls, block);
-            #[cfg(feature = "immix_allocation_policy")]
-            block.convert_overflow_block();
             // Set the hole-searching cursor to the start of this block.
             self.line = Some(block.start_line());
             return true;
@@ -445,37 +385,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 trace!("{:?}: acquire_recyclable_block -> {:?}", self.tls, block);
                 // Set the hole-searching cursor to the start of this block.
                 self.line = Some(block.start_line());
-                #[cfg(feature = "immix_allocation_policy")]
-                {
-                    let status = block.get_block_status();
-                    debug_assert_eq!(status, Block::NORMAL_REUSABLE);
-                }
-                true
-            }
-            _ => false,
-        }
-    }
-
-    #[cfg(feature = "immix_allocation_policy")]
-    /// Get a recyclable block from ImmixSpace.
-    fn acquire_overflow_recyclable_block(&mut self, _size: usize) -> bool {
-        use crate::policy::immix::block::Block;
-
-        debug_assert!(
-            self.request_for_large,
-            "should not reach here during normal allocation"
-        );
-        match self.immix_space().get_overflow_reusable_block(self.copy) {
-            Some(block) => {
-                trace!(
-                    "{:?}: acquire_overflow_recyclable_block -> {:?}",
-                    self.tls,
-                    block
-                );
-                // Set the hole-searching cursor to the start of this block.
-                self.overflow_line = Some(block.start_line());
-                let status = block.get_block_status();
-                debug_assert_eq!(status, Block::OVERFLOW_REUSABLE);
                 true
             }
             _ => false,

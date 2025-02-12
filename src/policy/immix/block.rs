@@ -275,6 +275,8 @@ impl Block {
             let mut max_hole_size = 0;
             #[cfg(feature = "immix_allocation_policy")]
             let mut hole = super::hole::Hole::default();
+            #[cfg(feature = "immix_allocation_policy")]
+            let mut found_new_hole = false;
             // Calculate number of marked lines and holes.
             let mut marked_lines = 0;
             let mut holes = 0;
@@ -284,7 +286,7 @@ impl Block {
             for line in self.lines() {
                 if line.is_marked(line_mark_state) {
                     #[cfg(feature = "immix_allocation_policy")]
-                    if hole_size != 0 {
+                    if found_new_hole {
                         assert!(
                             hole.size == hole_size as usize * Line::BYTES,
                             "invalid hole size: {}",
@@ -295,6 +297,7 @@ impl Block {
                         if hole_size >= Self::HUGE_HOLE_SIZE {
                             space.holes.lock().unwrap().push_back(hole);
                         }
+                        found_new_hole = false;
                     }
                     marked_lines += 1;
                     prev_line_is_marked = true;
@@ -307,6 +310,7 @@ impl Block {
                             hole_size = 0;
                             hole.size = 0;
                             hole.start = line.start();
+                            found_new_hole = true;
                         }
                     }
 
@@ -340,7 +344,8 @@ impl Block {
                 // its size needs to be compared against the current max here
                 // as there is no more marked lines after it and the comparision
                 // is not done in the previous loop
-                if prev_line_is_marked == false {
+                if found_new_hole {
+                    assert!(prev_line_is_marked == false);
                     // if hole_size != 0 {
                     //     max_hole_size = std::cmp::max(hole_size, max_hole_size);
                     // }

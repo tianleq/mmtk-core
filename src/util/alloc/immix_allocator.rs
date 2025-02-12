@@ -301,17 +301,17 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 Some(holes) => {
                     if !holes.is_empty() {
                         let mut found = false;
-                        let mut candidate = Hole::new(Address::ZERO, 0);
+                        let mut candidate = Hole::new(Address::ZERO, usize::MAX);
                         for hole in holes.iter() {
                             if hole.size >= size
                             // && (!self.copy || !hole.start_line().block().is_defrag_source())
                             // skip defrag source when allocating in GC
                             {
-                                candidate = std::cmp::max(candidate, *hole);
+                                // candidate = std::cmp::min(candidate, *hole);
 
-                                // candidate = *hole;
+                                candidate = *hole;
                                 found = true;
-                                // break;
+                                break;
                             }
                         }
                         if found {

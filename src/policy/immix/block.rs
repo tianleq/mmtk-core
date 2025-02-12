@@ -362,12 +362,12 @@ impl Block {
             let line_mark_state = line_mark_state.unwrap();
 
             let mut hole_size: u32 = 0;
-
+            let mut new_hole_found = false;
             let mut hole = super::hole::Hole::default();
             let mut local_hole_map: HashMap<usize, Vec<Hole>> = HashMap::new();
             for line in self.lines() {
                 if line.is_marked(line_mark_state) {
-                    if hole_size != 0 {
+                    if new_hole_found {
                         space.post_hole_size_histogram.lock().unwrap()[hole_size as usize] += 1;
                         assert!(
                             hole.size == hole_size as usize * Line::BYTES,
@@ -386,6 +386,7 @@ impl Block {
                             let holes = vec![hole];
                             local_hole_map.insert(key, holes);
                         }
+                        new_hole_found = false;
                     }
 
                     marked_lines += 1;
@@ -393,7 +394,7 @@ impl Block {
                 } else {
                     if prev_line_is_marked {
                         holes += 1;
-
+                        new_hole_found = true;
                         hole_size = 0;
                         hole.size = 0;
                         hole.start = line.start();
@@ -416,6 +417,21 @@ impl Block {
                     }
 
                     prev_line_is_marked = false;
+                }
+            }
+
+            if new_hole_found && marked_lines != 0 {
+                let key = if hole_size.is_power_of_two() {
+                    hole_size as usize
+                } else {
+                    (hole_size.next_power_of_two() >> 1) as usize
+                };
+                assert!(key <= 64);
+                if local_hole_map.contains_key(&key) {
+                    local_hole_map.get_mut(&key).unwrap().push(hole);
+                } else {
+                    let holes = vec![hole];
+                    local_hole_map.insert(key, holes);
                 }
             }
 

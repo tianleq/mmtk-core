@@ -344,7 +344,7 @@ impl Block {
                 // its size needs to be compared against the current max here
                 // as there is no more marked lines after it and the comparision
                 // is not done in the previous loop
-                if found_new_hole {
+                if found_new_hole && marked_lines != 0 {
                     assert!(prev_line_is_marked == false);
                     // if hole_size != 0 {
                     //     max_hole_size = std::cmp::max(hole_size, max_hole_size);

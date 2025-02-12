@@ -116,11 +116,11 @@ impl Block {
     pub const BLOCK_STATUS: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_HOLE_STATUS;
     #[cfg(feature = "immix_allocation_policy")]
-    pub const NONE_REUSABLE: u8 = 2;
+    pub const NONE_REUSABLE: u8 = 0;
     #[cfg(feature = "immix_allocation_policy")]
     pub const AVAILABLE_REUSABLE: u8 = 1;
     #[cfg(feature = "immix_allocation_policy")]
-    pub const UNAVALIABLE_REUSABLE: u8 = 0;
+    pub const UNAVALIABLE_REUSABLE: u8 = 2;
     #[cfg(feature = "immix_allocation_policy")]
     pub const HUGE_HOLE_SIZE: u8 = 64;
 
@@ -290,6 +290,8 @@ impl Block {
                             "invalid hole size: {}",
                             hole.size
                         );
+                        // there will be only one such large hole in one block
+                        // so acquiring the lock here is acceptable
                         if hole_size >= Self::HUGE_HOLE_SIZE {
                             space.holes.lock().unwrap().push_back(hole);
                         }

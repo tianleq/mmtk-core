@@ -252,6 +252,33 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
     #[cfg(feature = "immix_allocation_policy")]
     /// Bump allocate small objects into recyclable lines (i.e. holes).
+    fn normal_alloc_slow_hot(&mut self, size: usize, align: usize, offset: usize) -> Address {
+        trace!("{:?}: alloc_slow_hot", self.tls);
+        if self.acquire_recyclable_lines(size, align, offset) {
+            // If stress test is active, then we need to go to the slow path instead of directly
+            // calling `alloc()`. This is because the `acquire_recyclable_lines()` function
+            // manipulates the cursor and limit if a line can be recycled and if we directly call
+            // `alloc()` after recyling a line, then we will miss updating the `allocation_bytes`
+            // as the newly recycled line will service the allocation request. If we set the stress
+            // factor limit directly in `acquire_recyclable_lines()`, then we risk running into an
+            // loop of failing the fastpath (i.e. `alloc()`) and then trying to allocate from a
+            // recyclable line.  Hence, we bring the "if we're in stress test" check up a level and
+            // directly call `alloc_slow_inline()` which will properly account for the allocation
+            // request as well as allocate from the newly recycled line
+            let stress_test = self.context.options.is_stress_test_gc_enabled();
+            let precise_stress = *self.context.options.precise_stress;
+            if unlikely(stress_test && precise_stress) {
+                self.alloc_slow_inline(size, align, offset)
+            } else {
+                self.alloc(size, align, offset)
+            }
+        } else {
+            self.alloc_slow_inline(size, align, offset)
+        }
+    }
+
+    #[cfg(feature = "immix_allocation_policy")]
+    /// Bump allocate small objects into recyclable lines (i.e. holes).
     fn overflow_alloc_slow_hot(&mut self, size: usize, align: usize, offset: usize) -> Address {
         trace!("{:?}: overflow_alloc_slow_hot", self.tls);
         if self.acquire_overflow_recyclable_lines(size, align, offset) {
@@ -292,12 +319,25 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             if !block.try_update_block_status(Block::UNAVALIABLE_REUSABLE) {
                 continue;
             }
+            #[cfg(debug_assertions)]
+            {
+                use crate::util::linear_scan::RegionIterator;
+                use std::sync::atomic::Ordering;
+
+                let unavailable_state = self.space.line_unavail_state.load(Ordering::SeqCst);
+                let line_mark_state = self.space.line_mark_state.load(Ordering::SeqCst);
+                let start = Line::from_aligned_address(hole.start);
+                let end = Line::from_aligned_address(hole.start + hole.size);
+                debug_assert!(RegionIterator::<Line>::new(start, end)
+                    .all(|line| !line.is_marked(unavailable_state)
+                        && !line.is_marked(line_mark_state)));
+            }
 
             self.large_bump_pointer.cursor = hole.start;
             self.large_bump_pointer.limit = hole.start + hole.size;
             crate::util::memory::zero(
                 self.large_bump_pointer.cursor,
-                self.large_bump_pointer.limit - self.bump_pointer.cursor,
+                self.large_bump_pointer.limit - self.large_bump_pointer.cursor,
             );
             debug_assert!(
                 align_allocation_no_fill::<VM>(self.large_bump_pointer.cursor, align, offset)
@@ -350,7 +390,13 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 );
                 debug_assert!(
                     align_allocation_no_fill::<VM>(self.bump_pointer.cursor, align, offset) + size
-                        <= self.bump_pointer.limit
+                        <= self.bump_pointer.limit,
+                    "cursor: {}, size: {}, limit: {}, start: {:?}, end: {:?}",
+                    self.bump_pointer.cursor,
+                    size,
+                    self.bump_pointer.limit,
+                    start_line,
+                    end_line
                 );
                 let block = line.block();
                 self.line = if end_line == block.end_line() {

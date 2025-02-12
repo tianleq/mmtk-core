@@ -42,7 +42,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     /// Current line mark state
     pub line_mark_state: AtomicU8,
     /// Line mark state in previous GC
-    line_unavail_state: AtomicU8,
+    pub(crate) line_unavail_state: AtomicU8,
     /// A list of all reusable blocks
     pub reusable_blocks: ReusableBlockPool,
     /// Defrag utilities

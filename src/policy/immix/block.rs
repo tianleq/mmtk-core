@@ -419,6 +419,20 @@ impl Block {
                     prev_line_is_marked = false;
                 }
             }
+            if hole_size != 0 && prev_line_is_marked == false {
+                space.post_hole_size_histogram.lock().unwrap()[hole_size as usize] += 1;
+                let key = if hole_size.is_power_of_two() {
+                    hole_size as usize
+                } else {
+                    (hole_size.next_power_of_two() >> 1) as usize
+                };
+                if local_hole_map.contains_key(&key) {
+                    local_hole_map.get_mut(&key).unwrap().push(hole);
+                } else {
+                    let holes = vec![hole];
+                    local_hole_map.insert(key, holes);
+                }
+            }
 
             if new_hole_found && marked_lines != 0 {
                 let key = if hole_size.is_power_of_two() {

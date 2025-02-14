@@ -59,6 +59,9 @@ pub struct ImmixSpace<VM: VMBinding> {
     pub(crate) overflow_reusable_blocks: ReusableBlockPool,
     #[cfg(feature = "immix_allocation_policy")]
     pub(crate) holes: std::sync::Mutex<std::collections::VecDeque<super::hole::Hole>>,
+    #[cfg(feature = "immix_allocation_policy")]
+    /// Hole-searching cursor
+    pub(crate) line_wasted: AtomicUsize,
 }
 
 /// Some arguments for Immix Space.
@@ -346,6 +349,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             overflow_reusable_blocks: ReusableBlockPool::new(scheduler.num_workers()),
             #[cfg(feature = "immix_allocation_policy")]
             holes: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            #[cfg(feature = "immix_allocation_policy")]
+            line_wasted: AtomicUsize::new(0),
         }
     }
 
@@ -406,6 +411,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             // Prepare defrag info
             if super::DEFRAG {
                 self.defrag.prepare(self, plan_stats);
+            }
+            #[cfg(feature = "immix_allocation_policy")]
+            {
+                if self.reusable_blocks.len() > 0 {
+                    println!("{} reusable blocks left", self.reusable_blocks.len());
+                }
+                println!("waste {} lines", self.line_wasted.load(Ordering::Acquire));
             }
 
             // Prepare each block for GC
@@ -489,7 +501,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.overflow_reusable_blocks.reset();
         }
         #[cfg(feature = "immix_allocation_policy")]
-        self.holes.lock().unwrap().clear();
+        {
+            self.holes.lock().unwrap().clear();
+            self.line_wasted.store(0, Ordering::SeqCst);
+        }
+
         // Sweep chunks and blocks
         let work_packets = self.generate_sweep_tasks();
         self.scheduler().work_buckets[WorkBucketStage::Release].bulk_add(work_packets);

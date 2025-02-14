@@ -280,6 +280,11 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     #[cfg(feature = "immix_allocation_policy")]
     /// Bump allocate small objects into recyclable lines (i.e. holes).
     fn overflow_alloc_slow_hot(&mut self, size: usize, align: usize, offset: usize) -> Address {
+        let line_wasted =
+            (self.large_bump_pointer.limit - self.large_bump_pointer.cursor) >> Line::LOG_BYTES;
+        self.space
+            .line_wasted
+            .fetch_add(line_wasted, std::sync::atomic::Ordering::SeqCst);
         trace!("{:?}: overflow_alloc_slow_hot", self.tls);
         if self.acquire_overflow_recyclable_lines(size, align, offset) {
             // If stress test is active, then we need to go to the slow path instead of directly

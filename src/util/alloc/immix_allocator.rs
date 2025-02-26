@@ -115,7 +115,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         self.large_bump_pointer.reset(Address::ZERO, Address::ZERO);
         self.request_for_large = false;
         self.line = None;
-        self.sparse_line = None;
+        #[cfg(feature = "thread_local_gc")]
+        {
+            self.sparse_line = None;
+        }
     }
 
     #[cfg(feature = "thread_local_gc")]

@@ -71,6 +71,9 @@ pub trait Collection<VM: VMBinding> {
         object_graph_traversal_func: impl ObjectGraphTraversal<VM::VMSlot>,
     );
 
+    #[cfg(feature = "thread_local_gc")]
+    fn request_thread_local_collection(tls: VMMutatorThread);
+
     // #[cfg(feature = "thread_local_gc")]
     // /// Resume the mutator triggering the local gc. When a local GC is finished, MMTk calls this method.
     // ///

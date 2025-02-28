@@ -89,11 +89,12 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         //     required
         // }
 
-        use crate::vm::ActivePlan;
+        use crate::{scheduler::thread_local_gc_work::THREAD_LOCAL_GC_DISABLED, vm::ActivePlan};
 
         let mutator = VM::VMActivePlan::mutator(_tls);
 
         mutator.local_allocation_size >= self.options().get_thread_local_heap_size()
+            && mutator.thread_local_gc_status != THREAD_LOCAL_GC_DISABLED
     }
 
     fn last_collection_was_exhaustive(&self) -> bool {

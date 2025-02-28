@@ -9,6 +9,7 @@ use crate::plan::mutator_context::Mutator;
 use crate::plan::mutator_context::MutatorConfig;
 use crate::plan::mutator_context::ReservedAllocators;
 use crate::plan::AllocationSemantics;
+use crate::scheduler::thread_local_gc_work::THREAD_LOCAL_GC_DISABLED;
 use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
 use crate::util::alloc::ImmixAllocator;
 use crate::util::opaque_pointer::{VMMutatorThread, VMWorkerThread};
@@ -65,7 +66,12 @@ pub fn immix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMW
         los_allocator.release();
         // Force a local gc in the next polling
         mutator.local_allocation_size = u32::MAX as usize;
-        mutator.thread_local_gc_status = 0;
+        mutator.thread_local_gc_status =
+            if mutator.thread_local_gc_status != THREAD_LOCAL_GC_DISABLED {
+                0
+            } else {
+                THREAD_LOCAL_GC_DISABLED
+            };
     }
 }
 

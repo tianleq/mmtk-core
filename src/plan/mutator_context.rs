@@ -143,6 +143,12 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         offset: usize,
         semantics: AllocationSemantics,
     ) -> Address {
+        #[cfg(feature = "thread_local_gc")]
+        {
+            use crate::vm::Collection;
+            
+            VM::VMCollection::request_thread_local_collection(self.mutator_tls);
+        }
         unsafe {
             self.allocators
                 .get_allocator_mut(self.config.allocator_mapping[semantics])

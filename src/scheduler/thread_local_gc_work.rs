@@ -12,6 +12,7 @@ use std::marker::PhantomData;
 
 pub const THREAD_LOCAL_GC_ACTIVE: u32 = 1;
 pub const THREAD_LOCAL_GC_INACTIVE: u32 = 0;
+pub const THREAD_LOCAL_GC_DISABLED: u32 = 2;
 
 pub struct ExecuteThreadlocalCollection<VM: VMBinding> {
     pub mmtk: &'static MMTK<VM>,
@@ -22,6 +23,7 @@ pub struct ExecuteThreadlocalCollection<VM: VMBinding> {
 impl<VM: VMBinding> ExecuteThreadlocalCollection<VM> {
     pub fn execute(&mut self) {
         let mutator = VM::VMActivePlan::mutator(self.mutator_tls);
+        assert!(mutator.thread_local_gc_status != THREAD_LOCAL_GC_DISABLED);
         mutator.thread_local_gc_status = THREAD_LOCAL_GC_ACTIVE;
         info!("Start of Thread local GC {:?}", mutator.mutator_id,);
 

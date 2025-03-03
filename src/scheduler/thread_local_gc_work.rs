@@ -135,10 +135,14 @@ impl<VM: VMBinding> ThreadlocalRelease<VM> {
 }
 
 pub struct EndOfThreadLocalGC {
-    pub tls: VMMutatorThread,
+    _tls: VMMutatorThread,
 }
 
 impl EndOfThreadLocalGC {
+    pub fn new(tls: VMMutatorThread) -> Self {
+        Self { _tls: tls }
+    }
+
     pub fn execute<VM: VMBinding>(&mut self, _mmtk: &'static MMTK<VM>) {
         #[cfg(feature = "extreme_assertions")]
         if crate::util::edge_logger::should_check_duplicate_edges(&*_mmtk.plan) {

@@ -461,12 +461,13 @@ impl<VM: VMBinding> Immix<VM> {
             ThreadlocalFinalization, ThreadlocalRelease,
         };
 
-        #[cfg(not(feature = "thread_local_gc_copying"))]
-        let in_defrag = false;
-        #[cfg(feature = "thread_local_gc_copying")]
-        let in_defrag = true;
+        let copying = if cfg!(feature = "thread_local_gc_copying") {
+            true
+        } else {
+            false
+        };
 
-        if in_defrag {
+        if copying {
             // Prepare global/collectors/mutators
             ThreadlocalPrepare::<VM>::new(tls).execute();
 
@@ -492,7 +493,7 @@ impl<VM: VMBinding> Immix<VM> {
             }
 
             ThreadlocalRelease::<VM>::new(tls).execute();
-            let mut end_of_thread_local_gc = EndOfThreadLocalGC { tls };
+            let mut end_of_thread_local_gc = EndOfThreadLocalGC::new(tls);
 
             end_of_thread_local_gc.execute(mmtk);
         } else {
@@ -520,7 +521,7 @@ impl<VM: VMBinding> Immix<VM> {
                 .do_finalization();
             }
             ThreadlocalRelease::<VM>::new(tls).execute();
-            let mut end_of_thread_local_gc = EndOfThreadLocalGC { tls };
+            let mut end_of_thread_local_gc = EndOfThreadLocalGC::new(tls);
 
             end_of_thread_local_gc.execute(mmtk);
         }

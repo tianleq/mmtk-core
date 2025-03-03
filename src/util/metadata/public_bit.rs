@@ -17,7 +17,7 @@ pub fn set_public_bit<VM: VMBinding>(object: ObjectReference) {
         "{:x}: public bit already set",
         object,
     );
-    PUBLIC_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_address::<VM>(), 1, Ordering::SeqCst);
+    PUBLIC_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_raw_address(), 1, Ordering::SeqCst);
 }
 
 #[cfg(feature = "debug_publish_object")]
@@ -28,7 +28,7 @@ pub fn set_public_bit<VM: VMBinding>(object: ObjectReference, _mutator_id: Optio
         object,
     );
     // info!("mutator: {:?} publish object: {:?}", _mutator_id, object);
-    PUBLIC_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_address::<VM>(), 1, Ordering::SeqCst);
+    PUBLIC_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_raw_address(), 1, Ordering::SeqCst);
 }
 
 pub fn unset_addr_public_bit<VM: VMBinding>(address: Address) {
@@ -37,17 +37,17 @@ pub fn unset_addr_public_bit<VM: VMBinding>(address: Address) {
 
 #[cfg(not(feature = "debug_publish_object"))]
 pub fn unset_public_bit<VM: VMBinding>(object: ObjectReference) {
-    PUBLIC_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_address::<VM>(), 0, Ordering::SeqCst);
+    PUBLIC_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_raw_address(), 0, Ordering::SeqCst);
 }
 
 #[cfg(feature = "debug_publish_object")]
 pub fn unset_public_bit<VM: VMBinding>(object: ObjectReference) -> Address {
     let metadata_addr = crate::util::metadata::side_metadata::address_to_meta_address(
         &PUBLIC_SIDE_METADATA_SPEC,
-        object.to_address::<VM>(),
+        object.to_raw_address(),
     );
 
-    PUBLIC_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_address::<VM>(), 0, Ordering::SeqCst);
+    PUBLIC_SIDE_METADATA_SPEC.store_atomic::<u8>(object.to_raw_address(), 0, Ordering::SeqCst);
 
     metadata_addr
 }
@@ -55,12 +55,12 @@ pub fn unset_public_bit<VM: VMBinding>(object: ObjectReference) -> Address {
 pub fn public_bit_metadata_address<VM: VMBinding>(object: ObjectReference) -> Address {
     crate::util::metadata::side_metadata::address_to_meta_address(
         &PUBLIC_SIDE_METADATA_SPEC,
-        object.to_address::<VM>(),
+        object.to_raw_address(),
     )
 }
 
 pub fn is_public<VM: VMBinding>(object: ObjectReference) -> bool {
-    is_public_object(object.to_address::<VM>())
+    is_public_object(object.to_raw_address())
 }
 
 pub fn is_public_object(address: Address) -> bool {

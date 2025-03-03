@@ -10,10 +10,10 @@ use crate::util::{conversions, opaque_pointer::*};
 use crate::util::{Address, ObjectReference};
 use crate::vm::VMBinding;
 
-#[cfg(all(feature = "thread_local_gc", debug_assertions))]
-const LOS_OBJECT_OWNER_BYTES: usize = 8;
-#[cfg(all(feature = "thread_local_gc", not(debug_assertions)))]
-const LOS_OBJECT_OWNER_BYTES: usize = 0;
+#[cfg(feature = "thread_local_gc")]
+const LOS_LOCAL_METADATA_BYTES: usize = 8;
+#[cfg(not(feature = "thread_local_gc"))]
+const LOS_LOCAL_METADATA_BYTES: usize = 0;
 
 /// An allocator that only allocates at page granularity.
 /// This is intended for large objects.
@@ -50,12 +50,12 @@ impl<VM: VMBinding> Allocator<VM> for LargeObjectAllocator<VM> {
         #[cfg(not(feature = "thread_local_gc"))]
         let rtn = self.alloc_impl(size, align, offset);
         #[cfg(feature = "thread_local_gc")]
-        let rtn = self.alloc_impl(size + LOS_OBJECT_OWNER_BYTES, align, offset);
+        let rtn = self.alloc_impl(size + LOS_LOCAL_METADATA_BYTES, align, offset);
         if !rtn.is_zero() {
             #[cfg(not(feature = "thread_local_gc"))]
             return rtn;
             #[cfg(feature = "thread_local_gc")]
-            return rtn + LOS_OBJECT_OWNER_BYTES;
+            return rtn + LOS_LOCAL_METADATA_BYTES;
         } else {
             rtn
         }
@@ -67,7 +67,7 @@ impl<VM: VMBinding> Allocator<VM> for LargeObjectAllocator<VM> {
         let rtn = self.alloc_impl(size + VM::EXTRA_HEADER_BYTES, align, offset);
         #[cfg(feature = "thread_local_gc")]
         let rtn = self.alloc_impl(
-            size + LOS_OBJECT_OWNER_BYTES + VM::EXTRA_HEADER_BYTES,
+            size + LOS_LOCAL_METADATA_BYTES + VM::EXTRA_HEADER_BYTES,
             align,
             offset,
         );
@@ -75,7 +75,7 @@ impl<VM: VMBinding> Allocator<VM> for LargeObjectAllocator<VM> {
             #[cfg(not(feature = "thread_local_gc"))]
             return rtn + VM::EXTRA_HEADER_BYTES;
             #[cfg(feature = "thread_local_gc")]
-            return rtn + LOS_OBJECT_OWNER_BYTES + VM::EXTRA_HEADER_BYTES;
+            return rtn + LOS_LOCAL_METADATA_BYTES + VM::EXTRA_HEADER_BYTES;
         } else {
             rtn
         }
@@ -128,6 +128,17 @@ impl<VM: VMBinding> Allocator<VM> for LargeObjectAllocator<VM> {
     #[cfg(feature = "thread_local_gc_copying")]
     fn local_heap_in_pages(&self) -> usize {
         0
+    }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    fn on_mutator_destroy(&mut self) {
+        // local los objects need to be pushed to the global treadmill,
+        // otherwisse, those objects are leaked and can no longer be freed
+
+        use itertools::Itertools;
+        self.space.flush_thread_local_los_objects(
+            &self.local_los_objects.drain().into_iter().collect_vec(),
+        );
     }
 }
 

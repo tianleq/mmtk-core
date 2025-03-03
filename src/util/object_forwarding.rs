@@ -74,24 +74,42 @@ pub fn spin_and_get_forwarded_object<VM: VMBinding>(
     }
 }
 
+/// Copy an object and set the forwarding state.
+///
+/// The caller can use `on_after_forwarding` to set extra metadata (including VO bits, mark bits,
+/// etc.) after the object is copied, but before the forwarding state is changed to `FORWARDED`. The
+/// atomic memory operation that sets the forwarding bits to `FORWARDED` has the `SeqCst` order.  It
+/// will guarantee that if another GC worker thread that attempts to forward the same object sees
+/// the forwarding bits being `FORWARDED`, it is guaranteed to see those extra metadata set.
+///
+/// Arguments:
+///
+/// *   `object`: The object to copy.
+/// *   `semantics`: The copy semantics.
+/// *   `copy_context`: A reference ot the `CopyContext` instance of the current GC worker.
+/// *   `on_after_forwarding`: A callback function that is called after `object` is copied, but
+///     before the forwarding bits are set.  Its argument is a reference to the new copy of
+///     `object`.
 pub fn forward_object<VM: VMBinding>(
     object: ObjectReference,
     semantics: CopySemantics,
     copy_context: &mut GCWorkerCopyContext<VM>,
+    on_after_forwarding: impl FnOnce(ObjectReference),
 ) -> ObjectReference {
     assert!(
-        object.to_address::<VM>().class_is_valid::<VM>(),
+        object.to_raw_address().class_is_valid::<VM>(),
         "object: {:?}, klass: {:?}",
         object,
-        object.to_address::<VM>().class_pointer::<VM>()
+        object.to_raw_address().class_pointer::<VM>()
     );
     let new_object = VM::VMObjectModel::copy(object, semantics, copy_context);
     assert!(
-        new_object.to_address::<VM>().class_is_valid::<VM>(),
+        new_object.to_raw_address().class_is_valid::<VM>(),
         "object: {:?}, klass: {:?}",
         new_object,
-        new_object.to_address::<VM>().class_pointer::<VM>()
+        new_object.to_raw_address().class_pointer::<VM>()
     );
+    on_after_forwarding(new_object);
     if let Some(shift) = forwarding_bits_offset_in_forwarding_pointer::<VM>() {
         VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC.store_atomic::<VM, usize>(
             object,
@@ -111,52 +129,50 @@ pub fn forward_object<VM: VMBinding>(
     new_object
 }
 
-#[cfg(feature = "thread_local_gc_copying")]
-pub fn forward_public_object<VM: VMBinding>(
-    object: ObjectReference,
-    semantics: CopySemantics,
-    copy_context: &mut GCWorkerCopyContext<VM>,
-    #[cfg(feature = "debug_publish_object")] mutator_id: u32,
-) -> ObjectReference {
-    // assert!(
-    //     object.to_address::<VM>().class_is_valid::<VM>(),
-    //     "object: {:?}, klass: {:?}",
-    //     object,
-    //     object.to_address::<VM>().class_pointer::<VM>()
-    // );
-    debug_assert!(crate::util::metadata::public_bit::is_public::<VM>(object));
-    let new_object = VM::VMObjectModel::copy(object, semantics, copy_context);
-    // assert!(
-    //     new_object.to_address::<VM>().class_is_valid::<VM>(),
-    //     "object: {:?}, klass: {:?}",
-    //     new_object,
-    //     new_object.to_address::<VM>().class_pointer::<VM>()
-    // );
-    // make sure the public bit is set before forwarding bit gets updated
-    // otherwise, there will be a race in assertion (a gc thread may see forwarded object without public bit being set)
-    #[cfg(feature = "debug_publish_object")]
-    crate::util::metadata::public_bit::set_public_bit::<VM>(new_object, Some(mutator_id));
-    #[cfg(not(feature = "debug_publish_object"))]
-    crate::util::metadata::public_bit::set_public_bit::<VM>(new_object);
+// #[cfg(feature = "thread_local_gc_copying")]
+// pub fn forward_public_object<VM: VMBinding>(
+//     object: ObjectReference,
+//     semantics: CopySemantics,
+//     copy_context: &mut GCWorkerCopyContext<VM>,
+//     on_after_forwarding: impl FnOnce(ObjectReference),
+//     #[cfg(feature = "debug_publish_object")] mutator_id: u32,
+// ) -> ObjectReference {
+//     assert!(
+//         object.to_raw_address().class_is_valid::<VM>(),
+//         "object: {:?}, klass: {:?}",
+//         object,
+//         object.to_raw_address().class_pointer::<VM>()
+//     );
+//     debug_assert!(crate::util::metadata::public_bit::is_public::<VM>(object));
+//     let new_object = VM::VMObjectModel::copy(object, semantics, copy_context);
+//     on_after_forwarding(new_object);
+//     // assert!(
+//     //     new_object.to_raw_address::<VM>().class_is_valid::<VM>(),
+//     //     "object: {:?}, klass: {:?}",
+//     //     new_object,
+//     //     new_object.to_raw_address::<VM>().class_pointer::<VM>()
+//     // );
+//     // make sure the public bit is set before forwarding bit gets updated
+//     // otherwise, there will be a race in assertion (a gc thread may see forwarded object without public bit being set)
 
-    if let Some(shift) = forwarding_bits_offset_in_forwarding_pointer::<VM>() {
-        VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC.store_atomic::<VM, usize>(
-            object,
-            new_object.to_raw_address().as_usize() | ((FORWARDED as usize) << shift),
-            None,
-            Ordering::SeqCst,
-        )
-    } else {
-        write_forwarding_pointer::<VM>(object, new_object);
-        VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC.store_atomic::<VM, u8>(
-            object,
-            FORWARDED,
-            None,
-            Ordering::SeqCst,
-        );
-    }
-    new_object
-}
+//     if let Some(shift) = forwarding_bits_offset_in_forwarding_pointer::<VM>() {
+//         VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC.store_atomic::<VM, usize>(
+//             object,
+//             new_object.to_raw_address().as_usize() | ((FORWARDED as usize) << shift),
+//             None,
+//             Ordering::SeqCst,
+//         )
+//     } else {
+//         write_forwarding_pointer::<VM>(object, new_object);
+//         VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC.store_atomic::<VM, u8>(
+//             object,
+//             FORWARDED,
+//             None,
+//             Ordering::SeqCst,
+//         );
+//     }
+//     new_object
+// }
 
 #[cfg(feature = "thread_local_gc_copying")]
 pub fn thread_local_forward_object<VM: VMBinding>(

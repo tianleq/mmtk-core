@@ -115,7 +115,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         self.large_bump_pointer.reset(Address::ZERO, Address::ZERO);
         self.request_for_large = false;
         self.line = None;
-        self.sparse_line = None;
+        #[cfg(feature = "thread_local_gc")]
+        {
+            self.sparse_line = None;
+        }
     }
 
     #[cfg(feature = "thread_local_gc")]
@@ -1641,6 +1644,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     block.start(),
                     block.end()
                 );
+                // Bulk clear stale line mark state
+                Line::MARK_TABLE
+                    .bzero_metadata(block.start(), crate::policy::immix::block::Block::BYTES);
 
                 #[cfg(feature = "thread_local_gc")]
                 {

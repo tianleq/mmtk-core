@@ -52,6 +52,8 @@ pub struct Immix<VM: VMBinding> {
     pub common: CommonPlan<VM>,
     last_gc_was_defrag: AtomicBool,
     defrag_mutator: AtomicBool,
+    #[cfg(feature = "thread_local_gc_copying")]
+    emergency: AtomicBool,
 }
 
 /// The plan constraints for the immix plan.
@@ -174,6 +176,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     fn defrag_mutator_required(&self, tls: VMMutatorThread) -> bool {
         use crate::vm::ActivePlan;
         use std::borrow::Borrow;
+        if self.emergency.load(Ordering::Acquire) {
+            return true;
+        }
         if self.defrag_mutator.load(Ordering::Acquire) == false {
             return false;
         }
@@ -224,6 +229,13 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     fn end_of_gc(&mut self, _tls: VMWorkerThread) {
         self.last_gc_was_defrag
             .store(self.immix_space.end_of_gc(), Ordering::Relaxed);
+        #[cfg(feature = "thread_local_gc_copying")]
+        self.emergency.store(false, Ordering::Release);
+    }
+
+    fn notify_emergency_collection(&self) {
+        #[cfg(feature = "thread_local_gc_copying")]
+        self.emergency.store(true, Ordering::Release);
     }
 
     fn current_gc_may_move_object(&self) -> bool {
@@ -404,6 +416,7 @@ impl<VM: VMBinding> Immix<VM> {
             common: CommonPlan::new(plan_args),
             last_gc_was_defrag: AtomicBool::new(false),
             defrag_mutator: AtomicBool::new(false),
+            emergency: AtomicBool::new(false),
         };
 
         immix.verify_side_metadata_sanity();

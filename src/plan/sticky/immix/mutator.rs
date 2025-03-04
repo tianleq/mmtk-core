@@ -77,7 +77,5 @@ pub fn create_stickyimmix_mutator<VM: VMBinding>(
         stats: Box::new(crate::util::LocalGCStatistics::default()),
         #[cfg(feature = "thread_local_gc_copying")]
         local_allocation_size: 0,
-        #[cfg(feature = "thread_local_gc_copying")]
-        is_compiler: false,
     }
 }

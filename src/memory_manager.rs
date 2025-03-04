@@ -1073,12 +1073,6 @@ pub fn mmtk_handle_user_triggered_local_gc<VM: VMBinding>(
     mmtk.handle_thread_local_collection(tls, mmtk);
 }
 
-#[cfg(feature = "thread_local_gc")]
-pub fn mmtk_set_compiler_thread<VM: VMBinding>(tls: VMMutatorThread) {
-    let mutator = VM::VMActivePlan::mutator(tls);
-    mutator.is_compiler = true;
-}
-
 pub fn mmtk_handle_user_triggered_global_gc<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
     mmtk.handle_user_collection_request(tls, true, false);
 }

@@ -201,7 +201,4 @@ pub trait Collection<VM: VMBinding> {
     fn create_gc_trigger() -> Box<dyn GCTriggerPolicy<VM>> {
         unimplemented!()
     }
-
-    #[cfg(feature = "thread_local_gc")]
-    fn do_thread_local_gc(tls: VMMutatorThread);
 }

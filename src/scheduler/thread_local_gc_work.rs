@@ -455,7 +455,7 @@ impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIN
 {
     #[inline(always)]
     fn drop(&mut self) {
-        assert!(
+        debug_assert!(
             self.slot_buffer.is_empty(),
             "There are edges left over. Closure is not done correctly."
         );

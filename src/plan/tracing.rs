@@ -292,9 +292,8 @@ impl<VM: crate::vm::VMBinding> SlotVisitor<VM::VMSlot> for PublishObjectClosure<
 
 #[cfg(feature = "public_bit")]
 impl<VM: crate::vm::VMBinding> Drop for PublishObjectClosure<VM> {
-    #[inline(always)]
     fn drop(&mut self) {
-        assert!(
+        debug_assert!(
             self.slot_buffer.is_empty(),
             "There are edges left over. Closure is not done correctly."
         );

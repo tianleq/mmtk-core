@@ -7,7 +7,6 @@ use crate::util::*;
 use crate::vm::slot::Slot;
 use crate::vm::*;
 use crate::*;
-use std::collections::VecDeque;
 use std::marker::PhantomData;
 
 pub const THREAD_LOCAL_GC_ACTIVE: u32 = 1;
@@ -251,9 +250,9 @@ pub struct PlanThreadlocalObjectGraphTraversalClosure<
 > {
     plan: &'static P,
     tls: VMMutatorThread,
-    slot_buffer: VecDeque<VM::VMSlot>,
+    slot_buffer: Vec<VM::VMSlot>,
     #[cfg(feature = "debug_publish_object")]
-    source_buffer: VecDeque<Option<ObjectReference>>,
+    source_buffer: Vec<Option<ObjectReference>>,
     worker: Option<*mut GCWorker<VM>>,
 }
 
@@ -269,18 +268,18 @@ where
         root_slots: Option<Vec<VM::VMSlot>>,
         worker: Option<*mut GCWorker<VM>>,
     ) -> Self {
-        let mut slot_buffer = VecDeque::with_capacity(4096);
+        let mut slot_buffer = Vec::with_capacity(4096);
         #[cfg(feature = "debug_publish_object")]
-        let mut source_buffer = VecDeque::new();
+        let mut source_buffer = Vec::new();
         if let Some(roots) = root_slots {
             #[cfg(feature = "debug_publish_object")]
             {
-                source_buffer = VecDeque::with_capacity(roots.capacity());
+                source_buffer = Vec::with_capacity(roots.capacity());
                 for slot in &roots {
-                    source_buffer.push_back(slot.load());
+                    source_buffer.push(slot.load());
                 }
             }
-            slot_buffer = VecDeque::from(roots);
+            slot_buffer = Vec::from(roots);
         }
 
         Self {
@@ -302,9 +301,9 @@ where
         let mutator = VM::VMActivePlan::mutator(self.tls);
 
         while !self.slot_buffer.is_empty() {
-            let slot = self.slot_buffer.pop_front().unwrap();
+            let slot = self.slot_buffer.pop().unwrap();
             #[cfg(feature = "debug_publish_object")]
-            let _source = self.source_buffer.pop_front().unwrap();
+            let _source = self.source_buffer.pop().unwrap();
             let _object = slot.load();
             #[cfg(feature = "debug_publish_object")]
             let (Some(object), Some(source)) = (_object, _source) else {
@@ -443,15 +442,15 @@ impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIN
     #[cfg(not(feature = "debug_publish_object"))]
     fn visit_slot(&mut self, slot: VM::VMSlot) {
         if let Some(_) = slot.load() {
-            self.slot_buffer.push_back(slot);
+            self.slot_buffer.push(slot);
         }
     }
 
     #[cfg(feature = "debug_publish_object")]
     fn visit_slot(&mut self, object: ObjectReference, slot: VM::VMSlot) {
         if let Some(_) = slot.load() {
-            self.source_buffer.push_back(Some(object));
-            self.slot_buffer.push_back(slot);
+            self.source_buffer.push(Some(object));
+            self.slot_buffer.push(slot);
         }
     }
 }
@@ -461,7 +460,7 @@ impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIN
 {
     #[inline(always)]
     fn drop(&mut self) {
-        assert!(
+        debug_assert!(
             self.slot_buffer.is_empty(),
             "There are edges left over. Closure is not done correctly."
         );

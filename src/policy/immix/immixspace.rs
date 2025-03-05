@@ -260,7 +260,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
             }
         } else if KIND == TRACE_KIND_FAST {
             #[cfg(feature = "thread_local_gc")]
-            assert!(
+            debug_assert!(
                 crate::policy::immix::NEVER_MOVE_OBJECTS,
                 "Moving thread-local gc is incompatible with non-moving global gc"
             );
@@ -970,7 +970,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                         object,
                         block
                     );
-                    assert!(block.is_block_published());
+                    debug_assert!(block.is_block_published());
                 }
 
                 #[cfg(feature = "vo_bit")]

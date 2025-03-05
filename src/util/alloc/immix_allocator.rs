@@ -225,7 +225,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                                         exist = true;
                                     }
                                 });
-                                assert!(!exist, "conservative private reusable block: {:?} exist in global reusable list", block);
+                                debug_assert!(!exist, "conservative private reusable block: {:?} exist in global reusable list", block);
                                 debug_assert!(block.owner() != Block::ANONYMOUS_OWNER);
                                 block.set_owner(self.mutator_id);
                             }
@@ -253,7 +253,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                                         exist = true;
                                     }
                                 });
-                                assert!(exist, "public reusable block: {:?} does not exist in global reusable list", block);
+                                debug_assert!(exist, "public reusable block: {:?} does not exist in global reusable list", block);
                                 debug_assert!(
                                     block.owner() == Block::ANONYMOUS_OWNER,
                                     "block owner: {:?}",
@@ -334,7 +334,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             #[cfg(debug_assertions)]
             {
                 if block.get_state() != BlockState::Unallocated && !block.is_block_published() {
-                    assert!(
+                    debug_assert!(
                         block.is_block_dirty(),
                         "block: {:?}, state: {:?}",
                         block,
@@ -662,12 +662,12 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         } else {
                             #[cfg(debug_assertions)]
                             {
-                                assert!(
+                                debug_assert!(
                                     block.are_lines_public(),
                                     "fully occupied public block: {:?} contains private lines",
                                     block
                                 );
-                                assert!(published);
+                                debug_assert!(published);
                                 block.set_owner(Block::ANONYMOUS_OWNER);
                             }
                         }
@@ -766,7 +766,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 debug_assert!(block.is_block_dirty(), "block: {:?} should be dirty", block);
                 #[cfg(feature = "debug_publish_object")]
                 {
-                    assert!(
+                    debug_assert!(
                         !self.local_free_blocks.contains(&block),
                         "local free block: {:?} is still in the local block list",
                         block
@@ -774,7 +774,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 }
             }
             #[cfg(feature = "thread_local_gc_copying")]
-            assert!(
+            debug_assert!(
                 reusable_count <= 1,
                 "private objects are not strictly evacuated in the local gc"
             );
@@ -1630,7 +1630,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             None => {
                 #[cfg(feature = "thread_local_gc")]
                 // add an assertion here, assume collectors can always allocate new blocks
-                assert!(
+                debug_assert!(
                     self.semantic.is_none() && !self.copy,
                     "cannot acquire clean blocks to evacuate"
                 );

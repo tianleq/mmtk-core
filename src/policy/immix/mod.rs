@@ -18,7 +18,7 @@ pub const BLOCK_ONLY: bool = false;
 
 /// Do we allow Immix to do defragmentation?
 // pub const DEFRAG: bool = !cfg!(feature = "immix_non_moving"); // defrag if we are allowed to move.
-pub const DEFRAG: bool = false;
+pub const DEFRAG: bool = true;
 
 // STRESS COPYING: Set the feature 'immix_stress_copying' so that Immix will copy as many objects as possible.
 // Useful for debugging copying GC if you cannot use SemiSpace.
@@ -35,7 +35,7 @@ pub const DEFRAG: bool = false;
 // | `DEFRAG_HEADROOM_PERCENT` | stress  | `50`    | Reserve enough headroom to copy all objects.  50% is like SemiSpace. |
 
 /// Make every GC a defragment GC. (for debugging)
-pub const STRESS_DEFRAG: bool = cfg!(feature = "immix_stress_copying");
+pub const STRESS_DEFRAG: bool = true;
 
 /// Mark every allocated block as defragmentation source before GC. (for debugging)
 pub const DEFRAG_EVERY_BLOCK: bool = cfg!(feature = "immix_stress_copying");

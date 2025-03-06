@@ -8,7 +8,7 @@ use crate::{
 
 /// Data structure to reference a line within an immix block.
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Eq, Hash)]
 pub struct Line(Address);
 
 impl Region for Line {
@@ -80,5 +80,112 @@ impl Line {
             line.mark(state)
         }
         marked_lines
+    }
+
+    #[cfg(feature = "immix_allocation_policy")]
+    fn collector_try_acquire_hole(&self, overflow: bool) -> (bool, bool) {
+        use std::sync::atomic::Ordering;
+
+        const HOLE_STATUS_MASK: u8 = !Block::LARGE_HOLE_INDEX_MASK;
+        let mut large_hole = overflow;
+        let block = self.block();
+        let idx = self.get_index_within_block() as u8;
+        let hole_status = block.get_large_hole_status();
+        let size = block.get_large_hole_size();
+        #[cfg(debug_assertions)]
+        {
+            if overflow {
+                debug_assert!(
+                    (hole_status & Block::LARGE_HOLE_INDEX_MASK) == idx,
+                    "line: {:?}, index: {}, metadata: {}",
+                    self,
+                    idx,
+                    hole_status & Block::LARGE_HOLE_INDEX_MASK
+                );
+                debug_assert_ne!(size, 0);
+            }
+        }
+        // Always succeed if the block does not have large hole
+        if size == 0 {
+            debug_assert!(!overflow);
+            debug_assert_eq!(hole_status, 0);
+            debug_assert!(!large_hole);
+            return (true, large_hole);
+        }
+        // Now we know this block has a large hole but during GC phase, normal allocation
+        // might found a hole that is part of a large hole. So need to check if the large
+        // hole was available in the previous mutator phase
+
+        let large_hole_idx = hole_status & Block::LARGE_HOLE_INDEX_MASK;
+        if large_hole_idx <= idx && idx < large_hole_idx + size {
+            large_hole = true;
+            if (hole_status & HOLE_STATUS_MASK) != 0 {
+                // the hole has already been used
+                return (false, large_hole);
+            }
+            // large hole, needs to check
+            let old = Block::BLOCK_LARGE_HOLE_STATUS.fetch_or_atomic(
+                block.start(),
+                HOLE_STATUS_MASK,
+                Ordering::SeqCst,
+            );
+
+            return ((old & HOLE_STATUS_MASK) == 0, large_hole);
+        } else {
+            debug_assert!(!large_hole);
+            return (true, large_hole);
+        }
+    }
+
+    #[cfg(feature = "immix_allocation_policy")]
+    fn mutator_try_acquire_hole(&self, overflow: bool) -> (bool, bool) {
+        use std::sync::atomic::Ordering;
+
+        const HOLE_STATUS_MASK: u8 = !Block::LARGE_HOLE_INDEX_MASK;
+
+        let mut large_hole = overflow;
+        let block = self.block();
+        let size = block.get_large_hole_size();
+        let hole_status = block.get_large_hole_status();
+        let idx = hole_status & Block::LARGE_HOLE_INDEX_MASK;
+        let hole_idx = self.get_index_within_block() as u8;
+
+        // normal allocation in small holes always succeed
+        if size == 0 {
+            debug_assert!(!overflow);
+            debug_assert_eq!(hole_status, 0);
+            return (true, large_hole);
+        } else if idx != hole_idx {
+            debug_assert!(!overflow);
+            return (true, large_hole);
+        }
+        // Now we know the hole is a large one
+        debug_assert!(size >= Block::HUGE_HOLE_SIZE && size < Block::LINES as u8);
+        debug_assert_eq!(idx, hole_idx);
+
+        large_hole = true;
+        let old = Block::BLOCK_LARGE_HOLE_STATUS.fetch_or_atomic(
+            block.start(),
+            HOLE_STATUS_MASK,
+            Ordering::SeqCst,
+        );
+        debug_assert!(
+            (old & Block::LARGE_HOLE_INDEX_MASK) == hole_idx as u8,
+            "line: {:?}, index: {}, metadata: {}",
+            self,
+            hole_idx,
+            old & Block::LARGE_HOLE_INDEX_MASK
+        );
+
+        ((old & HOLE_STATUS_MASK) == 0, large_hole)
+    }
+
+    #[cfg(feature = "immix_allocation_policy")]
+    pub fn try_acquire_hole(&self, overflow: bool, copy: bool) -> (bool, bool) {
+        if copy {
+            self.collector_try_acquire_hole(overflow)
+        } else {
+            self.mutator_try_acquire_hole(overflow)
+        }
     }
 }

@@ -259,7 +259,7 @@ impl Stats {
         self.shared.set_gathering_stats(false);
     }
 
-    fn get_phase(&self) -> usize {
+    pub fn get_phase(&self) -> usize {
         self.shared.get_phase()
     }
 

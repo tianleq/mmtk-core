@@ -8,7 +8,7 @@ use crate::policy::immix::ImmixSpace;
 use crate::policy::space::Space;
 use crate::util::alloc::allocator::get_maximum_aligned_size;
 use crate::util::alloc::Allocator;
-use crate::util::linear_scan::Region;
+use crate::util::linear_scan::{Region, RegionIterator};
 use crate::util::opaque_pointer::VMThread;
 use crate::util::rust_util::unlikely;
 use crate::util::Address;
@@ -250,32 +250,32 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         }
     }
 
-    #[cfg(feature = "immix_allocation_policy")]
-    /// Bump allocate small objects into recyclable lines (i.e. holes).
-    fn normal_alloc_slow_hot(&mut self, size: usize, align: usize, offset: usize) -> Address {
-        trace!("{:?}: alloc_slow_hot", self.tls);
-        if self.acquire_recyclable_lines(size, align, offset) {
-            // If stress test is active, then we need to go to the slow path instead of directly
-            // calling `alloc()`. This is because the `acquire_recyclable_lines()` function
-            // manipulates the cursor and limit if a line can be recycled and if we directly call
-            // `alloc()` after recyling a line, then we will miss updating the `allocation_bytes`
-            // as the newly recycled line will service the allocation request. If we set the stress
-            // factor limit directly in `acquire_recyclable_lines()`, then we risk running into an
-            // loop of failing the fastpath (i.e. `alloc()`) and then trying to allocate from a
-            // recyclable line.  Hence, we bring the "if we're in stress test" check up a level and
-            // directly call `alloc_slow_inline()` which will properly account for the allocation
-            // request as well as allocate from the newly recycled line
-            let stress_test = self.context.options.is_stress_test_gc_enabled();
-            let precise_stress = *self.context.options.precise_stress;
-            if unlikely(stress_test && precise_stress) {
-                self.alloc_slow_inline(size, align, offset)
-            } else {
-                self.alloc(size, align, offset)
-            }
-        } else {
-            self.alloc_slow_inline(size, align, offset)
-        }
-    }
+    // #[cfg(feature = "immix_allocation_policy")]
+    // /// Bump allocate small objects into recyclable lines (i.e. holes).
+    // fn normal_alloc_slow_hot(&mut self, size: usize, align: usize, offset: usize) -> Address {
+    //     trace!("{:?}: alloc_slow_hot", self.tls);
+    //     if self.acquire_recyclable_lines(size, align, offset) {
+    //         // If stress test is active, then we need to go to the slow path instead of directly
+    //         // calling `alloc()`. This is because the `acquire_recyclable_lines()` function
+    //         // manipulates the cursor and limit if a line can be recycled and if we directly call
+    //         // `alloc()` after recyling a line, then we will miss updating the `allocation_bytes`
+    //         // as the newly recycled line will service the allocation request. If we set the stress
+    //         // factor limit directly in `acquire_recyclable_lines()`, then we risk running into an
+    //         // loop of failing the fastpath (i.e. `alloc()`) and then trying to allocate from a
+    //         // recyclable line.  Hence, we bring the "if we're in stress test" check up a level and
+    //         // directly call `alloc_slow_inline()` which will properly account for the allocation
+    //         // request as well as allocate from the newly recycled line
+    //         let stress_test = self.context.options.is_stress_test_gc_enabled();
+    //         let precise_stress = *self.context.options.precise_stress;
+    //         if unlikely(stress_test && precise_stress) {
+    //             self.alloc_slow_inline(size, align, offset)
+    //         } else {
+    //             self.alloc(size, align, offset)
+    //         }
+    //     } else {
+    //         self.alloc_slow_inline(size, align, offset)
+    //     }
+    // }
 
     #[cfg(feature = "immix_allocation_policy")]
     /// Bump allocate small objects into recyclable lines (i.e. holes).
@@ -320,8 +320,13 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         let mut holes = self.space.holes.lock().unwrap();
         while !holes.is_empty() {
             let hole = holes.pop_front().unwrap();
-            let block = Block::from_unaligned_address(hole.start);
-            if !block.try_update_block_status(Block::UNAVALIABLE_REUSABLE) {
+            let start_line = Line::from_aligned_address(hole.start);
+            let block = start_line.block();
+            if self.copy && block.is_defrag_source() {
+                continue;
+            }
+            let (success, large_hole) = start_line.try_acquire_hole(true, self.copy);
+            if !success {
                 continue;
             }
             #[cfg(debug_assertions)]
@@ -329,6 +334,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 use crate::util::linear_scan::RegionIterator;
                 use std::sync::atomic::Ordering;
 
+                debug_assert!(large_hole);
                 let unavailable_state = self.space.line_unavail_state.load(Ordering::SeqCst);
                 let line_mark_state = self.space.line_mark_state.load(Ordering::SeqCst);
                 let start = Line::from_aligned_address(hole.start);
@@ -336,7 +342,19 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 debug_assert!(RegionIterator::<Line>::new(start, end)
                     .all(|line| !line.is_marked(unavailable_state)
                         && !line.is_marked(line_mark_state)));
+                debug_assert!(hole.size >> Line::LOG_BYTES >= Block::HUGE_HOLE_SIZE as usize);
+                let mut used_lines = self.space.used_lines.lock().unwrap();
+                for line in RegionIterator::<Line>::new(start, end) {
+                    debug_assert!(
+                        used_lines.insert(line),
+                        "line: {:?} already being used",
+                        line
+                    );
+                }
             }
+
+            let lines = hole.size >> Line::LOG_BYTES;
+            block.init_overflow(lines as u8, self.copy);
 
             self.large_bump_pointer.cursor = hole.start;
             self.large_bump_pointer.limit = hole.start + hole.size;
@@ -362,19 +380,31 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             {
                 #[cfg(feature = "immix_allocation_policy")]
                 {
-                    let hole_size = (end_line.start() - start_line.start()) >> Line::LOG_BYTES;
-                    let block = line.block();
-                    if hole_size >= Block::HUGE_HOLE_SIZE as usize {
-                        // check if the large hole is still available or not
-                        if !block.try_update_block_status(Block::UNAVALIABLE_REUSABLE) {
-                            self.line = if end_line == block.end_line() {
-                                // Hole searching reached the end of a reusable block. Set the hole-searching cursor to None.
-                                None
-                            } else {
-                                // Update the hole-searching cursor to None.
-                                Some(end_line)
-                            };
-                            continue;
+                    let block = start_line.block();
+
+                    // check if the large hole is still available or not
+                    let (success, large_hole) = start_line.try_acquire_hole(false, self.copy);
+                    if !success {
+                        self.line = if end_line == block.end_line() {
+                            // Hole searching reached the end of a reusable block. Set the hole-searching cursor to None.
+                            None
+                        } else {
+                            // Update the hole-searching cursor to None.
+                            Some(end_line)
+                        };
+                        continue;
+                    } else {
+                        #[cfg(debug_assertions)]
+                        {
+                            if large_hole {
+                                for line in RegionIterator::<Line>::new(start_line, end_line) {
+                                    debug_assert!(
+                                        self.space.used_lines.lock().unwrap().insert(line),
+                                        "line: {:?} already being used",
+                                        line
+                                    );
+                                }
+                            }
                         }
                     }
                 }
@@ -403,7 +433,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     start_line,
                     end_line
                 );
-                let block = line.block();
+                let block = start_line.block();
                 self.line = if end_line == block.end_line() {
                     // Hole searching reached the end of a reusable block. Set the hole-searching cursor to None.
                     None
@@ -424,12 +454,12 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     fn acquire_recyclable_block(&mut self) -> bool {
         // Looking for free lines in local reusable block queue first
         // Those blocks are originally used by overflow allocation
-        if let Some(block) = self.overflow_reusable_blocks.pop_front() {
-            trace!("{:?}: acquire_recyclable_block -> {:?}", self.tls, block);
-            // Set the hole-searching cursor to the start of this block.
-            self.line = Some(block.start_line());
-            return true;
-        }
+        // if let Some(block) = self.overflow_reusable_blocks.pop_front() {
+        //     trace!("{:?}: acquire_recyclable_block -> {:?}", self.tls, block);
+        //     // Set the hole-searching cursor to the start of this block.
+        //     self.line = Some(block.start_line());
+        //     return true;
+        // }
 
         match self.immix_space().get_reusable_block(self.copy) {
             Some(block) => {
@@ -453,10 +483,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     block.start(),
                     block.end()
                 );
-                #[cfg(feature = "immix_allocation_policy")]
-                {
-                    debug_assert_eq!(block.get_block_status(), Block::NONE_REUSABLE);
-                }
+
                 // Bulk clear stale line mark state
                 Line::MARK_TABLE
                     .bzero_metadata(block.start(), crate::policy::immix::block::Block::BYTES);

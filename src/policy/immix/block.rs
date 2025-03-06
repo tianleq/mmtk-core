@@ -112,15 +112,13 @@ impl Block {
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_MARK;
 
     #[cfg(feature = "immix_allocation_policy")]
-    /// Block hole size table (side)
-    pub const BLOCK_STATUS: SideMetadataSpec =
-        crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_HOLE_STATUS;
+    /// Block large hole information table (side)
+    pub(super) const BLOCK_LARGE_HOLE_STATUS: SideMetadataSpec =
+        crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_LARGE_HOLE_STATUS;
+    pub(super) const BLOCK_LARGE_HOLE_SIZE: SideMetadataSpec =
+        crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_LARGE_HOLE_SIZE;
     #[cfg(feature = "immix_allocation_policy")]
-    pub const NONE_REUSABLE: u8 = 0;
-    #[cfg(feature = "immix_allocation_policy")]
-    pub const AVAILABLE_REUSABLE: u8 = 1;
-    #[cfg(feature = "immix_allocation_policy")]
-    pub const UNAVALIABLE_REUSABLE: u8 = 2;
+    pub const LARGE_HOLE_INDEX_MASK: u8 = 0x7F;
     #[cfg(feature = "immix_allocation_policy")]
     pub const HUGE_HOLE_SIZE: u8 = 64;
 
@@ -179,26 +177,32 @@ impl Block {
     }
 
     #[cfg(feature = "immix_allocation_policy")]
-    pub fn try_update_block_status(&self, status: u8) -> bool {
-        Self::BLOCK_STATUS
-            .compare_exchange_atomic::<u8>(
-                self.start(),
-                Self::AVAILABLE_REUSABLE,
-                status,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            )
-            .is_ok()
+    pub fn set_large_hole_metadata(&self, start: u8, size: u8) {
+        assert!(
+            start <= 64,
+            "invalid start value: {}, size: {}",
+            start,
+            size
+        );
+
+        let val = if size != 0 {
+            // set the most significant bit to 0
+            start & Self::LARGE_HOLE_INDEX_MASK
+        } else {
+            0
+        };
+        // No race here as the following only occurs during sweeping blocks (each block will be visible to only one GC thread)
+        Self::BLOCK_LARGE_HOLE_STATUS.store_atomic::<u8>(self.start(), val, Ordering::Release);
+        Self::BLOCK_LARGE_HOLE_SIZE.store_atomic::<u8>(self.start(), size, Ordering::Release);
     }
 
     #[cfg(feature = "immix_allocation_policy")]
-    pub fn set_block_status(&self, status: u8) {
-        Self::BLOCK_STATUS.store_atomic::<u8>(self.start(), status, Ordering::SeqCst);
+    pub fn get_large_hole_size(&self) -> u8 {
+        Self::BLOCK_LARGE_HOLE_SIZE.load_atomic::<u8>(self.start(), Ordering::Acquire)
     }
-
     #[cfg(feature = "immix_allocation_policy")]
-    pub fn get_block_status(&self) -> u8 {
-        Self::BLOCK_STATUS.load_atomic(self.start(), Ordering::SeqCst)
+    pub fn get_large_hole_status(&self) -> u8 {
+        Self::BLOCK_LARGE_HOLE_STATUS.load_atomic::<u8>(self.start(), Ordering::Acquire)
     }
 
     /// Initialize a clean block after acquired from page-resource.
@@ -209,6 +213,67 @@ impl Block {
             BlockState::Unmarked
         });
         Self::DEFRAG_STATE_TABLE.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
+    }
+
+    #[cfg(feature = "immix_allocation_policy")]
+    pub fn init_overflow(&self, lines: u8, copy: bool) {
+        debug_assert!(lines >= Self::HUGE_HOLE_SIZE);
+
+        if copy {
+            let _ = Self::MARK_TABLE.fetch_update_atomic::<u8, _>(
+                self.start(),
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+                |old| {
+                    if BlockState::from(old) == BlockState::Marked {
+                        None
+                    } else if BlockState::from(old) == BlockState::Unmarked {
+                        Some(BlockState::MARK_MARKED)
+                    } else {
+                        Some(old + lines)
+                    }
+                },
+            );
+            Self::DEFRAG_STATE_TABLE.store_atomic::<u8>(self.start(), 0, Ordering::SeqCst);
+        } else {
+            let result = Self::DEFRAG_STATE_TABLE.fetch_update_atomic::<u8, _>(
+                self.start(),
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+                |old| {
+                    if old == 0 {
+                        return None;
+                    } else {
+                        debug_assert!(old > 0);
+                        return Some(old - 1);
+                    }
+                },
+            );
+            if result.is_ok() {
+                // The block is still reusable, needs to update unavailable lines
+
+                let _ = Self::MARK_TABLE.fetch_update_atomic::<u8, _>(
+                    self.start(),
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                    |old| {
+                        if BlockState::from(old) == BlockState::Marked {
+                            None
+                        } else if BlockState::from(old) == BlockState::Unmarked {
+                            None
+                        } else {
+                            debug_assert!(
+                                (old + lines) <= Self::LINES as u8,
+                                "old: {}, lines: {}",
+                                old,
+                                lines
+                            );
+                            Some(old + lines)
+                        }
+                    },
+                );
+            }
+        }
     }
 
     /// Deinitalize a block before releasing.
@@ -276,7 +341,11 @@ impl Block {
             #[cfg(feature = "immix_allocation_policy")]
             let mut hole = super::hole::Hole::default();
             #[cfg(feature = "immix_allocation_policy")]
+            let mut large_hole = super::hole::Hole::default();
+            #[cfg(feature = "immix_allocation_policy")]
             let mut found_new_hole = false;
+            #[cfg(feature = "immix_allocation_policy")]
+            let mut found_large_hole = false;
             // Calculate number of marked lines and holes.
             let mut marked_lines = 0;
             let mut holes = 0;
@@ -295,6 +364,8 @@ impl Block {
                         // there will be only one such large hole in one block
                         // so acquiring the lock here is acceptable
                         if hole_size >= Self::HUGE_HOLE_SIZE {
+                            found_large_hole = true;
+                            large_hole = hole;
                             space.holes.lock().unwrap().push_back(hole);
                         }
                         found_new_hole = false;
@@ -345,11 +416,18 @@ impl Block {
                 // as there is no more marked lines after it and the comparision
                 // is not done in the previous loop
                 if found_new_hole && marked_lines != 0 {
-                    assert!(prev_line_is_marked == false);
+                    debug_assert!(prev_line_is_marked == false);
                     // if hole_size != 0 {
                     //     max_hole_size = std::cmp::max(hole_size, max_hole_size);
                     // }
+                    assert!(
+                        hole.size == hole_size as usize * Line::BYTES,
+                        "invalid hole size: {}",
+                        hole.size
+                    );
                     if hole_size >= Self::HUGE_HOLE_SIZE {
+                        found_large_hole = true;
+                        large_hole = hole;
                         space.holes.lock().unwrap().push_back(hole);
                     }
                 }
@@ -358,7 +436,7 @@ impl Block {
             if marked_lines == 0 {
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_region_swept::<VM, _>(self, false);
-                self.set_block_status(Self::NONE_REUSABLE);
+                self.set_large_hole_metadata(0, 0);
                 // Release the block if non of its lines are marked.
                 space.release_block(*self);
                 true
@@ -371,17 +449,17 @@ impl Block {
                     });
                     #[cfg(feature = "immix_allocation_policy")]
                     {
-                        // if max_hole_size as usize >= Block::LINES >> 1 {
-                        //     self.set_block_status(Self::OVERFLOW_REUSABLE);
-                        //     space.overflow_reusable_blocks.push(*self);
-                        // } else {
-                        //     self.set_block_status(Self::NORMAL_REUSABLE);
-                        //     space.reusable_blocks.push(*self);
-                        // }
-                        // All reusable blocks will be normal initially
-                        // it will become overflow reusable once a large
-                        // hole is grabbed to do overflow allocation
-                        self.set_block_status(Self::AVAILABLE_REUSABLE);
+                        if found_large_hole {
+                            debug_assert_ne!((large_hole.size >> Line::LOG_BYTES), 0);
+                            self.set_large_hole_metadata(
+                                Line::from_aligned_address(large_hole.start)
+                                    .get_index_within_block() as u8,
+                                (large_hole.size >> Line::LOG_BYTES) as u8,
+                            );
+                        } else {
+                            self.set_large_hole_metadata(0, 0);
+                        }
+
                         space.reusable_blocks.push(*self);
                     }
                     #[cfg(not(feature = "immix_allocation_policy"))]
@@ -389,7 +467,7 @@ impl Block {
                 } else {
                     // Clear mark state.
                     self.set_state(BlockState::Unmarked);
-                    self.set_block_status(Self::NONE_REUSABLE);
+                    self.set_large_hole_metadata(0, 0);
                 }
                 // Update mark_histogram
                 mark_histogram[holes] += marked_lines;

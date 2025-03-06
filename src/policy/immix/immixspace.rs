@@ -48,7 +48,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     /// Defrag utilities
     pub(super) defrag: Defrag,
     /// How many lines have been consumed since last GC?
-    lines_consumed: AtomicUsize,
+    pub(crate) lines_consumed: AtomicUsize,
     /// Object mark state
     mark_state: u8,
     /// Work packet scheduler
@@ -62,6 +62,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     #[cfg(feature = "immix_allocation_policy")]
     /// Hole-searching cursor
     pub(crate) line_wasted: AtomicUsize,
+    pub(crate) used_lines: std::sync::Mutex<std::collections::HashSet<Line>>,
 }
 
 /// Some arguments for Immix Space.
@@ -268,7 +269,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
                 MetadataSpec::OnSide(Block::MARK_TABLE),
                 #[cfg(feature = "immix_allocation_policy")]
-                MetadataSpec::OnSide(Block::BLOCK_STATUS),
+                MetadataSpec::OnSide(Block::BLOCK_LARGE_HOLE_STATUS),
+                #[cfg(feature = "immix_allocation_policy")]
+                MetadataSpec::OnSide(Block::BLOCK_LARGE_HOLE_SIZE),
                 MetadataSpec::OnSide(ChunkMap::ALLOC_TABLE),
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
                 *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC,
@@ -282,7 +285,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 MetadataSpec::OnSide(Block::DEFRAG_STATE_TABLE),
                 MetadataSpec::OnSide(Block::MARK_TABLE),
                 #[cfg(feature = "immix_allocation_policy")]
-                MetadataSpec::OnSide(Block::BLOCK_STATUS),
+                MetadataSpec::OnSide(Block::BLOCK_LARGE_HOLE_STATUS),
+                #[cfg(feature = "immix_allocation_policy")]
+                MetadataSpec::OnSide(Block::BLOCK_LARGE_HOLE_SIZE),
                 MetadataSpec::OnSide(ChunkMap::ALLOC_TABLE),
                 *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC,
                 *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC,
@@ -351,6 +356,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             holes: std::sync::Mutex::new(std::collections::VecDeque::new()),
             #[cfg(feature = "immix_allocation_policy")]
             line_wasted: AtomicUsize::new(0),
+            #[cfg(feature = "immix_allocation_policy")]
+            used_lines: std::sync::Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -415,9 +422,17 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             #[cfg(feature = "immix_allocation_policy")]
             {
                 if self.reusable_blocks.len() > 0 {
-                    println!("{} reusable blocks left", self.reusable_blocks.len());
+                    crate::plan::REUSABLE_BLOCK_LEFT.fetch_add(1, Ordering::SeqCst);
+                    println!(
+                        "{} reusable blocks left, {} holes left",
+                        self.reusable_blocks.len(),
+                        self.holes.lock().unwrap().len()
+                    );
                 }
-                println!("waste {} lines", self.line_wasted.load(Ordering::Acquire));
+                let lines = self.line_wasted.load(Ordering::Acquire);
+                crate::plan::MAX_WASTED_LINE.fetch_max(lines, Ordering::SeqCst);
+                crate::plan::MIN_WASTED_LINE.fetch_min(lines, Ordering::SeqCst);
+                crate::plan::TOTAL_WASTED_LINE.fetch_add(lines, Ordering::SeqCst);
             }
 
             // Prepare each block for GC
@@ -504,6 +519,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         {
             self.holes.lock().unwrap().clear();
             self.line_wasted.store(0, Ordering::SeqCst);
+            #[cfg(debug_assertions)]
+            self.used_lines.lock().unwrap().clear();
         }
 
         // Sweep chunks and blocks
@@ -582,6 +599,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                         Block::LINES - unavailable_lines as usize
                     }
                     BlockState::Unmarked => Block::LINES,
+                    #[cfg(feature = "immix_allocation_policy")]
+                    BlockState::Marked => Block::LINES,
                     _ => unreachable!("{:?} {:?}", block, block.get_state()),
                 };
                 self.lines_consumed.fetch_add(lines_delta, Ordering::SeqCst);

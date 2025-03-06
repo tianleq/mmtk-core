@@ -14,6 +14,8 @@
 //! For more about implementing a plan, it is recommended to read the [MMTk tutorial](/docs/tutorial/Tutorial.md).
 
 mod barriers;
+use std::sync::atomic::AtomicUsize;
+
 pub use barriers::BarrierSelector;
 
 pub(crate) mod gc_requester;
@@ -66,3 +68,8 @@ pub use nogc::NOGC_CONSTRAINTS;
 pub use pageprotect::PP_CONSTRAINTS;
 pub use semispace::SS_CONSTRAINTS;
 pub use sticky::immix::STICKY_IMMIX_CONSTRAINTS;
+
+pub static MIN_WASTED_LINE: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub static TOTAL_WASTED_LINE: AtomicUsize = AtomicUsize::new(0);
+pub static MAX_WASTED_LINE: AtomicUsize = AtomicUsize::new(0);
+pub static REUSABLE_BLOCK_LEFT: AtomicUsize = AtomicUsize::new(0);

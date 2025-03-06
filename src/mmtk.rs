@@ -327,6 +327,10 @@ impl<VM: VMBinding> MMTK<VM> {
         self.inside_harness.store(true, Ordering::SeqCst);
         self.stats.start_all();
         self.scheduler.enable_stat();
+        crate::plan::MIN_WASTED_LINE.store(usize::MAX, Ordering::Release);
+        crate::plan::MAX_WASTED_LINE.store(0, Ordering::Release);
+        crate::plan::TOTAL_WASTED_LINE.store(0, Ordering::Release);
+        crate::plan::REUSABLE_BLOCK_LEFT.store(0, Ordering::Release);
     }
 
     /// Generic hook to allow benchmarks to be harnessed. MMTk will stop collecting
@@ -335,6 +339,18 @@ impl<VM: VMBinding> MMTK<VM> {
     pub fn harness_end(&'static self) {
         self.stats.stop_all(self);
         self.inside_harness.store(false, Ordering::SeqCst);
+        let gc_count = self.stats.get_phase() / 2;
+        let avg_waste = (crate::plan::TOTAL_WASTED_LINE.load(Ordering::Acquire) as f64
+            / gc_count as f64)
+            .ceil();
+        println!(
+            "waste lines: {}, {}, {} | GC: {}/{}",
+            crate::plan::MIN_WASTED_LINE.load(Ordering::Acquire),
+            crate::plan::MAX_WASTED_LINE.load(Ordering::Acquire),
+            avg_waste as usize,
+            crate::plan::REUSABLE_BLOCK_LEFT.load(Ordering::Acquire),
+            gc_count,
+        );
         probe!(mmtk, harness_end);
     }
 

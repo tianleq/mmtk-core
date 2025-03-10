@@ -749,6 +749,8 @@ pub fn harness_begin<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
             use crate::REQUEST_SCOPE_ALLOCATION_SIZE;
             use crate::REQUEST_SCOPE_PUBLICATION_COUNT;
             use crate::REQUEST_SCOPE_PUBLICATION_SIZE;
+            use crate::REQUEST_SCOPE_SERVER_ALLOCATION_COUNT;
+            use crate::REQUEST_SCOPE_SERVER_ALLOCATION_SIZE;
 
             use std::sync::atomic::Ordering::Release;
 
@@ -761,6 +763,8 @@ pub fn harness_begin<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
             REQUEST_SCOPE_ALLOCATION_SIZE.store(0, Release);
             REQUEST_SCOPE_PUBLICATION_COUNT.store(0, Release);
             REQUEST_SCOPE_PUBLICATION_SIZE.store(0, Release);
+            REQUEST_SCOPE_SERVER_ALLOCATION_COUNT.store(0, Release);
+            REQUEST_SCOPE_SERVER_ALLOCATION_SIZE.store(0, Release);
         }
         #[cfg(feature = "extra_header")]
         {
@@ -1218,5 +1222,11 @@ pub fn mmtk_update_request_stats<VM: VMBinding>(
             .fetch_add(stats.objects_allocated as usize, Ordering::SeqCst);
     }
 
+    mutator.request_stats.reset();
+}
+
+#[cfg(all(feature = "thread_local_gc", feature = "extra_header"))]
+pub fn mmtk_clear_request_stats<VM: VMBinding>(_mmtk: &'static MMTK<VM>, tls: VMMutatorThread) {
+    let mutator = VM::VMActivePlan::mutator(tls);
     mutator.request_stats.reset();
 }

@@ -260,6 +260,8 @@ impl Stats {
             use crate::REQUEST_SCOPE_ALLOCATION_SIZE;
             use crate::REQUEST_SCOPE_PUBLICATION_COUNT;
             use crate::REQUEST_SCOPE_PUBLICATION_SIZE;
+            use crate::REQUEST_SCOPE_SERVER_ALLOCATION_COUNT;
+            use crate::REQUEST_SCOPE_SERVER_ALLOCATION_SIZE;
 
             let request_scope_allocation_count =
                 REQUEST_SCOPE_ALLOCATION_COUNT.load(std::sync::atomic::Ordering::Acquire);
@@ -304,6 +306,12 @@ impl Stats {
                 request_scope_allocation_count,
                 request_scope_publication_count as f64 / request_scope_allocation_count as f64,
                 (request_scope_publication_count as f64 / requests_time as f64) * 1e9f64
+            );
+
+            println!(
+                "request scope server bytes/objects: {}/{}",
+                REQUEST_SCOPE_SERVER_ALLOCATION_SIZE.load(std::sync::atomic::Ordering::Acquire),
+                REQUEST_SCOPE_SERVER_ALLOCATION_COUNT.load(std::sync::atomic::Ordering::Acquire),
             );
 
             println!(

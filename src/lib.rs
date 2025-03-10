@@ -69,6 +69,8 @@ pub static ALLOCATION_SIZE: AtomicUsize = AtomicUsize::new(0);
 pub static ALLOCATION_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static REQUEST_SCOPE_ALLOCATION_SIZE: AtomicUsize = AtomicUsize::new(0);
 pub static REQUEST_SCOPE_ALLOCATION_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub static REQUEST_SCOPE_SERVER_ALLOCATION_SIZE: AtomicUsize = AtomicUsize::new(0);
+pub static REQUEST_SCOPE_SERVER_ALLOCATION_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 pub static PUBLICATION_SIZE: AtomicUsize = AtomicUsize::new(0);
 pub static PUBLICATION_COUNT: AtomicUsize = AtomicUsize::new(0);

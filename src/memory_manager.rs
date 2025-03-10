@@ -749,6 +749,8 @@ pub fn harness_begin<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
             use crate::REQUEST_SCOPE_ALLOCATION_SIZE;
             use crate::REQUEST_SCOPE_PUBLICATION_COUNT;
             use crate::REQUEST_SCOPE_PUBLICATION_SIZE;
+            use crate::REQUEST_SCOPE_SERVER_ALLOCATION_COUNT;
+            use crate::REQUEST_SCOPE_SERVER_ALLOCATION_SIZE;
             use std::sync::atomic::Ordering::Release;
 
             ALLOCATION_COUNT.store(0, Release);
@@ -760,6 +762,8 @@ pub fn harness_begin<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
             REQUEST_SCOPE_ALLOCATION_SIZE.store(0, Release);
             REQUEST_SCOPE_PUBLICATION_COUNT.store(0, Release);
             REQUEST_SCOPE_PUBLICATION_SIZE.store(0, Release);
+            REQUEST_SCOPE_SERVER_ALLOCATION_COUNT.store(0, Release);
+            REQUEST_SCOPE_SERVER_ALLOCATION_SIZE.store(0, Release);
         }
         #[cfg(feature = "extra_header")]
         {
@@ -1007,13 +1011,6 @@ pub fn mmtk_publish_object<VM: VMBinding>(
                 u32::MAX,
             );
 
-        // mmtk_set_public_bit(_mmtk, object);
-        // // Publish all the descendants
-        // VM::VMScanning::scan_object(
-        //     VMWorkerThread(VMThread::UNINITIALIZED),
-        //     object,
-        //     &mut closure,
-        // );
         closure.do_closure(object);
     } else {
         return;
@@ -1098,13 +1095,6 @@ pub fn mmtk_publish_object<VM: VMBinding>(
                 _tls,
             );
 
-        // mmtk_set_public_bit(_mmtk, object, _tls);
-        // // Publish all the descendants
-        // VM::VMScanning::scan_object(
-        //     VMWorkerThread(VMThread::UNINITIALIZED),
-        //     object,
-        //     &mut closure,
-        // );
         closure.do_closure(object);
     } else {
         return;
@@ -1207,13 +1197,25 @@ pub fn request_finished<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
 }
 
 #[cfg(all(feature = "thread_local_gc", feature = "extra_header"))]
-pub fn mmtk_update_request_stats<VM: VMBinding>(_mmtk: &'static MMTK<VM>, tls: VMMutatorThread) {
+pub fn mmtk_update_request_stats<VM: VMBinding>(
+    _mmtk: &'static MMTK<VM>,
+    tls: VMMutatorThread,
+    server: bool,
+) {
     let mutator = VM::VMActivePlan::mutator(tls);
     let stats = *mutator.request_stats;
     crate::scheduler::thread_local_gc_work::REQUESTS_STATS
         .lock()
         .unwrap()
         .push(stats);
+    if server {
+        use crate::REQUEST_SCOPE_SERVER_ALLOCATION_COUNT;
+        use crate::REQUEST_SCOPE_SERVER_ALLOCATION_SIZE;
+        REQUEST_SCOPE_SERVER_ALLOCATION_SIZE
+            .fetch_add(stats.bytes_allocated as usize, Ordering::SeqCst);
+        REQUEST_SCOPE_SERVER_ALLOCATION_COUNT
+            .fetch_add(stats.objects_allocated as usize, Ordering::SeqCst);
+    }
 
     mutator.request_stats.reset();
 }

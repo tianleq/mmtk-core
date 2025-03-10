@@ -749,8 +749,7 @@ pub fn harness_begin<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
             use crate::REQUEST_SCOPE_ALLOCATION_SIZE;
             use crate::REQUEST_SCOPE_PUBLICATION_COUNT;
             use crate::REQUEST_SCOPE_PUBLICATION_SIZE;
-            use crate::REQUEST_SCOPE_SERVER_ALLOCATION_COUNT;
-            use crate::REQUEST_SCOPE_SERVER_ALLOCATION_SIZE;
+
             use std::sync::atomic::Ordering::Release;
 
             ALLOCATION_COUNT.store(0, Release);
@@ -762,8 +761,6 @@ pub fn harness_begin<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
             REQUEST_SCOPE_ALLOCATION_SIZE.store(0, Release);
             REQUEST_SCOPE_PUBLICATION_COUNT.store(0, Release);
             REQUEST_SCOPE_PUBLICATION_SIZE.store(0, Release);
-            REQUEST_SCOPE_SERVER_ALLOCATION_COUNT.store(0, Release);
-            REQUEST_SCOPE_SERVER_ALLOCATION_SIZE.store(0, Release);
         }
         #[cfg(feature = "extra_header")]
         {
@@ -1177,12 +1174,16 @@ pub fn request_starting<VM: VMBinding>(mmtk: &'static MMTK<VM>) {
         use crate::REQUEST_SCOPE_ALLOCATION_SIZE;
         use crate::REQUEST_SCOPE_PUBLICATION_COUNT;
         use crate::REQUEST_SCOPE_PUBLICATION_SIZE;
+        use crate::REQUEST_SCOPE_SERVER_ALLOCATION_COUNT;
+        use crate::REQUEST_SCOPE_SERVER_ALLOCATION_SIZE;
         use std::sync::atomic::Ordering::Release;
 
         REQUEST_SCOPE_ALLOCATION_COUNT.store(0, Release);
         REQUEST_SCOPE_ALLOCATION_SIZE.store(0, Release);
         REQUEST_SCOPE_PUBLICATION_COUNT.store(0, Release);
         REQUEST_SCOPE_PUBLICATION_SIZE.store(0, Release);
+        REQUEST_SCOPE_SERVER_ALLOCATION_COUNT.store(0, Release);
+        REQUEST_SCOPE_SERVER_ALLOCATION_SIZE.store(0, Release);
     }
     mmtk.request_starting();
 }

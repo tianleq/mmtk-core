@@ -309,7 +309,7 @@ impl Stats {
             );
 
             println!(
-                "request scope server bytes/objects: {}/{}",
+                "request scope server side bytes/objects: {}/{}",
                 REQUEST_SCOPE_SERVER_ALLOCATION_SIZE.load(std::sync::atomic::Ordering::Acquire),
                 REQUEST_SCOPE_SERVER_ALLOCATION_COUNT.load(std::sync::atomic::Ordering::Acquire),
             );

@@ -377,16 +377,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         object: ObjectReference,
         _mutator: &crate::Mutator<VM>,
     ) -> ThreadlocalTracedObjectType {
-        // use crate::plan::VectorQueue;
-        // // This is a hack,
-        // let mut queue = VectorQueue::new();
-        // let new_object = self.trace_object(&mut queue, object);
-        // if queue.is_empty() {
-        //     ThreadlocalTracedObjectType::Scanned(new_object)
-        // } else {
-        //     ThreadlocalTracedObjectType::ToBeScanned(new_object)
-        // }
-
         // during defrag mutator, tracing los object should do the same thing as normal trace
         self.trace_object_impl(object)
     }

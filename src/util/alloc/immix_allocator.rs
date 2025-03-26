@@ -1076,7 +1076,7 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
 impl<VM: VMBinding> ImmixAllocator<VM> {
     pub(crate) fn new(
         tls: VMThread,
-        _mutator_id: u32,
+        #[cfg(feature = "thread_local_gc")] _mutator_id: u32,
         space: Option<&'static dyn Space<VM>>,
         context: Arc<AllocatorContext<VM>>,
         copy: bool,

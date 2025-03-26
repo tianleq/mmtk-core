@@ -9,8 +9,11 @@ use crate::util::alloc::Allocator;
 use crate::util::{Address, ObjectReference};
 use crate::util::{VMMutatorThread, VMWorkerThread};
 use crate::vm::VMBinding;
+use crate::MMTK;
 
 use enum_map::EnumMap;
+
+use super::barriers::NoBarrier;
 
 pub(crate) type SpaceMapping<VM> = Vec<(AllocatorSelector, &'static dyn Space<VM>)>;
 
@@ -94,6 +97,84 @@ impl<VM: VMBinding> std::fmt::Debug for MutatorConfig<VM> {
     }
 }
 
+/// Used to build a mutator struct
+pub struct MutatorBuilder<VM: VMBinding> {
+    barrier: Box<dyn Barrier<VM>>,
+    /// The mutator thread that is bound with this Mutator struct.
+    mutator_tls: VMMutatorThread,
+    mmtk: &'static MMTK<VM>,
+    config: MutatorConfig<VM>,
+    #[cfg(feature = "thread_local_gc")]
+    mutator_id: u32,
+    #[cfg(feature = "thread_local_gc")]
+    thread_local_gc_status: u32,
+    #[cfg(feature = "thread_local_gc")]
+    finalizable_candidates:
+        Box<Vec<<VM::VMReferenceGlue as crate::vm::ReferenceGlue<VM>>::FinalizableType>>,
+    #[cfg(feature = "thread_local_gc_copying")]
+    local_allocation_size: usize
+}
+
+impl<VM: VMBinding> MutatorBuilder<VM> {
+    pub fn new(
+        mutator_tls: VMMutatorThread,
+        mmtk: &'static MMTK<VM>,
+        config: MutatorConfig<VM>,
+    ) -> Self {
+        MutatorBuilder {
+            barrier: Box::new(NoBarrier),
+            mutator_tls,
+            mmtk,
+            config,
+            #[cfg(feature = "thread_local_gc")]
+            mutator_id: 0,
+            #[cfg(feature = "thread_local_gc")]
+            thread_local_gc_status: 0,
+            #[cfg(feature = "thread_local_gc")]
+            finalizable_candidates: Box::new(Vec::new()),
+            #[cfg(feature = "thread_local_gc_copying")]
+            local_allocation_size: 0,
+        }
+    }
+
+    pub fn barrier(mut self, barrier: Box<dyn Barrier<VM>>) -> Self {
+        self.barrier = barrier;
+        self
+    }
+
+    pub fn mutator_id(mut self, mutator_id: u32) -> Self {
+        self.mutator_id = mutator_id;
+        self
+    }
+
+    pub fn build(self) -> Mutator<VM> {
+        Mutator {
+            allocators: Allocators::<VM>::new(
+                self.mutator_tls,
+                #[cfg(feature = "thread_local_gc")]
+                self.mutator_id,
+                self.mmtk,
+                &self.config.space_mapping,
+            ),
+            barrier: self.barrier,
+            mutator_tls: self.mutator_tls,
+            plan: self.mmtk.get_plan(),
+            config: self.config,
+            mutator_id: self.mutator_id,
+            thread_local_gc_status: self.thread_local_gc_status,
+            finalizable_candidates: self.finalizable_candidates,
+            local_allocation_size: self.local_allocation_size,
+            #[cfg(any(
+                feature = "debug_thread_local_gc_copying",
+                feature = "debug_publish_object"
+            ))]
+            request_id: 0,
+            #[cfg(feature = "debug_thread_local_gc_copying")]
+            stats: Box::new(crate::util::LocalGCStatistics::default()),
+        }
+    }
+}
+
 /// A mutator is a per-thread data structure that manages allocations and barriers. It is usually highly coupled with the language VM.
 /// It is recommended for MMTk users 1) to have a mutator struct of the same layout in the thread local storage that can be accessed efficiently,
 /// and 2) to implement fastpath allocation and barriers for the mutator in the VM side.
@@ -110,6 +191,7 @@ pub struct Mutator<VM: VMBinding> {
     pub mutator_tls: VMMutatorThread,
     pub(crate) plan: &'static dyn Plan<VM = VM>,
     pub(crate) config: MutatorConfig<VM>,
+    #[cfg(feature = "thread_local_gc")]
     pub mutator_id: u32,
     #[cfg(feature = "thread_local_gc")]
     pub thread_local_gc_status: u32,

@@ -15,9 +15,9 @@ use crate::plan::mutator_context::generic_thread_local_prepare;
 use crate::plan::mutator_context::generic_thread_local_release;
 use crate::plan::mutator_context::unreachable_prepare_func;
 use crate::plan::mutator_context::Mutator;
+use crate::plan::mutator_context::MutatorBuilder;
 use crate::plan::mutator_context::MutatorConfig;
 use crate::plan::AllocationSemantics;
-use crate::util::alloc::allocators::Allocators;
 use crate::util::alloc::BumpAllocator;
 use crate::util::{VMMutatorThread, VMWorkerThread};
 use crate::vm::VMBinding;
@@ -60,27 +60,10 @@ pub fn create_gencopy_mutator<VM: VMBinding>(
         thread_local_defrag_prepare_func: &generic_thread_local_defrag_prepare,
     };
 
-    Mutator {
-        allocators: Allocators::<VM>::new(mutator_tls, 0, mmtk, &config.space_mapping),
-        barrier: Box::new(ObjectBarrier::new(GenObjectBarrierSemantics::new(
-            mmtk, gencopy,
-        ))),
-        mutator_tls,
-        config,
-        plan: gencopy,
-        mutator_id: 0,
-        #[cfg(feature = "thread_local_gc")]
-        thread_local_gc_status: 0,
-        #[cfg(feature = "thread_local_gc")]
-        finalizable_candidates: Box::new(Vec::new()),
-        #[cfg(any(
-            feature = "debug_thread_local_gc_copying",
-            feature = "debug_publish_object"
-        ))]
-        request_id: 0,
-        #[cfg(feature = "debug_thread_local_gc_copying")]
-        stats: Box::new(crate::util::LocalGCStatistics::default()),
-        #[cfg(feature = "thread_local_gc_copying")]
-        local_allocation_size: 0,
-    }
+    let builder = MutatorBuilder::new(mutator_tls, mmtk, config);
+    builder
+        .barrier(Box::new(ObjectBarrier::new(
+            GenObjectBarrierSemantics::new(mmtk, gencopy),
+        )))
+        .build()
 }

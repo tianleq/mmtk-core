@@ -17,12 +17,13 @@ use crate::plan::mutator_context::generic_thread_local_prepare;
 use crate::plan::mutator_context::generic_thread_local_release;
 use crate::plan::mutator_context::unreachable_prepare_func;
 use crate::plan::mutator_context::Mutator;
+use crate::plan::mutator_context::MutatorBuilder;
 use crate::plan::mutator_context::MutatorConfig;
 use crate::plan::mutator_context::{
     create_allocator_mapping, create_space_mapping, ReservedAllocators,
 };
 use crate::plan::AllocationSemantics;
-use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
+use crate::util::alloc::allocators::AllocatorSelector;
 use crate::util::alloc::BumpAllocator;
 use crate::util::{VMMutatorThread, VMWorkerThread};
 use crate::vm::VMBinding;
@@ -87,6 +88,7 @@ pub fn create_ss_mutator<VM: VMBinding>(
         thread_local_defrag_prepare_func: &generic_thread_local_defrag_prepare,
     };
 
+    #[cfg(feature = "debug_publish_object")]
     let mutator_id = crate::util::MUTATOR_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);
     #[cfg(feature = "public_bit")]
     let barrier = Box::new(PublicObjectMarkingBarrier::new(
@@ -101,26 +103,11 @@ pub fn create_ss_mutator<VM: VMBinding>(
     #[cfg(not(feature = "public_bit"))]
     let barrier = Box::new(NoBarrier);
 
-    Mutator {
-        allocators: Allocators::<VM>::new(mutator_tls, 0, mmtk, &config.space_mapping),
-        barrier,
-        mutator_tls,
-        config,
-        plan: ss,
-        mutator_id,
-        #[cfg(feature = "thread_local_gc")]
-        thread_local_gc_status: 0,
-        #[cfg(feature = "thread_local_gc")]
-        finalizable_candidates: Box::new(Vec::new()),
+    let builder = MutatorBuilder::new(mutator_tls, mmtk, config);
 
-        #[cfg(any(
-            feature = "debug_thread_local_gc_copying",
-            feature = "debug_publish_object"
-        ))]
-        request_id: 0,
-        #[cfg(feature = "debug_thread_local_gc_copying")]
-        stats: Box::new(crate::util::LocalGCStatistics::default()),
-        #[cfg(feature = "thread_local_gc_copying")]
-        local_allocation_size: 0,
+    if cfg!(feature = "public_bit") {
+        builder.barrier(barrier).build()
+    } else {
+        builder.build()
     }
 }

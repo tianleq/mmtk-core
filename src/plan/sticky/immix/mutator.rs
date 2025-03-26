@@ -11,9 +11,9 @@ use crate::plan::mutator_context::generic_thread_local_post_copy;
 use crate::plan::mutator_context::generic_thread_local_prepare;
 #[cfg(feature = "thread_local_gc")]
 use crate::plan::mutator_context::generic_thread_local_release;
+use crate::plan::mutator_context::MutatorBuilder;
 use crate::plan::mutator_context::{create_space_mapping, unreachable_prepare_func, MutatorConfig};
 use crate::plan::sticky::immix::global::StickyImmix;
-use crate::util::alloc::allocators::Allocators;
 use crate::util::alloc::AllocatorSelector;
 use crate::util::opaque_pointer::VMWorkerThread;
 use crate::util::VMMutatorThread;
@@ -53,29 +53,10 @@ pub fn create_stickyimmix_mutator<VM: VMBinding>(
         thread_local_defrag_prepare_func: &generic_thread_local_defrag_prepare,
     };
 
-    Mutator {
-        allocators: Allocators::<VM>::new(mutator_tls, 0, mmtk, &config.space_mapping),
-        barrier: Box::new(ObjectBarrier::new(GenObjectBarrierSemantics::new(
-            mmtk,
-            stickyimmix,
-        ))),
-        mutator_tls,
-        config,
-        plan: mmtk.get_plan(),
-        mutator_id: 0,
-        #[cfg(feature = "thread_local_gc")]
-        thread_local_gc_status: 0,
-        #[cfg(feature = "thread_local_gc")]
-        finalizable_candidates: Box::new(Vec::new()),
-
-        #[cfg(any(
-            feature = "debug_thread_local_gc_copying",
-            feature = "debug_publish_object"
-        ))]
-        request_id: 0,
-        #[cfg(feature = "debug_thread_local_gc_copying")]
-        stats: Box::new(crate::util::LocalGCStatistics::default()),
-        #[cfg(feature = "thread_local_gc_copying")]
-        local_allocation_size: 0,
-    }
+    let builder = MutatorBuilder::new(mutator_tls, mmtk, config);
+    builder
+        .barrier(Box::new(ObjectBarrier::new(
+            GenObjectBarrierSemantics::new(mmtk, stickyimmix),
+        )))
+        .build()
 }

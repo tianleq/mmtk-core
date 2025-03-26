@@ -491,7 +491,7 @@ impl<VM: VMBinding> Immix<VM> {
             }
 
             ThreadlocalRelease::<VM>::new(tls).execute();
-            let mut end_of_thread_local_gc = EndOfThreadLocalGC { tls };
+            let mut end_of_thread_local_gc = EndOfThreadLocalGC { _tls: tls };
 
             end_of_thread_local_gc.execute(mmtk);
         } else {
@@ -519,7 +519,7 @@ impl<VM: VMBinding> Immix<VM> {
                 .do_finalization();
             }
             ThreadlocalRelease::<VM>::new(tls).execute();
-            let mut end_of_thread_local_gc = EndOfThreadLocalGC { tls };
+            let mut end_of_thread_local_gc = EndOfThreadLocalGC { _tls: tls };
 
             end_of_thread_local_gc.execute(mmtk);
         }

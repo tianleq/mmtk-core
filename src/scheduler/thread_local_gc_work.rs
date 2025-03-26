@@ -132,7 +132,7 @@ impl<VM: VMBinding> ThreadlocalRelease<VM> {
 }
 
 pub struct EndOfThreadLocalGC {
-    pub tls: VMMutatorThread,
+    pub _tls: VMMutatorThread,
 }
 
 impl EndOfThreadLocalGC {

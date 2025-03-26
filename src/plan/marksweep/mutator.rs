@@ -1,4 +1,3 @@
-use crate::plan::barriers::NoBarrier;
 use crate::plan::marksweep::MarkSweep;
 use crate::plan::mutator_context::create_allocator_mapping;
 #[cfg(feature = "thread_local_gc_copying")]
@@ -12,12 +11,13 @@ use crate::plan::mutator_context::generic_thread_local_prepare;
 #[cfg(feature = "thread_local_gc")]
 use crate::plan::mutator_context::generic_thread_local_release;
 use crate::plan::mutator_context::Mutator;
+use crate::plan::mutator_context::MutatorBuilder;
 use crate::plan::mutator_context::MutatorConfig;
 use crate::plan::mutator_context::ReservedAllocators;
 use crate::plan::mutator_context::SpaceMapping;
 use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
-use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
+use crate::util::alloc::allocators::AllocatorSelector;
 use crate::util::{VMMutatorThread, VMWorkerThread};
 use crate::vm::VMBinding;
 use crate::MMTK;
@@ -141,26 +141,6 @@ pub fn create_ms_mutator<VM: VMBinding>(
         thread_local_defrag_prepare_func: &generic_thread_local_defrag_prepare,
     };
 
-    Mutator {
-        allocators: Allocators::<VM>::new(mutator_tls, 0, mmtk, &config.space_mapping),
-        barrier: Box::new(NoBarrier),
-        mutator_tls,
-        config,
-        plan: mmtk.get_plan(),
-        mutator_id: 0,
-        #[cfg(feature = "thread_local_gc")]
-        thread_local_gc_status: 0,
-        #[cfg(feature = "thread_local_gc")]
-        finalizable_candidates: Box::new(Vec::new()),
-
-        #[cfg(any(
-            feature = "debug_thread_local_gc_copying",
-            feature = "debug_publish_object"
-        ))]
-        request_id: 0,
-        #[cfg(feature = "debug_thread_local_gc_copying")]
-        stats: Box::new(crate::util::LocalGCStatistics::default()),
-        #[cfg(feature = "thread_local_gc_copying")]
-        local_allocation_size: 0,
-    }
+    let builder = MutatorBuilder::new(mutator_tls, mmtk, config);
+    builder.build()
 }

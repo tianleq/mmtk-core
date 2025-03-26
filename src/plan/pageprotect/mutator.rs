@@ -12,15 +12,16 @@ use crate::plan::mutator_context::generic_thread_local_release;
 use crate::plan::mutator_context::no_op_release_func;
 use crate::plan::mutator_context::unreachable_prepare_func;
 use crate::plan::mutator_context::Mutator;
+use crate::plan::mutator_context::MutatorBuilder;
 use crate::plan::mutator_context::MutatorConfig;
 use crate::plan::mutator_context::{
     create_allocator_mapping, create_space_mapping, ReservedAllocators,
 };
 use crate::plan::AllocationSemantics;
-use crate::util::alloc::allocators::{AllocatorSelector, Allocators};
+use crate::util::alloc::allocators::AllocatorSelector;
+use crate::util::opaque_pointer::VMMutatorThread;
 use crate::vm::VMBinding;
 use crate::MMTK;
-use crate::{plan::barriers::NoBarrier, util::opaque_pointer::VMMutatorThread};
 use enum_map::EnumMap;
 
 const RESERVED_ALLOCATORS: ReservedAllocators = ReservedAllocators {
@@ -64,26 +65,6 @@ pub fn create_pp_mutator<VM: VMBinding>(
         thread_local_defrag_prepare_func: &generic_thread_local_defrag_prepare,
     };
 
-    Mutator {
-        allocators: Allocators::<VM>::new(mutator_tls, 0, mmtk, &config.space_mapping),
-        barrier: Box::new(NoBarrier),
-        mutator_tls,
-        config,
-        plan: page,
-        mutator_id: 0,
-        #[cfg(feature = "thread_local_gc")]
-        thread_local_gc_status: 0,
-        #[cfg(feature = "thread_local_gc")]
-        finalizable_candidates: Box::new(Vec::new()),
-
-        #[cfg(any(
-            feature = "debug_thread_local_gc_copying",
-            feature = "debug_publish_object"
-        ))]
-        request_id: 0,
-        #[cfg(feature = "debug_thread_local_gc_copying")]
-        stats: Box::new(crate::util::LocalGCStatistics::default()),
-        #[cfg(feature = "thread_local_gc_copying")]
-        local_allocation_size: 0,
-    }
+    let builder = MutatorBuilder::new(mutator_tls, mmtk, config);
+    builder.build()
 }

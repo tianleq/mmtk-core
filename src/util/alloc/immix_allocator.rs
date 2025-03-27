@@ -575,7 +575,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             if block.thread_local_can_sweep(self.space, mark_hisogram, line_mark_state) {
                 // release free blocks for now, may cache those blocks locally
 
-                debug_assert!(block.is_block_published() == false);
+                debug_assert!(!block.is_block_published());
                 self.local_free_blocks.push(block);
                 #[cfg(feature = "debug_thread_local_gc_copying")]
                 {
@@ -720,12 +720,11 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         // need to deinit those blocks, otherwise, a subsequent global
         // gc will double free those blocks
         self.space
-            .thread_local_release_blocks(self.local_free_blocks.drain(..).map(|block| {
+            .thread_local_release_blocks(self.local_free_blocks.drain(..).inspect(|block| {
                 #[cfg(debug_assertions)]
                 block.clear_owner();
                 block.reset_metadata();
                 block.deinit();
-                block
             }));
         #[cfg(feature = "thread_local_gc_copying")]
         {
@@ -785,7 +784,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     pub fn thread_local_copy_reserve_exhausted(&mut self, size: usize) -> bool {
         debug_assert!(self.copy && VM::VMActivePlan::is_mutator(self.tls));
         if self.local_copy_reserve_exhausted {
-            return true;
+            true
         } else {
             if self.local_free_blocks.is_empty() {
                 let bump_pointer = if size > Line::BYTES {
@@ -828,14 +827,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
             if get_maximum_aligned_size::<VM>(size, align) > Line::BYTES {
                 // Size larger than a line: do large allocation
-                let rtn = self.overflow_alloc(size, align, offset); // overflow_allow will never use reusable blocks
-
-                rtn
+                self.overflow_alloc(size, align, offset) // overflow_allow will never use reusable blocks
             } else {
                 // Size smaller than a line: fit into holes
-                let rtn = self.alloc_slow_hot(size, align, offset, clean_page_only);
-
-                rtn
+                self.alloc_slow_hot(size, align, offset, clean_page_only)
             }
         } else {
             // Simple bump allocation.
@@ -1086,7 +1081,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         // Local line mark state has to be in line with global line mark state, cannot use the default
         // value GLOBAL_RESET_MARK_STATE as mutator threads can be spawned at any time
         // let _global_line_mark_state = _space.line_mark_state.load(atomic::Ordering::Acquire);
-        return ImmixAllocator {
+        ImmixAllocator {
             tls,
             #[cfg(feature = "thread_local_gc")]
             mutator_id: _mutator_id,
@@ -1111,7 +1106,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             local_free_blocks: Box::new(Vec::new()),
             #[cfg(feature = "thread_local_gc")]
             local_reusable_blocks: Box::new(ReusableBlocks::new()),
-        };
+        }
     }
 
     pub(crate) fn immix_space(&self) -> &'static ImmixSpace<VM> {
@@ -1443,7 +1438,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     // this is collector
                     // only use gobal reusable blocks in global gc
                     debug_assert!(self.copy);
-                    debug_assert!(self.request_for_large == false);
+                    debug_assert!(!self.request_for_large);
                     self.acquire_public_recyclable_block().is_some()
                 }
                 Some(ImmixAllocSemantics::Private) => {
@@ -1504,7 +1499,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         );
                         // add local reusable block to local block list
                         #[cfg(debug_assertions)]
-                        debug_assert!(exists_in_local == false);
+                        debug_assert!(!exists_in_local);
                         self.local_blocks.push(block);
                         // block.set_hole_size(0);
                         return true;
@@ -1553,11 +1548,11 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     debug_assert!(block.is_block_sparse() == false);
                     debug_assert!(block.owner() == Block::ANONYMOUS_OWNER);
                     debug_assert!(
-                        block.is_block_dirty() == false,
+                        !block.is_block_dirty(),
                         "global reusable block: {:?} has dirty bit set",
                         block
                     );
-                    debug_assert!(block.get_state().is_reusable() == false);
+                    debug_assert!(!block.get_state().is_reusable());
                 }
 
                 // Set the hole-searching cursor to the start of this block.

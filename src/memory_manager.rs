@@ -960,8 +960,6 @@ pub fn mmtk_publish_object<VM: VMBinding>(
             &mut closure,
         );
         closure.do_closure();
-    } else {
-        return;
     }
 }
 
@@ -1078,11 +1076,11 @@ pub fn mmtk_handle_user_triggered_global_gc<VM: VMBinding>(mmtk: &MMTK<VM>, tls:
 }
 
 pub fn compute_allocator_mem_layout_checksum<VM: VMBinding>() -> usize {
-    return {
+    {
         std::mem::size_of::<ImmixAllocator<VM>>()
             ^ std::mem::size_of::<BumpAllocator<VM>>()
             ^ std::mem::size_of::<LargeObjectAllocator<VM>>()
-    };
+    }
 }
 
 pub fn compute_mutator_mem_layout_checksum<VM: VMBinding>() -> usize {

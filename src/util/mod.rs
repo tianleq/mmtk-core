@@ -138,7 +138,7 @@ pub(crate) struct LocalGCStatistics {
     pub number_of_free_lines_in_local_reusable_blocks: usize,
 }
 
-#[cfg(any(feature = "debug_thread_local_gc_copying",))]
+#[cfg(feature = "debug_thread_local_gc_copying")]
 pub(crate) static TOTAL_ALLOCATION_BYTES: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 

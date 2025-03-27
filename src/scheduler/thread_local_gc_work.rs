@@ -57,7 +57,6 @@ impl<VM: VMBinding> ExecuteThreadlocalCollection<VM> {
 }
 
 /// The thread-local GC Preparation Work
-
 /// We should only have one such work packet per GC, before any actual GC work starts.
 /// We assume this work packet is the only running work packet that accesses plan, and there should
 /// be no other concurrent work packet that accesses plan (read or write). Otherwise, there may
@@ -103,7 +102,6 @@ impl<VM: VMBinding> ThreadlocalDefragPrepare<VM> {
 }
 
 /// The thread local GC release Work
-
 /// We should only have one such work packet per GC, after all actual GC work ends.
 /// We assume this work packet is the only running work packet that accesses plan, and there should
 /// be no other concurrent work packet that accesses plan (read or write). Otherwise, there may
@@ -157,7 +155,7 @@ where
     phantom: PhantomData<Closure>,
 }
 
-impl<'a, VM, Closure> ScanMutator<VM, Closure>
+impl<VM, Closure> ScanMutator<VM, Closure>
 where
     VM: VMBinding,
     Closure: ThreadlocalObjectGraphTraversalClosure<VM>,
@@ -206,7 +204,7 @@ where
     }
 }
 
-impl<'a, VM, Closure> ThreadlocalObjectGraphTraversal<VM, Closure>
+impl<VM, Closure> ThreadlocalObjectGraphTraversal<VM, Closure>
 where
     VM: VMBinding,
     Closure: ThreadlocalObjectGraphTraversalClosure<VM>,
@@ -250,7 +248,7 @@ pub struct PlanThreadlocalObjectGraphTraversalClosure<
     worker: Option<*mut GCWorker<VM>>,
 }
 
-impl<'a, VM, P, const KIND: TraceKind> ThreadlocalObjectGraphTraversalClosure<VM>
+impl<VM, P, const KIND: TraceKind> ThreadlocalObjectGraphTraversalClosure<VM>
     for PlanThreadlocalObjectGraphTraversalClosure<VM, P, KIND>
 where
     VM: VMBinding,
@@ -273,7 +271,7 @@ where
                     source_buffer.push(slot.load());
                 }
             }
-            slot_buffer = Vec::from(roots);
+            slot_buffer = roots;
         }
 
         Self {
@@ -294,8 +292,7 @@ where
         );
         let mutator = VM::VMActivePlan::mutator(self.tls);
 
-        while !self.slot_buffer.is_empty() {
-            let slot = self.slot_buffer.pop().unwrap();
+        while let Some(slot) = self.slot_buffer.pop() {
             #[cfg(feature = "debug_publish_object")]
             let _source = self.source_buffer.pop().unwrap();
             let _object = slot.load();
@@ -410,7 +407,7 @@ where
         let mutator = VM::VMActivePlan::mutator(self.tls);
         debug_assert!(self.worker.is_none());
 
-        let new_object = match self.plan.thread_local_trace_object::<KIND>(
+        match self.plan.thread_local_trace_object::<KIND>(
             mutator,
             #[cfg(feature = "debug_publish_object")]
             object,
@@ -424,9 +421,7 @@ where
                     object
                 );
             }
-        };
-
-        new_object
+        }
     }
 }
 
@@ -435,7 +430,7 @@ impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIN
 {
     #[cfg(not(feature = "debug_publish_object"))]
     fn visit_slot(&mut self, slot: VM::VMSlot) {
-        if let Some(_) = slot.load() {
+        if slot.load().is_some() {
             self.slot_buffer.push(slot);
         }
     }

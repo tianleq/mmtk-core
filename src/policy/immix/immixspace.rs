@@ -1290,7 +1290,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 object_forwarding::clear_forwarding_bits::<VM>(object);
                 ThreadlocalTracedObjectType::Scanned(object)
             } else {
-                debug_assert!(self.is_marked(object) == false);
+                debug_assert!(!self.is_marked(object));
 
                 let new_object = if self.defrag.space_exhausted() {
                     self.attempt_mark(object, self.mark_state);
@@ -1328,7 +1328,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                         // We are forwarding objects. When the copy allocator allocates the block, it should
                         // mark the block. So we do not need to explicitly mark it here.
                         let copy_context = _worker.get_copy_context_mut();
-                        let new_object = object_forwarding::forward_object::<VM>(
+                        object_forwarding::forward_object::<VM>(
                             object,
                             semantics,
                             copy_context,
@@ -1345,8 +1345,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                                     _new_object,
                                 );
                             },
-                        );
-                        new_object
+                        )
                     };
 
                     #[cfg(feature = "vo_bit")]
@@ -1432,8 +1431,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     #[cfg(feature = "thread_local_gc")]
     pub fn thread_local_mark_lines(&self, object: ObjectReference, local_state: u8) {
-        debug_assert!(!super::BLOCK_ONLY);
-
         Line::thread_local_mark_lines_for_object::<VM>(object, local_state);
     }
 
@@ -1849,9 +1846,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
             {
                 if KIND == TRACE_THREAD_LOCAL_COPY {
                     // local gc will never mark a public object
-                    debug_assert!(
-                        crate::util::metadata::public_bit::is_public::<VM>(object) == false
-                    );
+                    debug_assert!(!crate::util::metadata::public_bit::is_public::<VM>(object));
                 } else if KIND == TRACE_THREAD_LOCAL_DEFRAG {
                     // During defrag mutator, public object is evacuated by the collector (using collector's allocator)
                     // so check the owner of the block

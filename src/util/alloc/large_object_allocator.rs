@@ -136,9 +136,8 @@ impl<VM: VMBinding> Allocator<VM> for LargeObjectAllocator<VM> {
         // otherwisse, those objects are leaked and can no longer be freed
 
         use itertools::Itertools;
-        self.space.flush_thread_local_los_objects(
-            &self.local_los_objects.drain().into_iter().collect_vec(),
-        );
+        self.space
+            .flush_thread_local_los_objects(&self.local_los_objects.drain().collect_vec());
     }
 }
 

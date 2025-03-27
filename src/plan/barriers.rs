@@ -107,7 +107,6 @@ pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
 
     /// Object arraycopy write slow-path call.
     /// This can be called either before or after the store, depend on the concrete barrier implementation.
-
     fn object_array_copy_slow(
         &mut self,
         _src_base: ObjectReference,
@@ -355,7 +354,7 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
         target: Option<ObjectReference>,
     ) {
         debug_assert!(is_public::<S::VM>(src), "source check is broken");
-        debug_assert!(!target.is_none(), "target null check is broken");
+        debug_assert!(target.is_some(), "target null check is broken");
         debug_assert!(
             !is_public::<S::VM>(target.unwrap()),
             "target check is broken"
@@ -535,8 +534,10 @@ impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM>
             // although src array is private, it may contain
             // public objects, so need to rule out those public
             // objects
-            if !object.is_none() && !is_public::<VM>(object.unwrap()) {
-                self.trace_public_object(_dst_base, object.unwrap())
+            if let Some(obj) = object {
+                if !is_public::<VM>(obj) {
+                    self.trace_public_object(_dst_base, obj)
+                }
             }
         }
     }

@@ -173,7 +173,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     fn defrag_mutator_required(&self, tls: VMMutatorThread) -> bool {
         use crate::vm::ActivePlan;
         use std::borrow::Borrow;
-        if self.defrag_mutator.load(Ordering::Acquire) == false {
+        if !self.defrag_mutator.load(Ordering::Acquire) {
             return false;
         }
         let mutator = VM::VMActivePlan::mutator(tls);
@@ -186,15 +186,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         .downcast_ref::<crate::util::alloc::ImmixAllocator<VM>>()
         .unwrap();
         if immix_allocator.local_reusable_blocks.len() >= DEFRAG_MUTATOR_THRESHOLD {
-            match self.defrag_mutator.compare_exchange(
-                true,
-                false,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
-                Ok(_) => true,
-                Err(_) => false,
-            }
+            self.defrag_mutator
+                .compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
 
             // true
         } else {
@@ -239,10 +233,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 options.get_thread_local_heap_size() / crate::util::constants::BYTES_IN_PAGE,
                 options.get_max_concurrent_local_gc() as usize
                     * options.get_max_local_copy_reserve() as usize
-                    * Block::PAGES as usize,
+                    * Block::PAGES,
             );
         }
-        return reserved;
+        reserved
     }
 
     fn get_used_pages(&self) -> usize {

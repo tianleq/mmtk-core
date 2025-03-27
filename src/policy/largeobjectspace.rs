@@ -579,7 +579,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                 false
             } else {
                 let mutator_id = metadata & BOTTOM_HALF_MASK;
-                let m = (usize::try_from(value).unwrap() << SHIFT) | mutator_id;
+                let m = (usize::from(value) << SHIFT) | mutator_id;
                 metadata_address.store(m);
                 true
             }
@@ -606,8 +606,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
 
     #[cfg(feature = "thread_local_gc")]
     pub fn is_live_in_thread_local_gc(&self, object: ObjectReference) -> bool {
-        let alive = self.test_thread_local_mark(object, MARK_BIT);
-        alive
+        self.test_thread_local_mark(object, MARK_BIT)
     }
 
     /// Test if the object's mark bit is the same as the given value. If it is not the same,

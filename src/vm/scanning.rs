@@ -123,7 +123,6 @@ pub trait RootsWorkFactory<SL: Slot>: Clone + Send + 'static {
     //     / transitive pinning / non-pinning) of each function.
     // 3.  Introduce a function to give the VM binding a way to update root edges without
     //     representing the roots as slots.  See: https://github.com/mmtk/mmtk-core/issues/710
-
     /// Create work packets to handle non-pinned roots.  The roots are represented as slots so that
     /// they can be updated.
     ///

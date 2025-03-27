@@ -326,7 +326,7 @@ impl<VM: VMBinding> CopySpace<VM> {
         trace!("Unprotect {:x} {:x}", start, start + extent);
     }
 
-    #[cfg(all(feature = "debug_publish_object"))]
+    #[cfg(feature = "debug_publish_object")]
     pub fn is_object_published(&self, object: ObjectReference) -> bool {
         // read the public bit of the old object first
         let is_published = crate::util::metadata::public_bit::is_public::<VM>(object);

@@ -13,19 +13,16 @@ pub const SHIFT: usize = 32;
 // From the cell address, `cell - GC_EXTRA_HEADER_WORD` is where we store the header forwarding pointer.
 
 /// Get the address for header metadata
-
 fn extra_header_metadata_address<VM: VMBinding>(object: ObjectReference) -> Address {
     object.to_object_start::<VM>() - VM::EXTRA_HEADER_BYTES
 }
 
 /// Get header forwarding pointer for an object
-
 pub fn get_extra_header_metadata<VM: VMBinding, T: MetadataValue>(object: ObjectReference) -> T {
     unsafe { extra_header_metadata_address::<VM>(object).load::<T>() }
 }
 
 /// Store header forwarding pointer for an object
-
 pub fn store_extra_header_metadata<VM: VMBinding, T: MetadataValue>(
     object: ObjectReference,
     metadata: T,

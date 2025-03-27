@@ -287,7 +287,7 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
                     crate::util::conversions::page_align_down(refer.to_object_start::<VM>());
                 metadata_address.store(metadata);
                 // Store request_id|mutator_id into the extra header
-                #[cfg(all(feature = "debug_publish_object"))]
+                #[cfg(feature = "debug_publish_object")]
                 ((metadata_address + offset) as Address)
                     .store(metadata | self.request_id << object_extra_header_metadata::SHIFT);
                 debug_assert!(

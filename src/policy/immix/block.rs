@@ -694,7 +694,7 @@ impl Block {
                     #[cfg(debug_assertions)]
                     self.clear_owner();
                     self.reset_metadata();
-                    debug_assert!(self.is_block_published() == false);
+                    debug_assert!(!self.is_block_published());
                 }
                 #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
                 {

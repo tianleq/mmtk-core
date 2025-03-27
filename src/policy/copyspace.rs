@@ -273,15 +273,12 @@ impl<VM: VMBinding> CopySpace<VM> {
 
             #[cfg(feature = "public_bit")]
             {
-                let is_pubic = crate::util::metadata::public_bit::is_public::<VM>(object);
+                let is_pubic = crate::util::metadata::public_bit::is_public(object);
                 if is_pubic {
                     #[cfg(feature = "debug_publish_object")]
-                    crate::util::metadata::public_bit::set_public_bit::<VM>(
-                        new_object,
-                        Some(u32::MAX),
-                    );
+                    crate::util::metadata::public_bit::set_public_bit(new_object, Some(u32::MAX));
                     #[cfg(not(feature = "debug_publish_object"))]
-                    crate::util::metadata::public_bit::set_public_bit::<VM>(new_object);
+                    crate::util::metadata::public_bit::set_public_bit(new_object);
                 }
             }
 

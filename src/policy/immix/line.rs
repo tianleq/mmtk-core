@@ -198,7 +198,7 @@ impl Line {
             // multiple gc threads are trying to write the same byte value
             line.mark(state);
             // also publish lines if object is public
-            if crate::util::metadata::public_bit::is_public::<VM>(object) {
+            if crate::util::metadata::public_bit::is_public(object) {
                 // benign race here, line is shared by multiple objects, set 1 can occur concurrently
                 // during global gc phase
                 Line::LINE_PUBLICATION_TABLE.store_atomic::<u8>(

@@ -316,9 +316,9 @@ where
             ) {
                 Scanned(new_object) => {
                     #[cfg(feature = "debug_publish_object")]
-                    if crate::util::metadata::public_bit::is_public::<VM>(object) {
+                    if crate::util::metadata::public_bit::is_public(object) {
                         assert!(
-                            crate::util::metadata::public_bit::is_public::<VM>(new_object),
+                            crate::util::metadata::public_bit::is_public(new_object),
                             "public bit is corrupted. public obj: {} | private new_obj: {} ",
                             object,
                             new_object
@@ -342,9 +342,9 @@ where
             {
                 // in a local gc, public objects are not moved, so source is
                 // the exact object that needs to be looked at
-                if crate::util::metadata::public_bit::is_public::<VM>(source) {
+                if crate::util::metadata::public_bit::is_public(source) {
                     assert!(
-                        crate::util::metadata::public_bit::is_public::<VM>(new_object),
+                        crate::util::metadata::public_bit::is_public(new_object),
                         "public object: {:?} {:?} points to private object: {:?} {:?}",
                         _source,
                         crate::util::object_extra_header_metadata::get_extra_header_metadata::<
@@ -493,7 +493,7 @@ where
         {
             let reff: ObjectReference = f.get_reference();
 
-            if crate::util::metadata::public_bit::is_public::<VM>(reff) {
+            if crate::util::metadata::public_bit::is_public(reff) {
                 // public object is untouched, so nothing needs to be done other than adding it back
                 // mutator.finalizable_candidates.push(f);
                 continue;

@@ -24,6 +24,7 @@ pub struct LargeObjectAllocator<VM: VMBinding> {
     /// [`Space`](src/policy/space/Space) instance associated with this allocator instance.
     space: &'static LargeObjectSpace<VM>,
     context: Arc<AllocatorContext<VM>>,
+    #[allow(clippy::box_collection)]
     local_los_objects: Box<HashSet<ObjectReference>>,
 }
 
@@ -191,7 +192,7 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
         // Those public los objects have been added to the global tredmill
         // and are managed there.
         self.local_los_objects
-            .retain(|object| !crate::util::metadata::public_bit::is_public::<VM>(*object))
+            .retain(|object| !crate::util::metadata::public_bit::is_public(*object))
     }
 
     #[cfg(feature = "thread_local_gc")]
@@ -201,7 +202,7 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
         let mut live_objects = vec![];
         for object in self.local_los_objects.drain() {
             debug_assert!(
-                !crate::util::metadata::public_bit::is_public::<VM>(object),
+                !crate::util::metadata::public_bit::is_public(object),
                 "Public Object:{:?} found in local los set",
                 object
             );
@@ -241,7 +242,7 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
         let mut live_objects = vec![];
         for object in self.local_los_objects.drain() {
             debug_assert!(
-                !crate::util::metadata::public_bit::is_public::<VM>(object),
+                !crate::util::metadata::public_bit::is_public(object),
                 "Public Object:{:?} found in local los set",
                 object
             );

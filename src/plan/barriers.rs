@@ -317,9 +317,9 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
         target: Option<ObjectReference>,
     ) {
         // trace when store private to a public object
-        if is_public::<S::VM>(src) {
+        if is_public(src) {
             if let Some(object) = target {
-                if !is_public::<S::VM>(object) {
+                if !is_public(object) {
                     self.object_reference_write_slow(src, slot, target);
                 }
             }
@@ -328,7 +328,7 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
             {
                 // use crate::vm::ActivePlan;
                 if let Some(val) = target {
-                    if !is_public::<S::VM>(val) {
+                    if !is_public(val) {
                         // both source and target are private
                         // they should have the same owner
                         let source_owner = self.semantics.get_object_owner(src);
@@ -353,12 +353,9 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
         slot: <S::VM as VMBinding>::VMSlot,
         target: Option<ObjectReference>,
     ) {
-        debug_assert!(is_public::<S::VM>(src), "source check is broken");
+        debug_assert!(is_public(src), "source check is broken");
         debug_assert!(target.is_some(), "target null check is broken");
-        debug_assert!(
-            !is_public::<S::VM>(target.unwrap()),
-            "target check is broken"
-        );
+        debug_assert!(!is_public(target.unwrap()), "target check is broken");
         self.semantics
             .object_reference_write_slow(src, slot, target);
     }
@@ -373,8 +370,8 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
     ) {
         // Only do publication when the dst array is public and src array is private
         // a private array should not have public object as its elements
-        if is_public::<S::VM>(dst_base) {
-            if !is_public::<S::VM>(src_base) {
+        if is_public(dst_base) {
+            if !is_public(src_base) {
                 self.semantics
                     .object_array_copy_slow(src_base, dst_base, src, dst);
             }
@@ -425,12 +422,12 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
         dst: <S::VM as VMBinding>::VMMemorySlice,
     ) {
         debug_assert!(
-            is_public::<S::VM>(dst_base),
+            is_public(dst_base),
             "arraycopy slow path: destination array: {:?} is private",
             dst_base
         );
         debug_assert!(
-            !is_public::<S::VM>(src_base),
+            !is_public(src_base),
             "arraycopy slow path: source array: {:?} is public",
             src_base
         );
@@ -473,9 +470,9 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
             self.tls,
         );
         #[cfg(feature = "debug_publish_object")]
-        set_public_bit::<VM>(value, Some(self.mutator_id));
+        set_public_bit(value, Some(self.mutator_id));
         #[cfg(not(feature = "debug_publish_object"))]
-        set_public_bit::<VM>(value);
+        set_public_bit(value);
         #[cfg(feature = "thread_local_gc")]
         self.mmtk.get_plan().publish_object(
             value,
@@ -535,7 +532,7 @@ impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM>
             // public objects, so need to rule out those public
             // objects
             if let Some(obj) = object {
-                if !is_public::<VM>(obj) {
+                if !is_public(obj) {
                     self.trace_public_object(_dst_base, obj)
                 }
             }

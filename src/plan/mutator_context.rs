@@ -108,6 +108,7 @@ pub struct MutatorBuilder<VM: VMBinding> {
     mutator_id: u32,
     #[cfg(feature = "thread_local_gc")]
     thread_local_gc_status: u32,
+    #[allow(clippy::box_collection)]
     #[cfg(feature = "thread_local_gc")]
     finalizable_candidates:
         Box<Vec<<VM::VMReferenceGlue as crate::vm::ReferenceGlue<VM>>::FinalizableType>>,

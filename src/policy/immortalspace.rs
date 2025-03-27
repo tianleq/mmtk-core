@@ -257,11 +257,11 @@ impl<VM: VMBinding> ImmortalSpace<VM> {
     ) -> ThreadlocalTracedObjectType {
         #[cfg(feature = "vo_bit")]
         debug_assert!(
-            crate::util::metadata::vo_bit::is_vo_bit_set::<VM>(object),
+            crate::util::metadata::vo_bit::is_vo_bit_set(object),
             "{:x}: VO bit not set",
             object
         );
-        if crate::util::metadata::public_bit::is_public::<VM>(object) {
+        if crate::util::metadata::public_bit::is_public(object) {
             return ThreadlocalTracedObjectType::Scanned(object);
         }
         if self.mark_state.test_and_mark::<VM>(object) {

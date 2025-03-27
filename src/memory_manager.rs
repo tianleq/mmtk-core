@@ -930,7 +930,7 @@ pub fn mmtk_set_public_bit<VM: VMBinding>(_mmtk: &'static MMTK<VM>, object: Obje
     #[cfg(feature = "debug_publish_object")]
     crate::util::metadata::public_bit::set_public_bit::<VM>(object, None);
     #[cfg(not(feature = "debug_publish_object"))]
-    crate::util::metadata::public_bit::set_public_bit::<VM>(object);
+    crate::util::metadata::public_bit::set_public_bit(object);
     #[cfg(feature = "thread_local_gc")]
     _mmtk.get_plan().publish_object(object);
 }
@@ -941,7 +941,7 @@ pub fn mmtk_publish_object<VM: VMBinding>(
     _object: Option<ObjectReference>,
 ) {
     if let Some(object) = _object {
-        if crate::util::metadata::public_bit::is_public::<VM>(object) {
+        if crate::util::metadata::public_bit::is_public(object) {
             return;
         }
 
@@ -1027,7 +1027,7 @@ pub fn mmtk_publish_object<VM: VMBinding>(
 #[cfg(feature = "public_bit")]
 pub fn mmtk_is_object_published<VM: VMBinding>(_object: Option<ObjectReference>) -> bool {
     if let Some(object) = _object {
-        crate::util::metadata::public_bit::is_public::<VM>(object)
+        crate::util::metadata::public_bit::is_public(object)
     } else {
         false
     }

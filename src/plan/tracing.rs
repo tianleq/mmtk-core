@@ -233,7 +233,7 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
                 continue;
             }
             let object = object.unwrap();
-            if !crate::util::metadata::public_bit::is_public::<VM>(object) {
+            if !crate::util::metadata::public_bit::is_public(object) {
                 // set public bit on the object
                 #[cfg(feature = "debug_publish_object")]
                 crate::util::metadata::public_bit::set_public_bit::<VM>(
@@ -241,7 +241,7 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
                     Some(self.mutator_id),
                 );
                 #[cfg(not(feature = "debug_publish_object"))]
-                crate::util::metadata::public_bit::set_public_bit::<VM>(object);
+                crate::util::metadata::public_bit::set_public_bit(object);
                 #[cfg(feature = "thread_local_gc")]
                 self._mmtk.get_plan().publish_object(
                     object,

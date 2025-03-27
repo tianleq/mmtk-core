@@ -765,7 +765,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
         #[cfg(all(debug_assertions, feature = "thread_local_gc"))]
         {
-            if crate::util::metadata::public_bit::is_public::<VM>(object) {
+            if crate::util::metadata::public_bit::is_public(object) {
                 debug_assert!(
                     Block::containing(object).is_block_published(),
                     "public block is corrupted"
@@ -815,7 +815,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         vo_bit::helper::on_trace_object::<VM>(object);
 
         #[cfg(feature = "thread_local_gc")]
-        let is_private_object = !crate::util::metadata::public_bit::is_public::<VM>(object);
+        let is_private_object = !crate::util::metadata::public_bit::is_public(object);
         #[cfg(not(feature = "thread_local_gc"))]
         let is_private_object = false;
 
@@ -995,12 +995,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                         #[cfg(feature = "vo_bit")]
                         vo_bit::helper::on_object_forwarded::<VM>(_new_object);
                         #[cfg(feature = "debug_publish_object")]
-                        crate::util::metadata::public_bit::set_public_bit::<VM>(
+                        crate::util::metadata::public_bit::set_public_bit(
                             _new_object,
                             Some(u32::MAX),
                         );
                         #[cfg(not(feature = "debug_publish_object"))]
-                        crate::util::metadata::public_bit::set_public_bit::<VM>(_new_object);
+                        crate::util::metadata::public_bit::set_public_bit(_new_object);
                     },
                 );
 
@@ -1123,7 +1123,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         let block = Block::containing(object);
         // public block is now defrag source, so simply leave those public
         // objects in place
-        if crate::util::metadata::public_bit::is_public::<VM>(object) {
+        if crate::util::metadata::public_bit::is_public(object) {
             return ThreadlocalTracedObjectType::Scanned(object);
         }
 
@@ -1261,7 +1261,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         #[cfg(feature = "vo_bit")]
         vo_bit::helper::on_trace_object::<VM>(object);
         if block.is_defrag_source() {
-            let is_private_object = !crate::util::metadata::public_bit::is_public::<VM>(object);
+            let is_private_object = !crate::util::metadata::public_bit::is_public(object);
             let mut forwarding_status = 0;
             let is_forwarded_or_being_forwarded = if is_private_object {
                 object_forwarding::thread_local_is_forwarded::<VM>(object)
@@ -1336,14 +1336,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                                 #[cfg(feature = "vo_bit")]
                                 vo_bit::helper::on_object_forwarded::<VM>(_new_object);
                                 #[cfg(feature = "debug_publish_object")]
-                                crate::util::metadata::public_bit::set_public_bit::<VM>(
+                                crate::util::metadata::public_bit::set_public_bit(
                                     _new_object,
                                     Some(mutator.mutator_id),
                                 );
                                 #[cfg(not(feature = "debug_publish_object"))]
-                                crate::util::metadata::public_bit::set_public_bit::<VM>(
-                                    _new_object,
-                                );
+                                crate::util::metadata::public_bit::set_public_bit(_new_object);
                             },
                         )
                     };
@@ -1361,7 +1359,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             // otherwise, during transitive closure phase, the stale pointer will be
             // kept
             debug_assert!(
-                crate::util::metadata::public_bit::is_public::<VM>(object),
+                crate::util::metadata::public_bit::is_public(object),
                 "block: {:?}, private object: {:?} defrag source == false",
                 block,
                 object
@@ -1676,7 +1674,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         object: ObjectReference,
         #[cfg(feature = "debug_thread_local_gc_copying")] _tls: crate::util::VMMutatorThread,
     ) {
-        debug_assert!(crate::util::metadata::public_bit::is_public::<VM>(object));
+        debug_assert!(crate::util::metadata::public_bit::is_public(object));
         // Mark block and lines
         if !super::BLOCK_ONLY {
             let state = self.line_mark_state.load(Ordering::Acquire);
@@ -1846,11 +1844,11 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
             {
                 if KIND == TRACE_THREAD_LOCAL_COPY {
                     // local gc will never mark a public object
-                    debug_assert!(!crate::util::metadata::public_bit::is_public::<VM>(object));
+                    debug_assert!(!crate::util::metadata::public_bit::is_public(object));
                 } else if KIND == TRACE_THREAD_LOCAL_DEFRAG {
                     // During defrag mutator, public object is evacuated by the collector (using collector's allocator)
                     // so check the owner of the block
-                    if crate::util::metadata::public_bit::is_public::<VM>(object) {
+                    if crate::util::metadata::public_bit::is_public(object) {
                         let block = Block::containing(object);
                         debug_assert!(block.is_block_published());
                         // the following assertion may not hold if all public blocks become defrag source
@@ -2178,7 +2176,7 @@ impl<VM: VMBinding> PolicyCopyContext for ImmixCopyContext<VM> {
         #[cfg(feature = "thread_local_gc")]
         {
             debug_assert!(
-                crate::util::metadata::public_bit::is_public::<VM>(_original),
+                crate::util::metadata::public_bit::is_public(_original),
                 "global gc trying to evacuate private objects"
             );
             self.allocator.alloc_copy(bytes, align, offset)

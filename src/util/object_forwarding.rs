@@ -184,7 +184,7 @@ pub fn thread_local_forward_object<VM: VMBinding>(
     #[cfg(feature = "vo_bit")]
     crate::util::metadata::vo_bit::set_vo_bit::<VM>(new_object);
     debug_assert!(
-        !crate::util::metadata::public_bit::is_public::<VM>(object),
+        !crate::util::metadata::public_bit::is_public(object),
         "thread local gc move public object"
     );
     if let Some(shift) = forwarding_bits_offset_in_forwarding_pointer::<VM>() {
@@ -213,7 +213,7 @@ pub fn thread_local_forward_object<VM: VMBinding>(
 #[cfg(feature = "thread_local_gc")]
 pub fn thread_local_is_forwarded<VM: VMBinding>(object: ObjectReference) -> bool {
     debug_assert!(
-        !crate::util::metadata::public_bit::is_public::<VM>(object),
+        !crate::util::metadata::public_bit::is_public(object),
         "thread local gc touch public object"
     );
     unsafe {

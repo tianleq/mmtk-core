@@ -79,9 +79,7 @@ impl<C: GCWorkContext> GCWork<C::VM> for Prepare<C> {
                     .finalizable_candidates
                     .iter()
                     .map(|v| *v)
-                    .filter(|f| {
-                        crate::util::metadata::public_bit::is_public::<C::VM>(f.get_reference())
-                    });
+                    .filter(|f| crate::util::metadata::public_bit::is_public(f.get_reference()));
 
                 // move global finalizable candidates from local buffer to the global buffer
                 mmtk.finalizable_processor
@@ -89,9 +87,9 @@ impl<C: GCWorkContext> GCWork<C::VM> for Prepare<C> {
                     .unwrap()
                     .add_candidates(candidates);
 
-                mutator.finalizable_candidates.retain(|f| {
-                    !crate::util::metadata::public_bit::is_public::<C::VM>(f.get_reference())
-                });
+                mutator
+                    .finalizable_candidates
+                    .retain(|f| !crate::util::metadata::public_bit::is_public(f.get_reference()));
 
                 mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
                     .add(PrepareMutator::<C::VM>::new(mutator));
@@ -818,9 +816,7 @@ pub trait ProcessEdgesWork:
                         if self.is_object_published(source) {
                             // source is public, then its child new_object must be public, otherwise, leakage
                             // occurs
-                            let valid = crate::util::metadata::public_bit::is_public::<Self::VM>(
-                                new_object,
-                            );
+                            let valid = crate::util::metadata::public_bit::is_public(new_object);
                             if !valid {
                                 panic!(
                                         "public object: {:?} {:?} slot: {:?} points to private object: {:?} {:?}",

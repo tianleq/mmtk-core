@@ -38,6 +38,7 @@ pub struct ImmixAllocator<VM: VMBinding> {
     /// Hole-searching cursor
     overflow_line: Option<Line>,
     #[cfg(feature = "immix_allocation_policy")]
+    #[allow(clippy::box_collection)]
     overflow_reusable_blocks: Box<std::collections::VecDeque<crate::policy::immix::block::Block>>,
 }
 

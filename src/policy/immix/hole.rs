@@ -1,5 +1,7 @@
 // use std::sync::atomic::Ordering;
 
+use std::hash::Hash;
+
 use crate::{
     policy::immix::line::Line,
     util::{linear_scan::Region, Address},
@@ -7,15 +9,22 @@ use crate::{
 
 // use super::block::{Block, BlockState};
 
-#[derive(Debug, Clone, Copy, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Eq)]
 pub(crate) struct Hole {
     pub(crate) start: Address,
     pub(crate) size: usize,
 }
 
 impl PartialOrd for Hole {
+    #[allow(clippy::non_canonical_partial_ord_impl)]
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.size.partial_cmp(&other.size)
+    }
+}
+
+impl Hash for Hole {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.start.hash(state);
     }
 }
 

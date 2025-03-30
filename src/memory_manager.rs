@@ -916,11 +916,11 @@ pub fn add_work_packets<VM: VMBinding>(
 #[cfg(feature = "immix_allocation_policy")]
 pub fn compute_allocator_mem_layout_checksum<VM: VMBinding>() -> usize {
     use crate::util::alloc::{BumpAllocator, ImmixAllocator, LargeObjectAllocator};
-    return {
+    {
         std::mem::size_of::<ImmixAllocator<VM>>()
             ^ std::mem::size_of::<BumpAllocator<VM>>()
             ^ std::mem::size_of::<LargeObjectAllocator<VM>>()
-    };
+    }
 }
 #[cfg(feature = "immix_allocation_policy")]
 pub fn compute_mutator_mem_layout_checksum<VM: VMBinding>() -> usize {

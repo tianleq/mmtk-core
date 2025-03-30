@@ -130,10 +130,10 @@ impl Line {
                 Ordering::SeqCst,
             );
 
-            return ((old & HOLE_STATUS_MASK) == 0, large_hole);
+            ((old & HOLE_STATUS_MASK) == 0, large_hole)
         } else {
             debug_assert!(!large_hole);
-            return (true, large_hole);
+            (true, large_hole)
         }
     }
 
@@ -170,7 +170,7 @@ impl Line {
             Ordering::SeqCst,
         );
         debug_assert!(
-            (old & Block::LARGE_HOLE_INDEX_MASK) == hole_idx as u8,
+            (old & Block::LARGE_HOLE_INDEX_MASK) == hole_idx,
             "line: {:?}, index: {}, metadata: {}",
             self,
             hole_idx,

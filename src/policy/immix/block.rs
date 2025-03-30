@@ -242,10 +242,10 @@ impl Block {
                 Ordering::SeqCst,
                 |old| {
                     if old == 0 {
-                        return None;
+                        None
                     } else {
                         debug_assert!(old > 0);
-                        return Some(old - 1);
+                        Some(old - 1)
                     }
                 },
             );
@@ -257,9 +257,9 @@ impl Block {
                     Ordering::SeqCst,
                     Ordering::SeqCst,
                     |old| {
-                        if BlockState::from(old) == BlockState::Marked {
-                            None
-                        } else if BlockState::from(old) == BlockState::Unmarked {
+                        if BlockState::from(old) == BlockState::Marked
+                            || BlockState::from(old) == BlockState::Unmarked
+                        {
                             None
                         } else {
                             debug_assert!(
@@ -416,7 +416,7 @@ impl Block {
                 // as there is no more marked lines after it and the comparision
                 // is not done in the previous loop
                 if found_new_hole && marked_lines != 0 {
-                    debug_assert!(prev_line_is_marked == false);
+                    debug_assert!(!prev_line_is_marked);
                     // if hole_size != 0 {
                     //     max_hole_size = std::cmp::max(hole_size, max_hole_size);
                     // }

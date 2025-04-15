@@ -71,6 +71,7 @@ default = []
 public_bit = []
 thread_local_gc = ["public_bit"]
 publish_rate_analysis = ["public_bit"]
+allocation_stats = ["public_bit"]
 
 # This feature is only supported on x86-64 for now
 # It's manually added to CI scripts

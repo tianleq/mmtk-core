@@ -114,7 +114,7 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
         offset: usize,
         allocator: AllocationSemantics,
     ) -> Address {
-        #[cfg(feature = "publish_rate_analysis")]
+        #[cfg(any(feature = "publish_rate_analysis", feature = "allocation_stats"))]
         {
             // The following only makes sense when allocation fast path is disabled
 

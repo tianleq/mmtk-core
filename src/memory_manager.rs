@@ -729,7 +729,7 @@ pub fn add_phantom_candidate<VM: VMBinding>(mmtk: &MMTK<VM>, reff: ObjectReferen
 /// * `tls`: The thread that calls the function (and triggers a collection).
 pub fn harness_begin<VM: VMBinding>(mmtk: &MMTK<VM>, tls: VMMutatorThread) {
     mmtk.harness_begin(tls);
-    #[cfg(feature = "publish_rate_analysis")]
+    #[cfg(any(feature = "publish_rate_analysis", feature = "allocation_stats"))]
     {
         use crate::ALLOCATION_COUNT;
         use crate::ALLOCATION_SIZE;
@@ -989,7 +989,7 @@ pub fn mmtk_set_public_bit<VM: VMBinding>(
     crate::util::metadata::public_bit::set_public_bit::<VM>(object);
     #[cfg(feature = "thread_local_gc")]
     _mmtk.get_plan().publish_object(object);
-    #[cfg(feature = "publish_rate_analysis")]
+    #[cfg(any(eature = "publish_rate_analysis", feature = "allocation_strats"))]
     {
         // use crate::vm::ActivePlan;
         use crate::vm::ObjectModel;
@@ -1107,7 +1107,7 @@ pub fn mmtk_mutator_exit<VM: VMBinding>(_tls: VMMutatorThread, _mmtk: &'static M
 /// * `mmtk`: A reference to an MMTk instance.
 /// * `tls`: The thread that calls the function (and triggers a collection).
 pub fn request_starting<VM: VMBinding>(_mmtk: &'static MMTK<VM>) {
-    #[cfg(feature = "publish_rate_analysis")]
+    #[cfg(any(feature = "publish_rate_analysis", feature = "allocation_stats"))]
     {
         use crate::REQUEST_SCOPE_ALLOCATION_COUNT;
         use crate::REQUEST_SCOPE_ALLOCATION_SIZE;

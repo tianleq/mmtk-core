@@ -228,7 +228,7 @@ impl Stats {
         print!("Requests time: ");
         self.requests_time.lock().unwrap().print_total(None);
         println!(" ms");
-        #[cfg(feature = "publish_rate_analysis")]
+        #[cfg(any(feature = "publish_rate_analysis", feature = "allocation_stats"))]
         {
             use crate::REQUEST_SCOPE_ALLOCATION_COUNT;
             use crate::REQUEST_SCOPE_ALLOCATION_SIZE;

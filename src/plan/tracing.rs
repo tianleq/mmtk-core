@@ -172,9 +172,9 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
             self,
         );
 
-        #[cfg(feature = "publish_rate_analysis")]
+        #[cfg(any(feature = "publish_rate_analysis", feature = "allocation_stats"))]
         let mut publication_count = 0;
-        #[cfg(feature = "publish_rate_analysis")]
+        #[cfg(any(feature = "publish_rate_analysis", feature = "allocation_stats"))]
         let mut publication_size = 0;
         // #[cfg(feature = "publish_rate_analysis")]
         // let mutator_id = if VM::VMActivePlan::is_mutator(tls.0) {
@@ -183,7 +183,7 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
         //     0
         // };
 
-        #[cfg(feature = "publish_rate_analysis")]
+        #[cfg(any(feature = "publish_rate_analysis", feature = "allocation_stats"))]
         {
             use crate::vm::ObjectModel;
 
@@ -212,7 +212,7 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
                     object,
                     self,
                 );
-                #[cfg(feature = "publish_rate_analysis")]
+                #[cfg(any(feature = "publish_rate_analysis", feature = "allocation_stats"))]
                 {
                     use crate::vm::ObjectModel;
 
@@ -225,7 +225,7 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
                 }
             }
         }
-        #[cfg(feature = "publish_rate_analysis")]
+        #[cfg(any(feature = "publish_rate_analysis", feature = "allocation_stats"))]
         {
             use crate::PUBLICATION_COUNT;
             use crate::PUBLICATION_SIZE;

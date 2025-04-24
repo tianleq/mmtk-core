@@ -420,7 +420,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                 }
 
                 // We just moved the object out of the logical nursery, mark it as unlogged.
-                if nursery_object && self.common.needs_log_bit {
+                if self.common.needs_log_bit {
                     VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
                         .mark_as_unlogged::<VM>(object, Ordering::SeqCst);
                 }
@@ -474,7 +474,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                     }
 
                     // We just moved the object out of the logical nursery, mark it as unlogged.
-                    if nursery_object && self.common.needs_log_bit {
+                    if self.common.needs_log_bit {
                         VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
                             .mark_as_unlogged::<VM>(object, Ordering::SeqCst);
                     }
@@ -483,7 +483,9 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                 {
                     self.treadmill.copy(object, nursery_object);
                     // We just moved the object out of the logical nursery, mark it as unlogged.
-                    if nursery_object && self.common.needs_log_bit {
+                    // We also unlog mature objects as their unlog bit may have been unset before the
+                    // full-heap GC
+                    if self.common.needs_log_bit {
                         VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
                             .mark_as_unlogged::<VM>(object, Ordering::SeqCst);
                     }
@@ -513,6 +515,10 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                     "local los object exists in global los treadmill"
                 );
                 crate::util::metadata::public_bit::unset_public_bit(object);
+            }
+            // Clear log bits for dead objects to prevent a new nursery object having the unlog bit set
+            if self.common.needs_log_bit {
+                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.clear::<VM>(object, Ordering::SeqCst);
             }
             let _pages = self
                 .pr

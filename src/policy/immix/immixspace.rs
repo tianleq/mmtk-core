@@ -1900,10 +1900,6 @@ impl<VM: VMBinding> PrepareBlockState<VM> {
         if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_MARK_BIT_SPEC {
             side.bzero_metadata(self.chunk.start(), Chunk::BYTES);
         }
-        // If the forwarding bits are on the side, we need to clear them, too.
-        if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_FORWARDING_BITS_SPEC {
-            side.bzero_metadata(self.chunk.start(), Chunk::BYTES);
-        }
     }
 
     #[cfg(feature = "thread_local_gc")]

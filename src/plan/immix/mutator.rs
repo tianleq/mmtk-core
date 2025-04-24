@@ -66,5 +66,5 @@ pub fn create_immix_mutator<VM: VMBinding>(
     let barrier = Box::new(crate::plan::barriers::NoBarrier);
 
     let builder = MutatorBuilder::new(mutator_tls, mmtk, config);
-    builder.build()
+    builder.barrier(barrier).build()
 }

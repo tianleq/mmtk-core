@@ -693,7 +693,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                         vo_bit::helper::on_object_forwarded::<VM>(_new_object);
                         #[cfg(feature = "public_bit")]
                         if crate::util::metadata::public_bit::is_public::<VM>(object) {
-                            crate::util::metadata::public_bit::set_public_bit::<VM>(new_object);
+                            crate::util::metadata::public_bit::set_public_bit::<VM>(_new_object);
                         }
                     },
                 )

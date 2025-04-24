@@ -29,6 +29,7 @@ use crate::util::heap::chunk_map::*;
 use crate::util::linear_scan::Region;
 use crate::util::VMThread;
 use crate::vm::ObjectModel;
+use crate::vm::Scanning;
 use std::sync::Mutex;
 
 /// The result for `MarkSweepSpace.acquire_block()`. `MarkSweepSpace` will attempt
@@ -157,7 +158,7 @@ impl AbandonedBlockLists {
 }
 
 impl<VM: VMBinding> SFT for MarkSweepSpace<VM> {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         self.common.name
     }
 
@@ -191,12 +192,12 @@ impl<VM: VMBinding> SFT for MarkSweepSpace<VM> {
 
     fn initialize_object_metadata(&self, _object: crate::util::ObjectReference, _alloc: bool) {
         #[cfg(feature = "vo_bit")]
-        crate::util::metadata::vo_bit::set_vo_bit::<VM>(_object);
+        crate::util::metadata::vo_bit::set_vo_bit(_object);
     }
 
     #[cfg(feature = "is_mmtk_object")]
     fn is_mmtk_object(&self, addr: Address) -> Option<ObjectReference> {
-        crate::util::metadata::vo_bit::is_vo_bit_set_for_addr::<VM>(addr)
+        crate::util::metadata::vo_bit::is_vo_bit_set_for_addr(addr)
     }
 
     #[cfg(feature = "is_mmtk_object")]
@@ -329,6 +330,58 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
         }
     }
 
+    /// Mark an object non-atomically.  If multiple GC worker threads attempt to mark the same
+    /// object, more than one of them may return `true`.
+    fn attempt_mark_non_atomic(&self, object: ObjectReference) -> bool {
+        if !VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_marked::<VM>(object, Ordering::SeqCst) {
+            VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.mark::<VM>(object, Ordering::SeqCst);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Mark an object atomically.
+    fn attempt_mark_atomic(&self, object: ObjectReference) -> bool {
+        let mark_state = 1u8;
+
+        loop {
+            let old_value = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.load_atomic::<VM, u8>(
+                object,
+                None,
+                Ordering::SeqCst,
+            );
+            if old_value == mark_state {
+                return false;
+            }
+
+            if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
+                .compare_exchange_metadata::<VM, u8>(
+                    object,
+                    old_value,
+                    mark_state,
+                    None,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+                .is_ok()
+            {
+                break;
+            }
+        }
+        true
+    }
+
+    /// Mark an object.  Return `true` if the object is newly marked.  Return `false` if the object
+    /// was already marked.
+    fn attempt_mark(&self, object: ObjectReference) -> bool {
+        if VM::VMScanning::UNIQUE_OBJECT_ENQUEUING {
+            self.attempt_mark_atomic(object)
+        } else {
+            self.attempt_mark_non_atomic(object)
+        }
+    }
+
     fn trace_object<Q: ObjectQueue>(
         &self,
         queue: &mut Q,
@@ -339,9 +392,8 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
             "Cannot mark an object {} that was not alloced by free list allocator.",
             object,
         );
-        if !VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_marked::<VM>(object, Ordering::SeqCst) {
-            VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.mark::<VM>(object, Ordering::SeqCst);
-            let block = Block::containing::<VM>(object);
+        if self.attempt_mark(object) {
+            let block = Block::containing(object);
             block.set_state(BlockState::Marked);
             queue.enqueue(object);
         }
@@ -353,7 +405,15 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
         self.chunk_map.set(block.chunk(), ChunkState::Allocated);
     }
 
-    pub fn prepare(&mut self) {
+    pub fn prepare(&mut self, full_heap: bool) {
+        if self.common.needs_log_bit && full_heap {
+            if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC {
+                for chunk in self.chunk_map.all_chunks() {
+                    side.bzero_metadata(chunk.start(), Chunk::BYTES);
+                }
+            }
+        }
+
         #[cfg(debug_assertions)]
         self.abandoned_in_gc.lock().unwrap().assert_empty();
 

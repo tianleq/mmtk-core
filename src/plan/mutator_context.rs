@@ -9,7 +9,10 @@ use crate::util::alloc::Allocator;
 use crate::util::{Address, ObjectReference};
 use crate::util::{VMMutatorThread, VMWorkerThread};
 use crate::vm::VMBinding;
+use crate::MMTK;
 use enum_map::EnumMap;
+
+use super::barriers::NoBarrier;
 
 pub(crate) type SpaceMapping<VM> = Vec<(AllocatorSelector, &'static dyn Space<VM>)>;
 
@@ -77,10 +80,52 @@ impl<VM: VMBinding> std::fmt::Debug for MutatorConfig<VM> {
     }
 }
 
+/// Used to build a mutator struct
+pub struct MutatorBuilder<VM: VMBinding> {
+    barrier: Box<dyn Barrier<VM>>,
+    /// The mutator thread that is bound with this Mutator struct.
+    mutator_tls: VMMutatorThread,
+    mmtk: &'static MMTK<VM>,
+    config: MutatorConfig<VM>,
+}
+
+impl<VM: VMBinding> MutatorBuilder<VM> {
+    pub fn new(
+        mutator_tls: VMMutatorThread,
+        mmtk: &'static MMTK<VM>,
+        config: MutatorConfig<VM>,
+    ) -> Self {
+        MutatorBuilder {
+            barrier: Box::new(NoBarrier),
+            mutator_tls,
+            mmtk,
+            config,
+        }
+    }
+
+    pub fn barrier(mut self, barrier: Box<dyn Barrier<VM>>) -> Self {
+        self.barrier = barrier;
+        self
+    }
+
+    pub fn build(self) -> Mutator<VM> {
+        Mutator {
+            allocators: Allocators::<VM>::new(
+                self.mutator_tls,
+                self.mmtk,
+                &self.config.space_mapping,
+            ),
+            barrier: self.barrier,
+            mutator_tls: self.mutator_tls,
+            plan: self.mmtk.get_plan(),
+            config: self.config,
+        }
+    }
+}
+
 /// A mutator is a per-thread data structure that manages allocations and barriers. It is usually highly coupled with the language VM.
 /// It is recommended for MMTk users 1) to have a mutator struct of the same layout in the thread local storage that can be accessed efficiently,
 /// and 2) to implement fastpath allocation and barriers for the mutator in the VM side.
-
 // We are trying to make this struct fixed-sized so that VM bindings can easily define a type to have the exact same layout as this struct.
 // Currently Mutator is fixed sized, and we should try keep this invariant:
 // - Allocators are fixed-length arrays of allocators.
@@ -314,7 +359,6 @@ impl<VM: VMBinding> Mutator<VM> {
 
 /// Each GC plan should provide their implementation of a MutatorContext. *Note that this trait is no longer needed as we removed
 /// per-plan mutator implementation and we will remove this trait as well in the future.*
-
 // TODO: We should be able to remove this trait, as we removed per-plan mutator implementation, and there is no other type that implements this trait.
 // The Mutator struct above is the only type that implements this trait. We should be able to merge them.
 pub trait MutatorContext<VM: VMBinding>: Send + 'static {

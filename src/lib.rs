@@ -7,6 +7,8 @@
 // to me - considering it will break our API and all the efforts for all the developers to make the change, it may
 // not worth it.
 #![allow(clippy::upper_case_acronyms)]
+// Use the `{likely, unlikely}` provided by compiler when using nightly
+#![cfg_attr(feature = "nightly", feature(core_intrinsics))]
 
 //! Memory Management ToolKit (MMTk) is a portable and high performance memory manager
 //! that includes various garbage collection algorithms and provides clean and efficient
@@ -18,7 +20,7 @@
 //! * GC components:
 //!   * [Allocators](util/alloc/allocator/trait.Allocator.html): handlers of allocation requests which allocate objects to the bound space.
 //!   * [Policies](policy/space/trait.Space.html): definitions of semantics and behaviors for memory regions.
-//!      Each space is an instance of a policy, and takes up a unique proportion of the heap.
+//!     Each space is an instance of a policy, and takes up a unique proportion of the heap.
 //!   * [Work packets](scheduler/work/trait.GCWork.html): units of GC work scheduled by the MMTk's scheduler.
 //! * [GC plans](plan/global/trait.Plan.html): GC algorithms composed from components.
 //! * [Heap implementations](util/heap/index.html): the underlying implementations of memory resources that support spaces.
@@ -27,15 +29,10 @@
 //!   i.e. [the memory manager API](memory_manager/index.html) that allows a language's memory manager to use MMTk
 //!   and [the VMBinding trait](vm/trait.VMBinding.html) that allows MMTk to call the language implementation.
 
-extern crate libc;
-extern crate strum_macros;
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
 extern crate log;
-extern crate atomic_traits;
-extern crate crossbeam;
-extern crate num_cpus;
 #[macro_use]
 extern crate downcast_rs;
 #[macro_use]
@@ -50,6 +47,7 @@ pub use mmtk::MMTK;
 use portable_atomic::AtomicUsize;
 
 mod global_state;
+pub use crate::global_state::LiveBytesStats;
 
 mod policy;
 

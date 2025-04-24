@@ -2,7 +2,7 @@
 //! i.e. visiting the reachable objects by traversing all or part of an object graph.
 
 use crate::scheduler::gc_work::{ProcessEdgesWork, SlotOf};
-use crate::scheduler::{GCWorker, WorkBucketStage};
+use crate::scheduler::{GCWorker, WorkBucketStage, EDGES_WORK_BUFFER_SIZE};
 use crate::util::ObjectReference;
 use crate::vm::slot::Slot;
 #[cfg(feature = "public_bit")]
@@ -28,7 +28,7 @@ pub struct VectorQueue<T> {
 
 impl<T> VectorQueue<T> {
     /// Reserve a capacity of this on first enqueue to avoid frequent resizing.
-    const CAPACITY: usize = 4096;
+    const CAPACITY: usize = EDGES_WORK_BUFFER_SIZE;
 
     /// Create an empty `VectorObjectQueue`.
     pub fn new() -> Self {
@@ -114,7 +114,7 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
     }
 }
 
-impl<'a, E: ProcessEdgesWork> SlotVisitor<SlotOf<E>> for ObjectsClosure<'a, E> {
+impl<E: ProcessEdgesWork> SlotVisitor<SlotOf<E>> for ObjectsClosure<'_, E> {
     fn visit_slot(&mut self, slot: SlotOf<E>) {
         #[cfg(debug_assertions)]
         {
@@ -131,7 +131,7 @@ impl<'a, E: ProcessEdgesWork> SlotVisitor<SlotOf<E>> for ObjectsClosure<'a, E> {
     }
 }
 
-impl<'a, E: ProcessEdgesWork> Drop for ObjectsClosure<'a, E> {
+impl<E: ProcessEdgesWork> Drop for ObjectsClosure<'_, E> {
     fn drop(&mut self) {
         self.flush();
     }

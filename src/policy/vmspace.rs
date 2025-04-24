@@ -29,7 +29,7 @@ pub struct VMSpace<VM: VMBinding> {
 }
 
 impl<VM: VMBinding> SFT for VMSpace<VM> {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         self.common.name
     }
     fn is_live(&self, _object: ObjectReference) -> bool {
@@ -64,11 +64,11 @@ impl<VM: VMBinding> SFT for VMSpace<VM> {
             VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(object, Ordering::SeqCst);
         }
         #[cfg(feature = "vo_bit")]
-        crate::util::metadata::vo_bit::set_vo_bit::<VM>(object);
+        crate::util::metadata::vo_bit::set_vo_bit(object);
     }
     #[cfg(feature = "is_mmtk_object")]
     fn is_mmtk_object(&self, addr: Address) -> Option<ObjectReference> {
-        crate::util::metadata::vo_bit::is_vo_bit_set_for_addr::<VM>(addr)
+        crate::util::metadata::vo_bit::is_vo_bit_set_for_addr(addr)
     }
     #[cfg(feature = "is_mmtk_object")]
     fn find_object_from_internal_pointer(
@@ -229,7 +229,7 @@ impl<VM: VMBinding> VMSpace<VM> {
         // Map side metadata
         self.common
             .metadata
-            .try_map_metadata_space(chunk_start, chunk_size)
+            .try_map_metadata_space(chunk_start, chunk_size, self.get_name())
             .unwrap();
         // Insert to vm map: it would be good if we can make VM map aware of the region. However, the region may be outside what we can map in our VM map implementation.
         // self.common.vm_map.insert(chunk_start, chunk_size, self.common.descriptor);
@@ -277,12 +277,23 @@ impl<VM: VMBinding> VMSpace<VM> {
     ) -> ObjectReference {
         #[cfg(feature = "vo_bit")]
         debug_assert!(
-            crate::util::metadata::vo_bit::is_vo_bit_set::<VM>(object),
+            crate::util::metadata::vo_bit::is_vo_bit_set(object),
             "{:x}: VO bit not set",
             object
         );
         debug_assert!(self.in_space(object));
         if self.mark_state.test_and_mark::<VM>(object) {
+            // Flip the per-object unlogged bits to "unlogged" state for objects inside the
+            // bootimage
+            #[cfg(feature = "set_unlog_bits_vm_space")]
+            if self.common.needs_log_bit {
+                VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.store_atomic::<VM, u8>(
+                    object,
+                    1,
+                    None,
+                    Ordering::SeqCst,
+                );
+            }
             queue.enqueue(object);
         }
         object

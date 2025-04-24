@@ -25,7 +25,7 @@ pub struct CopySpace<VM: VMBinding> {
 }
 
 impl<VM: VMBinding> SFT for CopySpace<VM> {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         self.get_name()
     }
 
@@ -59,7 +59,7 @@ impl<VM: VMBinding> SFT for CopySpace<VM> {
 
     fn initialize_object_metadata(&self, _object: ObjectReference, _alloc: bool) {
         #[cfg(feature = "vo_bit")]
-        crate::util::metadata::vo_bit::set_vo_bit::<VM>(_object);
+        crate::util::metadata::vo_bit::set_vo_bit(_object);
     }
 
     fn get_forwarded_object(&self, object: ObjectReference) -> Option<ObjectReference> {
@@ -76,7 +76,7 @@ impl<VM: VMBinding> SFT for CopySpace<VM> {
 
     #[cfg(feature = "is_mmtk_object")]
     fn is_mmtk_object(&self, addr: Address) -> Option<ObjectReference> {
-        crate::util::metadata::vo_bit::is_vo_bit_set_for_addr::<VM>(addr)
+        crate::util::metadata::vo_bit::is_vo_bit_set_for_addr(addr)
     }
 
     #[cfg(feature = "is_mmtk_object")]
@@ -196,6 +196,12 @@ impl<VM: VMBinding> CopySpace<VM> {
                 side_forwarding_status_table.bzero_metadata(start, size);
             }
 
+            if self.common.needs_log_bit {
+                if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC {
+                    side.bzero_metadata(start, size);
+                }
+            }
+
             // Clear VO bits because all objects in the space are dead.
             #[cfg(feature = "vo_bit")]
             crate::util::metadata::vo_bit::bzero_vo_bit(start, size);
@@ -233,7 +239,7 @@ impl<VM: VMBinding> CopySpace<VM> {
 
         #[cfg(feature = "vo_bit")]
         debug_assert!(
-            crate::util::metadata::vo_bit::is_vo_bit_set::<VM>(object),
+            crate::util::metadata::vo_bit::is_vo_bit_set(object),
             "{:x}: VO bit not set",
             object
         );
@@ -254,10 +260,11 @@ impl<VM: VMBinding> CopySpace<VM> {
                 object,
                 semantics.unwrap(),
                 worker.get_copy_context_mut(),
+                |_new_object| {
+                    #[cfg(feature = "vo_bit")]
+                    crate::util::metadata::vo_bit::set_vo_bit(_new_object);
+                },
             );
-
-            #[cfg(feature = "vo_bit")]
-            crate::util::metadata::vo_bit::set_vo_bit::<VM>(new_object);
             #[cfg(feature = "public_bit")]
             if crate::util::metadata::public_bit::is_public::<VM>(object) {
                 crate::util::metadata::public_bit::set_public_bit::<VM>(new_object);

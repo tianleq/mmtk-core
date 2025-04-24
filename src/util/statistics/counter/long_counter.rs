@@ -1,5 +1,5 @@
 use super::*;
-use crate::util::statistics::stats::{SharedStats, MAX_PHASES};
+use crate::util::statistics::stats::{SharedStats, DEFAULT_NUM_PHASES};
 use std::fmt;
 use std::sync::Arc;
 
@@ -8,7 +8,7 @@ pub struct LongCounter<T: Diffable> {
     pub implicitly_start: bool,
     pub implicitly_stop: bool,
     merge_phases: bool,
-    count: Box<[u64; MAX_PHASES]>, // FIXME make this resizable
+    count: Vec<u64>,
     diffable: T,
     start_value: Option<T::Val>,
     total_count: u64,
@@ -42,7 +42,8 @@ impl<T: Diffable> Counter for LongCounter<T> {
         self.diffable.stop();
         let current_value = self.diffable.current_value();
         let delta = T::diff(&current_value, self.start_value.as_ref().unwrap());
-        self.count[self.stats.get_phase()] += delta;
+        self.count.push(delta);
+        debug_assert_eq!(self.count[self.stats.get_phase()], delta);
         self.total_count += delta;
     }
 
@@ -50,7 +51,8 @@ impl<T: Diffable> Counter for LongCounter<T> {
         if self.running {
             let now = self.diffable.current_value();
             let delta = T::diff(&now, self.start_value.as_ref().unwrap());
-            self.count[old_phase] += delta;
+            self.count.push(delta);
+            debug_assert_eq!(self.count[old_phase], delta);
             self.total_count += delta;
             self.start_value = Some(now);
         }
@@ -146,7 +148,7 @@ impl<T: Diffable> LongCounter<T> {
             implicitly_start,
             implicitly_stop,
             merge_phases,
-            count: Box::new([0; MAX_PHASES]),
+            count: Vec::with_capacity(DEFAULT_NUM_PHASES),
             diffable,
             start_value: None,
             total_count: 0,

@@ -122,11 +122,7 @@ impl<F: Finalizable> FinalizableProcessor<F> {
     }
 
     pub fn get_ready_object(&mut self) -> Option<F> {
-        if let Some(f) = self.ready_for_finalize.pop() {
-            Some(f)
-        } else {
-            Option::None
-        }
+        self.ready_for_finalize.pop().map(|f| f)
     }
 
     pub fn get_all_finalizers(&mut self) -> Vec<F> {

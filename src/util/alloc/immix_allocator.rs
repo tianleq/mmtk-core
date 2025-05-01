@@ -1435,9 +1435,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         {
             match self.semantic {
                 Some(ImmixAllocSemantics::Public) => {
-                    // this is collector
-                    // only use gobal reusable blocks in global gc
-                    debug_assert!(self.copy);
                     debug_assert!(!self.request_for_large);
                     self.acquire_public_recyclable_block().is_some()
                 }

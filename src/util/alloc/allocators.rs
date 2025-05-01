@@ -22,7 +22,7 @@ use super::MarkCompactAllocator;
 pub(crate) const MAX_BUMP_ALLOCATORS: usize = 6;
 pub(crate) const MAX_LARGE_OBJECT_ALLOCATORS: usize = 2;
 pub(crate) const MAX_MALLOC_ALLOCATORS: usize = 1;
-pub(crate) const MAX_IMMIX_ALLOCATORS: usize = 1;
+pub(crate) const MAX_IMMIX_ALLOCATORS: usize = 2;
 pub(crate) const MAX_FREE_LIST_ALLOCATORS: usize = 2;
 pub(crate) const MAX_MARK_COMPACT_ALLOCATORS: usize = 1;
 
@@ -139,6 +139,15 @@ impl<VM: VMBinding> Allocators<VM> {
                     ));
                 }
                 AllocatorSelector::Immix(index) => {
+                    let semantic = if cfg!(feature = "thread_local_gc") {
+                        if index == 0 {
+                            None
+                        } else {
+                            Some(super::immix_allocator::ImmixAllocSemantics::Public)
+                        }
+                    } else {
+                        None
+                    };
                     ret.immix[index as usize].write(ImmixAllocator::new(
                         mutator_tls.0,
                         #[cfg(feature = "thread_local_gc")]
@@ -146,7 +155,7 @@ impl<VM: VMBinding> Allocators<VM> {
                         Some(space),
                         context.clone(),
                         false,
-                        None,
+                        semantic,
                     ));
                 }
                 AllocatorSelector::FreeList(index) => {

@@ -160,7 +160,7 @@ pub fn immix_mutator_thread_local_defrag_prepare<VM: VMBinding>(mutator: &mut Mu
 }
 
 pub(in crate::plan) const RESERVED_ALLOCATORS: ReservedAllocators = ReservedAllocators {
-    n_immix: 1,
+    n_immix: 2,
     ..ReservedAllocators::DEFAULT
 };
 
@@ -168,6 +168,7 @@ lazy_static! {
     pub static ref ALLOCATOR_MAPPING: EnumMap<AllocationSemantics, AllocatorSelector> = {
         let mut map = create_allocator_mapping(RESERVED_ALLOCATORS, true);
         map[AllocationSemantics::Default] = AllocatorSelector::Immix(0);
+        map[AllocationSemantics::Public] = AllocatorSelector::Immix(1);
         map
     };
 }
@@ -182,6 +183,7 @@ pub fn create_immix_mutator<VM: VMBinding>(
         space_mapping: Box::new({
             let mut vec = create_space_mapping(RESERVED_ALLOCATORS, true, immix);
             vec.push((AllocatorSelector::Immix(0), &immix.immix_space));
+            vec.push((AllocatorSelector::Immix(1), &immix.immix_space));
             vec
         }),
         prepare_func: &immix_mutator_prepare,

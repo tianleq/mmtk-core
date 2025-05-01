@@ -2186,7 +2186,7 @@ impl<VM: VMBinding> ImmixCopyContext<VM> {
                 Some(space),
                 context,
                 true,
-                Some(ImmixAllocSemantics::Public), // only used in global gc to evacuate public objects
+                Some(ImmixAllocSemantics::Public),
             ),
         }
     }

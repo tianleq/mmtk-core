@@ -25,6 +25,7 @@ pub enum ImmixAllocSemantics {
     Public = 1,
 }
 
+#[derive(Default)]
 pub struct ReusableBlocks {
     dense: Vec<Block>,
     #[cfg(feature = "sparse_immix_block")]
@@ -596,14 +597,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     let published = block.is_block_published();
                     let is_dirty = block.is_block_dirty();
 
-                    // After a local gc, public blocks should contain public
-                    // objects only, so those blocks are no longer ditry(This is no longer the case, private objects may be left in-place)
-                    // if published {
-                    //     // block.reset_dirty();
-                    //     #[cfg(debug_assertions)]
-                    //     block.set_owner(Block::ANONYMOUS_OWNER);
-                    // }
-
                     if block.get_state().is_reusable() {
                         #[cfg(debug_assertions)]
                         {
@@ -1075,7 +1068,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         space: Option<&'static dyn Space<VM>>,
         context: Arc<AllocatorContext<VM>>,
         copy: bool,
-        _semantic: Option<ImmixAllocSemantics>,
+        #[cfg(feature = "thread_local_gc")] semantic: Option<ImmixAllocSemantics>,
     ) -> Self {
         let _space = space.unwrap().downcast_ref::<ImmixSpace<VM>>().unwrap();
         // Local line mark state has to be in line with global line mark state, cannot use the default
@@ -1099,7 +1092,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             #[cfg(feature = "thread_local_gc")]
             sparse_line: None,
             #[cfg(feature = "thread_local_gc")]
-            semantic: _semantic,
+            semantic,
             #[cfg(feature = "thread_local_gc")]
             local_blocks: Box::new(Vec::new()),
             #[cfg(feature = "thread_local_gc")]
@@ -1622,10 +1615,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             None => {
                 #[cfg(feature = "thread_local_gc")]
                 // add an assertion here, assume collectors can always allocate new blocks
-                debug_assert!(
-                    self.semantic.is_none() && !self.copy,
-                    "cannot acquire clean blocks to evacuate"
-                );
+                debug_assert!(!self.copy, "cannot acquire clean blocks to evacuate");
 
                 Address::ZERO
             }
@@ -1646,21 +1636,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     block.set_owner(self.mutator_id);
 
                     if let Some(semantic) = self.semantic {
-                        // This is collector
-                        debug_assert!(
-                            !VM::VMActivePlan::is_mutator(self.tls),
-                            "Only collector thread should reach here"
-                        );
                         match semantic {
                             ImmixAllocSemantics::Public => {
-                                #[cfg(debug_assertions)]
-                                debug_assert!(
-                                    block.owner() == u32::MAX,
-                                    "block: {:?}, owner: {:?} ",
-                                    block,
-                                    block.owner()
-                                );
-                                // This only occurs during global gc, since only global gc evacuates public objects
+                                // As long as the semantic is public, the block may contiain public objects only
+                                // so no need to set the dirty bit
                                 block.publish(false);
                             }
                             ImmixAllocSemantics::Private => {

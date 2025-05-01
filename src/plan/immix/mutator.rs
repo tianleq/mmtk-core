@@ -33,6 +33,15 @@ pub fn immix_mutator_prepare<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMW
     #[cfg(feature = "thread_local_gc")]
     {
         immix_allocator.prepare();
+
+        let immix_public_allocator = unsafe {
+            allocators
+                .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Public])
+        }
+        .downcast_mut::<ImmixAllocator<VM>>()
+        .unwrap();
+        immix_public_allocator.reset();
+
         let los_allocator: &mut LargeObjectAllocator<VM> = unsafe {
             allocators.get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Los])
         }
@@ -59,6 +68,17 @@ pub fn immix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMW
         // For a thread local gc, it needs to sweep blocks from its local block list
         // so need to do it here
         immix_allocator.release();
+
+        // public allocator does not cache blocks in its local list,
+        // so no need to do release
+        let immix_public_allocator = unsafe {
+            allocators
+                .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Public])
+        }
+        .downcast_mut::<ImmixAllocator<VM>>()
+        .unwrap();
+        immix_public_allocator.reset();
+
         let los_allocator: &mut LargeObjectAllocator<VM> = unsafe {
             allocators.get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Los])
         }

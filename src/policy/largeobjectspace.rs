@@ -510,10 +510,14 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
 
             #[cfg(feature = "thread_local_gc")]
             {
-                debug_assert!(
-                    crate::util::metadata::public_bit::is_public(object),
-                    "local los object exists in global los treadmill"
-                );
+                // The following no longer holds because when a mutator stops, all local los objects will be
+                // pushed to this global list to make sure no memory gets leaked
+
+                // debug_assert!(
+                //     crate::util::metadata::public_bit::is_public(object),
+                //     "local los object: {:?} exists in global los treadmill",
+                //     object
+                // );
                 crate::util::metadata::public_bit::unset_public_bit(object);
             }
             // Clear log bits for dead objects to prevent a new nursery object having the unlog bit set
@@ -677,6 +681,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         _object: ObjectReference,
         #[cfg(feature = "debug_thread_local_gc_copying")] _tls: VMMutatorThread,
     ) {
+        debug_assert!(crate::util::metadata::public_bit::is_public(_object));
         self.treadmill.add_to_treadmill(_object, false);
         #[cfg(feature = "debug_thread_local_gc_copying")]
         {

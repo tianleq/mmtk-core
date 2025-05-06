@@ -101,7 +101,7 @@ impl<VM: VMBinding> Allocators<VM> {
 
     pub fn new(
         mutator_tls: VMMutatorThread,
-        #[cfg(feature = "thread_local_gc")] mutator_id: u32,
+        #[cfg(feature = "thread_local_gc")] _mutator_id: u32,
         mmtk: &MMTK<VM>,
         space_mapping: &[(AllocatorSelector, &'static dyn Space<VM>)],
     ) -> Self {
@@ -139,14 +139,17 @@ impl<VM: VMBinding> Allocators<VM> {
                     ));
                 }
                 AllocatorSelector::Immix(index) => {
-                    let semantic = if cfg!(feature = "thread_local_gc") {
+                    let (semantic, mutator_id) = if cfg!(feature = "thread_local_gc") {
                         if index == 0 {
-                            None
+                            (None, _mutator_id)
                         } else {
-                            Some(super::immix_allocator::ImmixAllocSemantics::Public)
+                            (
+                                Some(super::immix_allocator::ImmixAllocSemantics::Public),
+                                u32::MAX,
+                            )
                         }
                     } else {
-                        None
+                        (None, 0)
                     };
                     ret.immix[index as usize].write(ImmixAllocator::new(
                         mutator_tls.0,

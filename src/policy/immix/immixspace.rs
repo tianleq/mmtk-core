@@ -1704,7 +1704,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     #[cfg(feature = "thread_local_gc")]
     pub fn publish_runtime_object(&self, object: ObjectReference) {
-        debug_assert!(crate::util::metadata::public_bit::is_public(object));
         // Mark block and lines
         if !super::BLOCK_ONLY {
             let state = self.line_mark_state.load(Ordering::Acquire);
@@ -1713,6 +1712,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         // runtime objects should be in a public block when allocated
         // no need to publish the block again
+        debug_assert!(crate::util::metadata::public_bit::is_public(object));
         debug_assert!(
             Block::containing(object).is_block_published(),
             "Object: {:?}, Block: {:?} is not published properly",
@@ -1960,8 +1960,17 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
                 // do not defrag private blocks
                 #[cfg(debug_assertions)]
                 {
-                    debug_assert_ne!(block.owner(), Block::ANONYMOUS_OWNER);
-                    debug_assert!(block.is_block_dirty());
+                    debug_assert!(
+                        block.owner() != Block::ANONYMOUS_OWNER,
+                        "Block: {:?} should not be owned by ANONYMOUS_OWNER",
+                        block
+                    );
+                    debug_assert!(
+                        block.is_block_dirty(),
+                        "Block: {:?}, State: {:?} should be dirty",
+                        block,
+                        state
+                    );
                 }
                 false
             } else {

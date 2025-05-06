@@ -701,6 +701,12 @@ impl Block {
 
                 #[cfg(feature = "thread_local_gc")]
                 if !is_block_public {
+                    debug_assert!(
+                        self.owner() != Self::ANONYMOUS_OWNER,
+                        "Block: {:?}, lines marked: {:?} should belong to a mutator",
+                        self,
+                        marked_lines
+                    );
                     self.reset_publication();
                 } else {
                     debug_assert!(self.is_block_published());

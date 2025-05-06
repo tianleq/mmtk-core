@@ -191,6 +191,7 @@ impl Line {
         if !Line::is_aligned(end) {
             end_line = end_line.next();
         }
+        let is_public_object = crate::util::metadata::public_bit::is_public(object);
 
         let iter = RegionIterator::<Line>::new(start_line, end_line);
         for line in iter {
@@ -198,7 +199,7 @@ impl Line {
             // multiple gc threads are trying to write the same byte value
             line.mark(state);
             // also publish lines if object is public
-            if crate::util::metadata::public_bit::is_public(object) {
+            if is_public_object {
                 // benign race here, line is shared by multiple objects, set 1 can occur concurrently
                 // during global gc phase
                 Line::LINE_PUBLICATION_TABLE.store_atomic::<u8>(

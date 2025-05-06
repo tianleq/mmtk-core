@@ -228,6 +228,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                                 });
                                 debug_assert!(!exist, "conservative private reusable block: {:?} exist in global reusable list", block);
                                 debug_assert!(block.owner() != Block::ANONYMOUS_OWNER);
+                                debug_assert_ne!(self.mutator_id, Block::ANONYMOUS_OWNER);
                                 block.set_owner(self.mutator_id);
                             }
                             // block may contain live private objects, so it cannot be reused by other mutator
@@ -1196,7 +1197,16 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 {
                     // conservatively increase the local allocation size
                     if !self.copy {
-                        debug_assert_ne!(self.mutator_id, u32::MAX);
+                        #[cfg(debug_assertions)]
+                        {
+                            if let Some(semantic) = self.semantic {
+                                debug_assert_eq!(semantic, ImmixAllocSemantics::Public);
+                                debug_assert_eq!(self.mutator_id, u32::MAX);
+                            } else {
+                                debug_assert_ne!(self.mutator_id, u32::MAX);
+                            }
+                        }
+
                         debug_assert!(VM::VMActivePlan::is_mutator(self.tls));
                         let mutator =
                             VM::VMActivePlan::mutator(crate::util::VMMutatorThread(self.tls));
@@ -1530,7 +1540,11 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     fn acquire_public_recyclable_block(&mut self) -> Option<Block> {
         match self.immix_space().get_reusable_block(self.copy) {
             Some(block) => {
-                trace!("{:?}: acquire_recyclable_block -> {:?}", self.tls, block);
+                trace!(
+                    "{:?}: acquire_public_recyclable_block -> {:?}",
+                    self.tls,
+                    block
+                );
                 #[cfg(debug_assertions)]
                 {
                     debug_assert!(block.is_block_published());
@@ -1638,9 +1652,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     if let Some(semantic) = self.semantic {
                         match semantic {
                             ImmixAllocSemantics::Public => {
-                                // As long as the semantic is public, the block may contiain public objects only
-                                // so no need to set the dirty bit
                                 block.publish();
+                                debug_assert_eq!(block.owner(), Block::ANONYMOUS_OWNER);
                             }
                             ImmixAllocSemantics::Private => {
                                 panic!("local gc is now done by the mutator")

@@ -62,10 +62,10 @@ impl<F: Finalizable> FinalizableProcessor<F> {
     where
         E: ProcessEdgesWork,
     {
-        for mut f in candidates {
+        for f in candidates {
             let reff: ObjectReference = f.get_reference();
             debug_assert!(reff.is_live(), "object: {:?} should be live", reff);
-            FinalizableProcessor::<F>::forward_finalizable_reference(e, &mut f);
+            FinalizableProcessor::<F>::forward_finalizable_reference(e, f);
         }
     }
 

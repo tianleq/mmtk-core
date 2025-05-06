@@ -170,29 +170,12 @@ impl Block {
 
     /// Publish block
     #[cfg(feature = "thread_local_gc")]
-    pub fn publish(&self, dirty: bool) -> bool {
-        let val = if dirty {
-            debug_assert!(
-                (Self::METADATA_TABLE.load_atomic::<u8>(self.start(), Ordering::Acquire)
-                    & Self::DIRTY_BIT)
-                    == 1,
-                "block: {:?} dirty bit is not set",
-                self
-            );
-            Self::DIRTY_BIT | Self::PUBLIC_BIT
-        } else {
-            debug_assert!(
-                (Self::METADATA_TABLE.load_atomic::<u8>(self.start(), Ordering::Acquire)
-                    & Self::DIRTY_BIT)
-                    == 0,
-                "block: {:?} dirty bit is set",
-                self
-            );
-            Self::PUBLIC_BIT
-        };
-
-        let prev_value =
-            Self::METADATA_TABLE.fetch_or_atomic::<u8>(self.start(), val, Ordering::SeqCst);
+    pub fn publish(&self) -> bool {
+        let prev_value = Self::METADATA_TABLE.fetch_or_atomic::<u8>(
+            self.start(),
+            Self::PUBLIC_BIT,
+            Ordering::SeqCst,
+        );
 
         (prev_value & Self::PUBLIC_BIT) == 0
     }

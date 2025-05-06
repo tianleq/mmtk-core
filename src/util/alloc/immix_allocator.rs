@@ -1640,7 +1640,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                             ImmixAllocSemantics::Public => {
                                 // As long as the semantic is public, the block may contiain public objects only
                                 // so no need to set the dirty bit
-                                block.publish(false);
+                                block.publish();
                             }
                             ImmixAllocSemantics::Private => {
                                 panic!("local gc is now done by the mutator")

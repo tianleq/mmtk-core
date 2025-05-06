@@ -963,6 +963,39 @@ pub fn mmtk_publish_object<VM: VMBinding>(
     }
 }
 
+#[cfg(all(feature = "public_bit", not(feature = "debug_thread_local_gc_copying")))]
+pub fn mmtk_publish_runtime_object<VM: VMBinding>(
+    _mmtk: &'static MMTK<VM>,
+    _object: Option<ObjectReference>,
+) {
+    if let Some(object) = _object {
+        if crate::util::metadata::public_bit::is_public(object) {
+            return;
+        }
+
+        let mut closure: crate::plan::PublishObjectClosure<VM> =
+            crate::plan::PublishObjectClosure::<VM>::new(
+                _mmtk,
+                #[cfg(feature = "debug_publish_object")]
+                u32::MAX,
+            );
+
+        #[cfg(feature = "debug_publish_object")]
+        crate::util::metadata::public_bit::set_public_bit::<VM>(object, None);
+        #[cfg(not(feature = "debug_publish_object"))]
+        crate::util::metadata::public_bit::set_public_bit(object);
+        #[cfg(feature = "thread_local_gc")]
+        _mmtk.get_plan().publish_runtime_object(object);
+        // Publish all the descendants
+        VM::VMScanning::scan_object(
+            VMWorkerThread(VMThread::UNINITIALIZED),
+            object,
+            &mut closure,
+        );
+        closure.do_closure();
+    }
+}
+
 #[cfg(all(feature = "public_bit", feature = "debug_thread_local_gc_copying"))]
 pub fn mmtk_set_public_bit<VM: VMBinding>(
     _mmtk: &'static MMTK<VM>,

@@ -1683,7 +1683,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         let block = Block::containing(object);
         // This funciton is always called by a mutator, so alway set the dirty bit
-        if block.publish(true) {
+        if block.publish() {
             #[cfg(feature = "debug_thread_local_gc_copying")]
             {
                 use crate::util::GLOBAL_GC_STATISTICS;
@@ -1700,6 +1700,31 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         //     VM::VMObjectModel::get_current_size(object),
         //     Ordering::SeqCst,
         // );
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn publish_runtime_object(&self, object: ObjectReference) {
+        debug_assert!(crate::util::metadata::public_bit::is_public(object));
+        // Mark block and lines
+        if !super::BLOCK_ONLY {
+            let state = self.line_mark_state.load(Ordering::Acquire);
+
+            Line::publish_lines_of_object::<VM>(object, state);
+        }
+        // runtime objects should be in a public block when allocated
+        // no need to publish the block again
+        debug_assert!(
+            Block::containing(object).is_block_published(),
+            "Object: {:?}, Block: {:?} is not published properly",
+            object,
+            Block::containing(object)
+        );
+        debug_assert!(
+            !Block::containing(object).is_block_dirty(),
+            "Object: {:?}, Block: {:?} should not be dirty",
+            object,
+            Block::containing(object)
+        );
     }
 
     #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]

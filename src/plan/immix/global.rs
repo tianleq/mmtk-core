@@ -275,6 +275,20 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             );
         }
     }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn publish_runtime_object(&self, object: ObjectReference) {
+        if self.immix_space.in_space(object) {
+            self.immix_space.publish_runtime_object(object);
+        } else {
+            self.common().publish_runtime_object(
+                object,
+                #[cfg(feature = "debug_thread_local_gc_copying")]
+                crate::util::VMThread::VMThread::UNINITIALIZED,
+            );
+        }
+    }
+
     #[cfg(feature = "thread_local_gc")]
     fn get_number_of_reusable_blocks(&self) -> usize {
         self.immix_space.reusable_blocks.len()

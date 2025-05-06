@@ -384,6 +384,11 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
     );
 
     #[cfg(feature = "thread_local_gc")]
+    fn publish_runtime_object(&self, object: ObjectReference) {
+        self.publish_object(object);
+    }
+
+    #[cfg(feature = "thread_local_gc")]
     fn get_number_of_reusable_blocks(&self) -> usize {
         0
     }
@@ -866,6 +871,15 @@ impl<VM: VMBinding> CommonPlan<VM> {
             return;
         }
         self.base.publish_object(object);
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn publish_runtime_object(
+        &self,
+        object: ObjectReference,
+        #[cfg(feature = "debug_thread_local_gc_copying")] _tls: crate::util::VMMutatorThread,
+    ) {
+        self.publish_object(object);
     }
 }
 

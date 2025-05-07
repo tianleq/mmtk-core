@@ -56,7 +56,8 @@ pub struct Immix<VM: VMBinding> {
 
 /// The plan constraints for the immix plan.
 pub const IMMIX_CONSTRAINTS: PlanConstraints = PlanConstraints {
-    moves_objects: crate::policy::immix::DEFRAG,
+    // If we disable moving in Immix, this is a non-moving plan.
+    moves_objects: !cfg!(feature = "immix_non_moving"),
     // Max immix object size is half of a block.
     max_non_los_default_alloc_bytes: crate::policy::immix::MAX_IMMIX_OBJECT_SIZE,
     barrier: BarrierSelector::PublicObjectMarkingBarrier,
@@ -97,7 +98,8 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn last_collection_was_exhaustive(&self) -> bool {
-        ImmixSpace::<VM>::is_last_gc_exhaustive(self.last_gc_was_defrag.load(Ordering::Relaxed))
+        self.immix_space
+            .is_last_gc_exhaustive(self.last_gc_was_defrag.load(Ordering::Relaxed))
     }
 
     fn constraints(&self) -> &'static PlanConstraints {
@@ -380,6 +382,7 @@ impl<VM: VMBinding> Immix<VM> {
                 mixed_age: false,
                 #[cfg(feature = "thread_local_gc_copying")]
                 max_local_copy_reserve,
+                never_move_objects: false,
             },
         )
     }

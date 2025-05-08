@@ -2028,7 +2028,7 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
 
             #[cfg(not(feature = "thread_local_gc"))]
             // Check if this block needs to be defragmented.
-            let is_defrag_source = if !super::DEFRAG {
+            let is_defrag_source = if !self.space.is_defrag_enabled() {
                 false
             } else if super::DEFRAG_EVERY_BLOCK {
                 // Set every block as defrag source if so desired.

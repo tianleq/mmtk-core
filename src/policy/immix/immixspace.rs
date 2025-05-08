@@ -253,11 +253,6 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
                 self.trace_object_without_moving(queue, object)
             }
         } else if KIND == TRACE_KIND_FAST {
-            #[cfg(feature = "thread_local_gc")]
-            debug_assert!(
-                crate::policy::immix::NEVER_MOVE_OBJECTS,
-                "Moving thread-local gc is incompatible with non-moving global gc"
-            );
             self.trace_object_without_moving(queue, object)
         } else {
             unreachable!()

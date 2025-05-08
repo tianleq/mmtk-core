@@ -75,11 +75,10 @@ impl<C: GCWorkContext> GCWork<C::VM> for Prepare<C> {
             }
             #[cfg(feature = "thread_local_gc")]
             for mutator in <C::VM as VMBinding>::VMActivePlan::mutators() {
-                let candidates = mutator
-                    .finalizable_candidates
-                    .iter()
-                    .map(|v| *v)
-                    .filter(|f| crate::util::metadata::public_bit::is_public(f.get_reference()));
+                let candidates =
+                    mutator.finalizable_candidates.iter().copied().filter(|f| {
+                        crate::util::metadata::public_bit::is_public(f.get_reference())
+                    });
 
                 // move global finalizable candidates from local buffer to the global buffer
                 mmtk.finalizable_processor

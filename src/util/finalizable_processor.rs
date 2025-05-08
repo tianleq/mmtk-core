@@ -62,10 +62,10 @@ impl<F: Finalizable> FinalizableProcessor<F> {
     where
         E: ProcessEdgesWork,
     {
-        for mut f in candidates {
+        for f in candidates {
             let reff: ObjectReference = f.get_reference();
             debug_assert!(reff.is_live(), "object: {:?} should be live", reff);
-            FinalizableProcessor::<F>::forward_finalizable_reference(e, &mut f);
+            FinalizableProcessor::<F>::forward_finalizable_reference(e, f);
         }
     }
 
@@ -122,11 +122,7 @@ impl<F: Finalizable> FinalizableProcessor<F> {
     }
 
     pub fn get_ready_object(&mut self) -> Option<F> {
-        if let Some(f) = self.ready_for_finalize.pop() {
-            Some(f)
-        } else {
-            Option::None
-        }
+        self.ready_for_finalize.pop()
     }
 
     pub fn get_all_finalizers(&mut self) -> Vec<F> {
@@ -210,13 +206,8 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for Finalization<E> {
             let local_reday_for_finalization = mutator
                 .finalizable_candidates
                 .iter()
-                .map(|f| *f)
+                .copied()
                 .filter(|f| !f.get_reference().is_live());
-            // .map(|f| {
-            //     // publish private ready for finalize objects as they will be pushed to the global list
-            //     memory_manager::mmtk_publish_object(mmtk, Some(f.get_reference()));
-            //     f
-            // });
 
             finalizable_processor.add_ready_for_finalize_objects(local_reday_for_finalization);
             // get rid of dead objects from local finalizable list

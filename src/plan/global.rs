@@ -970,8 +970,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
     }
 
     fn thread_local_may_move_objects<const KIND: TraceKind>() -> bool {
-        false
-            || <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_may_move_objects::<
+        <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_may_move_objects::<
                 KIND,
             >()
             || <LargeObjectSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_may_move_objects::<KIND>()

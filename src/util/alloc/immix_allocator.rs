@@ -25,6 +25,7 @@ pub enum ImmixAllocSemantics {
     Public = 1,
 }
 
+#[derive(Default)]
 pub struct ReusableBlocks {
     dense: Vec<Block>,
     #[cfg(feature = "sparse_immix_block")]
@@ -1737,10 +1738,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             #[cfg(debug_assertions)]
             block.set_owner(self.mutator_id);
             // Not sure if the following is needed
-            self.immix_space().chunk_map.set(
-                block.chunk(),
-                crate::util::heap::chunk_map::ChunkState::Allocated,
-            );
+            self.immix_space()
+                .chunk_map
+                .set_allocated(block.chunk(), true);
 
             return Some(block);
         }

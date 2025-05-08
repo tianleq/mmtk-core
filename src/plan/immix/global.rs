@@ -543,13 +543,9 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for Immix<VM> {
     }
 
     fn thread_local_may_move_objects<const KIND: crate::policy::gc_work::TraceKind>() -> bool {
-        false
-            || <ImmixSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_may_move_objects::<
-                KIND,
-            >()
-            || <CommonPlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_may_move_objects::<
-                KIND,
-            >()
+        <ImmixSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_may_move_objects::<KIND>(
+        ) || <CommonPlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_may_move_objects::<KIND>(
+        )
     }
 
     #[cfg(not(feature = "debug_publish_object"))]

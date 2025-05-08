@@ -1653,6 +1653,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         match semantic {
                             ImmixAllocSemantics::Public => {
                                 block.publish();
+                                #[cfg(debug_assertions)]
                                 debug_assert_eq!(block.owner(), Block::ANONYMOUS_OWNER);
                             }
                             ImmixAllocSemantics::Private => {

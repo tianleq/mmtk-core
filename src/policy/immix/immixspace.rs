@@ -67,6 +67,8 @@ pub struct ImmixSpace<VM: VMBinding> {
     // pub(crate) bytes_published: AtomicUsize,
     #[cfg(feature = "thread_local_gc_copying")]
     pub sparse_reusable_blocks: ReusableBlockPool,
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub public_only_reusable_blocks: ReusableBlockPool,
     // #[cfg(feature = "thread_local_gc_copying")]
     // pub local_reserved_blocks_exhausted: AtomicBool,
     // #[cfg(feature = "thread_local_gc_copying")]
@@ -424,6 +426,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             // bytes_published: AtomicUsize::new(0),
             #[cfg(feature = "thread_local_gc_copying")]
             sparse_reusable_blocks: ReusableBlockPool::new(scheduler.num_workers()),
+            #[cfg(feature = "thread_local_gc_copying")]
+            public_only_reusable_blocks: ReusableBlockPool::new(scheduler.num_workers()),
             // #[cfg(feature = "thread_local_gc_copying")]
             // local_reserved_blocks_exhausted: AtomicBool::new(false),
             // #[cfg(feature = "thread_local_gc_copying")]
@@ -714,21 +718,36 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     #[cfg(not(feature = "thread_local_gc_ibm_style"))]
     pub fn get_reusable_block(&self, copy: bool) -> Option<Block> {
-        self.get_reusable_block_impl(copy, false)
-    }
-
-    #[cfg(feature = "thread_local_gc_copying")]
-    pub fn get_sparse_reusable_block(&self, copy: bool) -> Option<Block> {
-        self.get_reusable_block_impl(copy, true)
+        if let Some(block) = self.get_reusable_block_impl(copy, true, false) {
+            return Some(block);
+        }
+        self.get_reusable_block_impl(copy, false, false)
     }
 
     #[cfg(not(feature = "thread_local_gc_ibm_style"))]
-    fn get_reusable_block_impl(&self, copy: bool, sparse: bool) -> Option<Block> {
+    pub fn get_public_only_reusable_block(&self, copy: bool) -> Option<Block> {
+        self.get_reusable_block_impl(copy, false, true)
+    }
+
+    // #[cfg(feature = "thread_local_gc_copying")]
+    // pub fn get_sparse_reusable_block(&self, copy: bool) -> Option<Block> {
+    //     self.get_reusable_block_impl(copy, true, false)
+    // }
+
+    #[cfg(not(feature = "thread_local_gc_ibm_style"))]
+    fn get_reusable_block_impl(
+        &self,
+        copy: bool,
+        sparse: bool,
+        public_only: bool,
+    ) -> Option<Block> {
         if super::BLOCK_ONLY {
             return None;
         }
         loop {
-            let b = if sparse {
+            let b = if public_only {
+                self.public_only_reusable_blocks.pop()
+            } else if sparse {
                 self.sparse_reusable_blocks.pop()
             } else {
                 self.reusable_blocks.pop()
@@ -751,7 +770,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
                 {
                     if !copy {
-                        block.get_reusable_block_info(
+                        block.verify_reusable_block_info(
                             self.line_unavail_state.load(Ordering::Acquire),
                             self.line_mark_state.load(Ordering::Acquire),
                         );
@@ -1707,7 +1726,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         }
         let block = Block::containing(object);
         // This funciton is always called by a mutator, so alway set the dirty bit
-        if block.publish() {
+        if block.publish(false) {
             #[cfg(feature = "debug_thread_local_gc_copying")]
             {
                 use crate::util::GLOBAL_GC_STATISTICS;

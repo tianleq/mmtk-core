@@ -268,7 +268,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         {
                             debug_assert!(block.owner() == self.mutator_id);
                             debug_assert!(block.are_lines_private());
-                            block.get_reusable_block_info(
+                            block.verify_reusable_block_info(
                                 self.space
                                     .line_unavail_state
                                     .load(atomic::Ordering::Acquire),
@@ -601,7 +601,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     if block.get_state().is_reusable() {
                         #[cfg(debug_assertions)]
                         {
-                            block.get_reusable_block_info(
+                            block.verify_reusable_block_info(
                                 self.space
                                     .line_unavail_state
                                     .load(atomic::Ordering::Acquire),
@@ -624,7 +624,11 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                                 global_reusable_blocks.push(block);
                             }
                             #[cfg(not(feature = "sparse_immix_block"))]
-                            global_reusable_blocks.push(block);
+                            if block.get_hole_size() >= Block::PRIORITY_THRESHOLD {
+                                global_sparse_reusable_blocks.push(block);
+                            } else {
+                                global_reusable_blocks.push(block);
+                            }
                         } else {
                             #[cfg(debug_assertions)]
                             debug_assert!(
@@ -1439,7 +1443,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             match self.semantic {
                 Some(ImmixAllocSemantics::Public) => {
                     debug_assert!(!self.request_for_large);
-                    self.acquire_public_recyclable_block().is_some()
+                    self.acquire_public_recyclable_block(true).is_some()
+                        || self.acquire_public_recyclable_block(false).is_some()
                 }
                 Some(ImmixAllocSemantics::Private) => {
                     panic!("Private objects are not evacuated by GC thread")
@@ -1474,7 +1479,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                                 !self.copy,
                                 "evacuation should always acquire a clean page"
                             );
-                            block.get_reusable_block_info(
+                            block.verify_reusable_block_info(
                                 self.space
                                     .line_unavail_state
                                     .load(atomic::Ordering::Acquire),
@@ -1514,7 +1519,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         self.acquire_public_recyclable_block()
                     };
                     #[cfg(not(feature = "sparse_immix_block"))]
-                    let public_reusable_block = self.acquire_public_recyclable_block();
+                    let public_reusable_block = self.acquire_public_recyclable_block(false);
                     match public_reusable_block {
                         Some(block) => {
                             #[cfg(debug_assertions)]
@@ -1537,8 +1542,13 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    fn acquire_public_recyclable_block(&mut self) -> Option<Block> {
-        match self.immix_space().get_reusable_block(self.copy) {
+    fn acquire_public_recyclable_block(&mut self, public_only: bool) -> Option<Block> {
+        let result = if public_only {
+            self.immix_space().get_public_only_reusable_block(self.copy)
+        } else {
+            self.immix_space().get_reusable_block(self.copy)
+        };
+        match result {
             Some(block) => {
                 trace!(
                     "{:?}: acquire_public_recyclable_block -> {:?}",
@@ -1566,6 +1576,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             _ => None,
         }
     }
+
     #[cfg(feature = "sparse_immix_block")]
     fn acquire_public_sparse_recyclable_block(&mut self, lines_required: u8) -> Option<Block> {
         loop {
@@ -1652,7 +1663,19 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     if let Some(semantic) = self.semantic {
                         match semantic {
                             ImmixAllocSemantics::Public => {
-                                block.publish();
+                                // public only is true when it is mutator
+                                let is_mutator = self.mutator_id != u32::MAX;
+                                #[cfg(debug_assertions)]
+                                {
+                                    if is_mutator {
+                                        debug_assert!(
+                                            VM::VMActivePlan::is_mutator(self.tls),
+                                            "mutator: {:?} should be a mutator",
+                                            self.mutator_id
+                                        );
+                                    }
+                                }
+                                block.publish(is_mutator);
                                 #[cfg(debug_assertions)]
                                 debug_assert_eq!(block.owner(), Block::ANONYMOUS_OWNER);
                             }

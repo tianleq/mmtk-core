@@ -113,8 +113,10 @@ impl Block {
 
     pub const ANONYMOUS_OWNER: u32 = u32::MAX;
 
-    //       public bit
-    //       |
+    // default public bit
+    // |
+    // |     public bit
+    // |     |
     // 00000000
     //        |
     //        dirty bit
@@ -126,6 +128,9 @@ impl Block {
     // #[cfg(feature = "thread_local_gc")]
     // pub const SPARSE_BIT: u8 = 0b0100;
 
+    #[cfg(feature = "thread_local_gc")]
+    pub const PUBLIC_ONLY_BIT: u8 = 0b10000000;
+
     /// Block owner table (side)
     #[cfg(all(feature = "thread_local_gc", debug_assertions))]
     pub const OWNER_TABLE: SideMetadataSpec =
@@ -136,13 +141,16 @@ impl Block {
     pub const METADATA_TABLE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_METADATA;
 
-    /// max hole size of a block
+    /// total available/free lines of large holes (hole size >= LARGE_HOLE_THRESHOLD)
     #[cfg(feature = "thread_local_gc_copying")]
     pub const HOLE_SIZE: SideMetadataSpec =
         crate::util::metadata::side_metadata::spec_defs::IX_BLOCK_HOLE_SIZE; // no need to clear/reset the hole size, as stale value should never be read.
 
     #[cfg(feature = "sparse_immix_block")]
     pub const SPARSE_BLOCK_THRESHOLD: u8 = 120;
+
+    pub const LARGE_HOLE_THRESHOLD: u8 = 16;
+    pub const PRIORITY_THRESHOLD: u8 = 64;
 
     /// Get the chunk containing the block.
     pub fn chunk(&self) -> Chunk {
@@ -170,10 +178,14 @@ impl Block {
 
     /// Publish block
     #[cfg(feature = "thread_local_gc")]
-    pub fn publish(&self) -> bool {
+    pub fn publish(&self, public_only: bool) -> bool {
         let prev_value = Self::METADATA_TABLE.fetch_or_atomic::<u8>(
             self.start(),
-            Self::PUBLIC_BIT,
+            if public_only {
+                Self::PUBLIC_BIT | Self::PUBLIC_ONLY_BIT
+            } else {
+                Self::PUBLIC_BIT
+            },
             Ordering::SeqCst,
         );
 
@@ -184,7 +196,7 @@ impl Block {
     pub fn reset_publication(&self) {
         Self::METADATA_TABLE.fetch_and_atomic::<u8>(
             self.start(),
-            !Self::PUBLIC_BIT,
+            !Self::PUBLIC_BIT & !Self::PUBLIC_ONLY_BIT, // also need to clear the public only bit
             Ordering::SeqCst,
         );
         // Also rest all lines within the block
@@ -257,6 +269,13 @@ impl Block {
             }
         }
         count
+    }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub fn is_public_only_block(&self) -> bool {
+        (Self::METADATA_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst)
+            & Self::PUBLIC_ONLY_BIT)
+            == Self::PUBLIC_ONLY_BIT
     }
 
     #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
@@ -444,7 +463,7 @@ impl Block {
 
             let is_published = self.is_block_published();
 
-            let mut max_hole_size: u8 = 0;
+            let mut total_hole_size: u8 = 0;
             let mut hole_size: u8 = 0;
 
             for line in self.lines() {
@@ -491,7 +510,9 @@ impl Block {
                 } else {
                     if prev_line_is_marked {
                         holes += 1;
-                        max_hole_size = std::cmp::max(max_hole_size, hole_size);
+                        if hole_size >= Self::LARGE_HOLE_THRESHOLD {
+                            total_hole_size += hole_size;
+                        }
                         hole_size = 0;
                     }
                     // // #[cfg(debug_assertions)]
@@ -507,10 +528,12 @@ impl Block {
                 }
             }
 
-            max_hole_size = std::cmp::max(max_hole_size, hole_size);
+            if hole_size >= Self::LARGE_HOLE_THRESHOLD {
+                total_hole_size += hole_size;
+            }
 
             if marked_lines == 0 {
-                debug_assert_eq!(max_hole_size, Self::LINES as u8);
+                debug_assert_eq!(total_hole_size, Self::LINES as u8);
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_region_swept::<VM, _>(self, false);
                 // liveness of public block is unknown during thread-local gc
@@ -541,12 +564,12 @@ impl Block {
                         unavailable_lines: marked_lines as _,
                     });
 
-                    self.set_hole_size(max_hole_size);
+                    self.set_hole_size(total_hole_size);
                 } else {
                     // Clear mark state.
                     self.set_state(BlockState::Unmarked);
-                    debug_assert_eq!(max_hole_size, hole_size);
-                    debug_assert_eq!(max_hole_size, 0);
+                    debug_assert_eq!(total_hole_size, hole_size);
+                    debug_assert_eq!(total_hole_size, 0);
                 }
                 // Update mark_histogram
                 mark_histogram[holes] += marked_lines;
@@ -616,7 +639,7 @@ impl Block {
 
             let mut is_block_public = false;
             #[cfg(feature = "thread_local_gc_copying")]
-            let mut max_hole_size: u8 = 0;
+            let mut total_hole_size: u8 = 0;
             #[cfg(feature = "thread_local_gc_copying")]
             let mut hole_size: u8 = 0;
 
@@ -634,7 +657,9 @@ impl Block {
                         holes += 1;
                         #[cfg(feature = "thread_local_gc_copying")]
                         {
-                            max_hole_size = std::cmp::max(max_hole_size, hole_size);
+                            if hole_size >= Self::LARGE_HOLE_THRESHOLD {
+                                total_hole_size += hole_size;
+                            }
                             hole_size = 0;
                         }
                     }
@@ -642,8 +667,9 @@ impl Block {
                     // otherwise, the line mark state of the last GC will stick around
                     if line_mark_state > Line::MAX_MARK_STATE - 2 {
                         line.mark(0);
-                    } // line is not marked, so it is free, line level public bit
-                      // needs to be cleared
+                    }
+                    // line is not marked, so it is free, line level public bit
+                    // needs to be cleared
                     #[cfg(feature = "thread_local_gc_ibm_style")]
                     line.reset_publication();
 
@@ -665,7 +691,10 @@ impl Block {
             }
             #[cfg(feature = "thread_local_gc_copying")]
             {
-                max_hole_size = std::cmp::max(max_hole_size, hole_size);
+                if hole_size >= Self::LARGE_HOLE_THRESHOLD {
+                    total_hole_size += hole_size;
+                }
+                // total_hole_size = std::cmp::max(total_hole_size, hole_size);
             }
 
             if marked_lines == 0 {
@@ -681,7 +710,7 @@ impl Block {
                 }
                 #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
                 {
-                    debug_assert_eq!(max_hole_size as usize, Self::LINES);
+                    debug_assert_eq!(total_hole_size as usize, Self::LINES);
                 }
                 space.release_block(*self);
                 #[cfg(feature = "debug_thread_local_gc_copying")]
@@ -719,11 +748,11 @@ impl Block {
                         unavailable_lines: marked_lines as _,
                     });
                     #[cfg(feature = "sparse_immix_block")]
-                    let is_block_sparse = max_hole_size >= Self::SPARSE_BLOCK_THRESHOLD;
+                    let is_block_sparse = total_hole_size >= Self::SPARSE_BLOCK_THRESHOLD;
                     #[cfg(not(feature = "sparse_immix_block"))]
-                    let is_block_sparse = false;
+                    let high_priority = total_hole_size > Self::PRIORITY_THRESHOLD;
                     #[cfg(feature = "thread_local_gc_copying")]
-                    self.set_hole_size(max_hole_size);
+                    self.set_hole_size(total_hole_size);
 
                     #[cfg(not(feature = "thread_local_gc"))]
                     space.reusable_blocks.push(*self);
@@ -738,7 +767,9 @@ impl Block {
                             if !self.is_block_dirty() {
                                 #[cfg(debug_assertions)]
                                 self.set_owner(Self::ANONYMOUS_OWNER);
-                                if is_block_sparse {
+                                if self.is_public_only_block() {
+                                    space.public_only_reusable_blocks.push(*self);
+                                } else if high_priority {
                                     space.sparse_reusable_blocks.push(*self);
                                 } else {
                                     space.reusable_blocks.push(*self);
@@ -750,6 +781,12 @@ impl Block {
                                     (*gc_stats).number_of_free_lines_in_global_reusable_blocks +=
                                         Block::LINES - marked_lines;
                                 }
+                            } else {
+                                debug_assert!(
+                                    !self.is_public_only_block(),
+                                    "public only block: {:?} should not be mixed block",
+                                    self
+                                );
                             }
                         } else {
                             // private reusable block, it will go to local reusable block list
@@ -788,11 +825,11 @@ impl Block {
     }
 
     #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
-    pub fn get_reusable_block_info(&self, unavail_state: u8, current_state: u8) -> (u8, u8, u8) {
+    pub fn verify_reusable_block_info(&self, unavail_state: u8, current_state: u8) {
         let mut marked_lines = 0;
         let mut holes: u8 = 0;
         let mut prev_line_is_marked = true;
-        let mut max_hole_size: u8 = 0;
+        let mut total_hole_size: u8 = 0;
         let mut hole_size: u8 = 0;
         assert_eq!(unavail_state, current_state);
         for line in self.lines() {
@@ -802,7 +839,9 @@ impl Block {
             } else {
                 if prev_line_is_marked {
                     holes += 1;
-                    max_hole_size = std::cmp::max(max_hole_size, hole_size);
+                    if hole_size >= Self::LARGE_HOLE_THRESHOLD {
+                        total_hole_size += hole_size;
+                    }
                     hole_size = 0;
                 }
 
@@ -811,7 +850,9 @@ impl Block {
                 prev_line_is_marked = false;
             }
         }
-        max_hole_size = std::cmp::max(max_hole_size, hole_size);
+        if hole_size >= Self::LARGE_HOLE_THRESHOLD {
+            total_hole_size += hole_size;
+        }
 
         match self.get_state() {
             BlockState::Reusable { unavailable_lines } => {
@@ -827,10 +868,8 @@ impl Block {
                 panic!("block: {:?} is not reusable", self);
             }
         }
-        assert_eq!(self.get_hole_size(), max_hole_size);
+        assert_eq!(self.get_hole_size(), total_hole_size);
         assert_eq!(self.get_holes(), holes as usize);
-
-        (holes, max_hole_size, marked_lines)
     }
 
     #[cfg(all(feature = "thread_local_gc", debug_assertions))]

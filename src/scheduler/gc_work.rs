@@ -268,7 +268,7 @@ impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
             {
                 if mmtk.get_plan().defrag_mutator_required(mutator.mutator_tls) {
                     #[cfg(debug_assertions)]
-                    warn!("mutator: {} needs defragmentation", mutator.mutator_id);
+                    info!("mutator: {} needs defragmentation", mutator.mutator_id);
 
                     // DefragMutator will evacuate public object as well, so no need to create ScanMutatorRoots packet
                     mmtk.scheduler.work_buckets[WorkBucketStage::DefragMutator]

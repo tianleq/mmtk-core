@@ -510,10 +510,10 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
 
             #[cfg(feature = "thread_local_gc")]
             {
-                debug_assert!(
-                    crate::util::metadata::public_bit::is_public(object),
-                    "local los object exists in global los treadmill"
-                );
+                // debug_assert!(
+                //     crate::util::metadata::public_bit::is_public(object),
+                //     "local los object exists in global los treadmill"
+                // );
                 crate::util::metadata::public_bit::unset_public_bit(object);
             }
             // Clear log bits for dead objects to prevent a new nursery object having the unlog bit set

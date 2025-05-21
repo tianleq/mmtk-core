@@ -68,7 +68,7 @@ impl BlockState {
 
 /// Data structure to reference an immix block.
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialOrd, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Eq, Hash)]
 pub struct Block(Address);
 
 impl Region for Block {
@@ -196,7 +196,7 @@ impl Block {
     pub fn reset_publication(&self) {
         Self::METADATA_TABLE.fetch_and_atomic::<u8>(
             self.start(),
-            !Self::PUBLIC_BIT & !Self::PUBLIC_ONLY_BIT, // also need to clear the public only bit
+            (!Self::PUBLIC_BIT) & (!Self::PUBLIC_ONLY_BIT), // also need to clear the public only bit
             Ordering::SeqCst,
         );
         // Also rest all lines within the block

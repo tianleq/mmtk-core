@@ -88,6 +88,8 @@ pub struct ImmixSpace<VM: VMBinding> {
     // )>,
     #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
     pub(crate) mutator_in_defrag: std::sync::Mutex<Vec<u32>>,
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub left_in_place: std::sync::Mutex<std::collections::HashSet<Block>>,
 }
 
 /// Some arguments for Immix Space.
@@ -439,6 +441,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             // log_buffer: crossbeam::queue::SegQueue::new(),
             #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
             mutator_in_defrag: std::sync::Mutex::new(vec![]),
+            #[cfg(feature = "thread_local_gc_copying")]
+            left_in_place: std::sync::Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -596,6 +600,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.scheduler().work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
 
         self.lines_consumed.store(0, Ordering::Relaxed);
+        println!(
+            "left in place blocks: {}",
+            self.left_in_place.lock().unwrap().len()
+        );
+        self.left_in_place.lock().unwrap().clear();
     }
 
     /// This is called when a GC finished.
@@ -1002,6 +1011,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                         block
                     );
                     debug_assert!(block.is_block_published());
+                    self.left_in_place.lock().unwrap().insert(block);
                 }
 
                 #[cfg(feature = "vo_bit")]
@@ -2042,7 +2052,11 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
                 }
                 // // Since every global gc is a defrag gc, defrag_threshold will never be None
                 // true
-                block.is_block_dirty() || block.get_holes() > self.defrag_threshold.unwrap()
+                block.is_block_dirty()
+                // || (block.is_public_only_block() && block.get_number_of_public_lines() < 16)
+                // || block.get_holes() > self.defrag_threshold.unwrap()
+                // || (block.get_number_of_public_lines() as usize)
+                //     < (self.defrag_threshold.unwrap())
             };
 
             #[cfg(not(feature = "thread_local_gc"))]

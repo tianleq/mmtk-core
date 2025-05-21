@@ -1300,7 +1300,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         // TODO make sure there is enough space to evacuate
 
         let block = Block::containing(object);
-        let is_private_object = !crate::util::metadata::public_bit::is_public::<VM>(object);
         #[cfg(feature = "vo_bit")]
         vo_bit::helper::on_trace_object::<VM>(object);
 

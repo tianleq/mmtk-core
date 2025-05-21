@@ -201,10 +201,10 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         {
             let count = self.defrag_mutator.fetch_add(1, Ordering::SeqCst);
             if count < max_defrag_mutators {
-                return true;
+                true
             } else {
                 self.defrag_mutator.fetch_sub(1, Ordering::SeqCst);
-                return false;
+                false
             }
 
             // true

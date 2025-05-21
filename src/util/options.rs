@@ -911,8 +911,10 @@ options! {
     /// max local heap
     max_local_heap:        ThreadlocalHeapSize   [env_var: true, command_line: true] [|v: &ThreadlocalHeapSize| v.size > 0] = ThreadlocalHeapSize {size: 1 << 20},
     /// max number of concurrent local gc
-    max_concurrent_local_gc: u32               [env_var: true, command_line: true]  [always_valid] = crate::scheduler::thread_local_gc_work::DEFAULT_MAX_CONCURRENT_LOCAL_GC,
-    max_local_copy_reserve:  u8               [env_var: true, command_line: true]  [always_valid] = crate::scheduler::thread_local_gc_work::DEFAULT_MAX_LOCAL_COPY_RESERVE
+    max_concurrent_local_gc: u32                 [env_var: true, command_line: true]  [always_valid] = crate::scheduler::thread_local_gc_work::DEFAULT_MAX_CONCURRENT_LOCAL_GC,
+    max_local_copy_reserve:  u8                  [env_var: true, command_line: true]  [always_valid] = crate::scheduler::thread_local_gc_work::DEFAULT_MAX_LOCAL_COPY_RESERVE,
+    max_concurrent_defrag_mutator: u32           [env_var: true, command_line: true]  [always_valid] = 0,
+    defrag_mutator_threshold: usize              [env_var: true, command_line: true]  [always_valid] = crate::scheduler::thread_local_gc_work::DEFRAG_MUTATOR_THRESHOLD
 }
 
 #[cfg(not(feature = "thread_local_gc"))]

@@ -41,6 +41,7 @@ use atomic::Ordering;
 use enum_map::EnumMap;
 
 use mmtk_macros::{HasSpaces, PlanTraceObject};
+use portable_atomic::AtomicUsize;
 
 #[derive(HasSpaces, PlanTraceObject)]
 pub struct Immix<VM: VMBinding> {
@@ -51,7 +52,7 @@ pub struct Immix<VM: VMBinding> {
     #[parent]
     pub common: CommonPlan<VM>,
     last_gc_was_defrag: AtomicBool,
-    defrag_mutator: AtomicBool,
+    defrag_mutator: AtomicUsize,
 }
 
 /// The plan constraints for the immix plan.
@@ -63,8 +64,6 @@ pub const IMMIX_CONSTRAINTS: PlanConstraints = PlanConstraints {
     barrier: BarrierSelector::PublicObjectMarkingBarrier,
     ..PlanConstraints::default()
 };
-
-pub const DEFRAG_MUTATOR_THRESHOLD: usize = 32;
 
 impl<VM: VMBinding> Plan for Immix<VM> {
     fn collection_required(&self, space_full: bool, _space: Option<SpaceStats<Self::VM>>) -> bool {
@@ -172,10 +171,20 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     #[cfg(feature = "thread_local_gc_copying")]
-    fn defrag_mutator_required(&self, tls: VMMutatorThread) -> bool {
+    fn defrag_mutator_required(
+        &self,
+        mmtk: &'static crate::MMTK<VM>,
+        tls: VMMutatorThread,
+    ) -> bool {
         use crate::vm::ActivePlan;
         use std::borrow::Borrow;
-        if !self.defrag_mutator.load(Ordering::Acquire) {
+        let number_of_workers = mmtk.scheduler.worker_group.worker_count();
+        let max_defrag_mutators = if *mmtk.options.max_concurrent_defrag_mutator != 0 {
+            usize::try_from(*mmtk.options.max_concurrent_defrag_mutator).unwrap()
+        } else {
+            number_of_workers
+        };
+        if self.defrag_mutator.load(Ordering::Acquire) >= number_of_workers {
             return false;
         }
         let mutator = VM::VMActivePlan::mutator(tls);
@@ -187,10 +196,16 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         }
         .downcast_ref::<crate::util::alloc::ImmixAllocator<VM>>()
         .unwrap();
-        if immix_allocator.local_reusable_blocks.len() >= DEFRAG_MUTATOR_THRESHOLD {
-            self.defrag_mutator
-                .compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok()
+        if immix_allocator.local_reusable_blocks.len()
+            >= thread_local_gc_work::DEFRAG_MUTATOR_THRESHOLD
+        {
+            let count = self.defrag_mutator.fetch_add(1, Ordering::SeqCst);
+            if count < max_defrag_mutators {
+                return true;
+            } else {
+                self.defrag_mutator.fetch_sub(1, Ordering::SeqCst);
+                return false;
+            }
 
             // true
         } else {
@@ -208,6 +223,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             true,
             crate::policy::immix::defrag::StatsForDefrag::new(self),
         );
+        self.defrag_mutator.store(0, Ordering::Release);
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
@@ -412,7 +428,7 @@ impl<VM: VMBinding> Immix<VM> {
             ),
             common: CommonPlan::new(plan_args),
             last_gc_was_defrag: AtomicBool::new(false),
-            defrag_mutator: AtomicBool::new(false),
+            defrag_mutator: AtomicUsize::new(0),
         };
 
         immix.verify_side_metadata_sanity();

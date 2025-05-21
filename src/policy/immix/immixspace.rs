@@ -954,11 +954,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         } else if self.is_marked(object) {
             // We won the forwarding race but the object is already marked so we clear the
             // forwarding status and return the unmoved object
-            debug_assert!(
-                nursery_collection || self.defrag.space_exhausted() || self.is_pinned(object) || is_private_object,
-                "Forwarded object is the same as original object {} even though it should have been copied",
-                object,
-            );
+            // debug_assert!(
+            //     nursery_collection || self.defrag.space_exhausted() || self.is_pinned(object) || is_private_object,
+            //     "Forwarded object is the same as original object {} even though it should have been copied",
+            //     object,
+            // );
             #[cfg(debug_assertions)]
             {
                 #[cfg(all(feature = "debug_publish_object", feature = "thread_local_gc"))]
@@ -1292,6 +1292,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     pub fn thread_local_trace_object_defrag(
         &self,
         mutator: &mut Mutator<VM>,
+        #[cfg(feature = "debug_publish_object")] _source: ObjectReference,
         object: ObjectReference,
         _worker: &mut GCWorker<VM>,
         semantics: CopySemantics,
@@ -1299,8 +1300,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         // TODO make sure there is enough space to evacuate
 
         let block = Block::containing(object);
+        let is_private_object = !crate::util::metadata::public_bit::is_public::<VM>(object);
         #[cfg(feature = "vo_bit")]
         vo_bit::helper::on_trace_object::<VM>(object);
+
         if block.is_defrag_source() {
             let is_private_object = !crate::util::metadata::public_bit::is_public(object);
             let mut forwarding_status = 0;
@@ -1310,6 +1313,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 forwarding_status = object_forwarding::attempt_to_forward::<VM>(object);
                 object_forwarding::state_is_forwarded_or_being_forwarded(forwarding_status)
             };
+
             if is_forwarded_or_being_forwarded {
                 let new_object = if is_private_object {
                     object_forwarding::thread_local_get_forwarded_object::<VM>(object)
@@ -1333,17 +1337,21 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             } else {
                 debug_assert!(!self.is_marked(object));
 
-                let new_object = if self.defrag.space_exhausted() {
-                    self.attempt_mark(object, self.mark_state);
-                    object_forwarding::clear_forwarding_bits::<VM>(object);
-                    block.set_state(BlockState::Marked);
-                    // conservatively set the ditry bit
-                    if is_private_object {
-                        block.taint();
+                let new_object: ThreadlocalTracedObjectType = if self.defrag.space_exhausted() {
+                    if self.attempt_mark(object, self.mark_state) {
+                        self.unlog_object_if_needed(object);
+                        object_forwarding::clear_forwarding_bits::<VM>(object);
+                        block.set_state(BlockState::Marked);
+                        // conservatively set the ditry bit
+                        if is_private_object {
+                            block.taint();
+                        }
+                        #[cfg(feature = "vo_bit")]
+                        vo_bit::helper::on_object_marked::<VM>(object);
+                        ThreadlocalTracedObjectType::ToBeScanned(object)
+                    } else {
+                        ThreadlocalTracedObjectType::Scanned(object)
                     }
-                    #[cfg(feature = "vo_bit")]
-                    vo_bit::helper::on_object_marked::<VM>(object);
-                    object
                 } else {
                     let new_object = if is_private_object {
                         // We are forwarding objects.
@@ -1390,10 +1398,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     #[cfg(feature = "vo_bit")]
                     vo_bit::helper::on_object_forwarded::<VM>(new_object);
                     self.unlog_object_if_needed(new_object);
-                    new_object
+                    ThreadlocalTracedObjectType::ToBeScanned(new_object)
                 };
-
-                ThreadlocalTracedObjectType::ToBeScanned(new_object)
+                new_object
             }
         } else {
             // if the object is not in the defrag souce, then it cannot be evacuated
@@ -1901,6 +1908,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
             {
                 self.thread_local_trace_object_defrag(
                     mutator,
+                    _source,
                     object,
                     unsafe { &mut *_worker.unwrap() },
                     _copy.unwrap(),

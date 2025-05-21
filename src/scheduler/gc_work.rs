@@ -266,7 +266,10 @@ impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
             }
             #[cfg(feature = "thread_local_gc_copying")]
             {
-                if mmtk.get_plan().defrag_mutator_required(mutator.mutator_tls) {
+                if mmtk
+                    .get_plan()
+                    .defrag_mutator_required(mmtk, mutator.mutator_tls)
+                {
                     #[cfg(debug_assertions)]
                     info!("mutator: {} needs defragmentation", mutator.mutator_id);
 

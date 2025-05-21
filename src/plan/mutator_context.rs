@@ -1,5 +1,4 @@
 //! Mutator context for each application thread.
-
 use crate::plan::barriers::Barrier;
 use crate::plan::global::Plan;
 use crate::plan::AllocationSemantics;
@@ -207,7 +206,7 @@ pub struct Mutator<VM: VMBinding> {
     #[cfg(feature = "debug_thread_local_gc_copying")]
     pub(crate) stats: Box<crate::util::LocalGCStatistics>,
     #[cfg(feature = "thread_local_gc_copying")]
-    pub(crate) local_allocation_size: usize
+    pub(crate) local_allocation_size: usize,
 }
 
 impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
@@ -312,6 +311,7 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
                 );
             }
         }
+
 
     }
 

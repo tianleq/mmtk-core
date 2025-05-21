@@ -256,7 +256,11 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
     }
 
     #[cfg(feature = "thread_local_gc_copying")]
-    fn defrag_mutator_required(&self, _tls: VMMutatorThread) -> bool {
+    fn defrag_mutator_required(
+        &self,
+        _mmtk: &'static MMTK<Self::VM>,
+        _tls: VMMutatorThread,
+    ) -> bool {
         false
     }
 

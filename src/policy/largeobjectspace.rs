@@ -369,6 +369,31 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         ) & NURSERY_BIT
             == NURSERY_BIT
     }
+
+    #[cfg(feature = "satb")]
+    pub fn is_marked(&self, object: ObjectReference) -> bool {
+        self.test_mark_bit(object, self.mark_state)
+    }
+
+    #[cfg(feature = "satb")]
+    pub fn initial_pause_prepare(&self) {
+        use crate::util::object_enum::ClosureObjectEnumerator;
+
+        let mut enumator = ClosureObjectEnumerator::<_, VM>::new(|object| {
+            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(object, Ordering::SeqCst);
+        });
+        self.treadmill.enumerate_objects(&mut enumator);
+    }
+
+    #[cfg(feature = "satb")]
+    pub fn final_pause_release(&self) {
+        use crate::util::object_enum::ClosureObjectEnumerator;
+
+        let mut enumator = ClosureObjectEnumerator::<_, VM>::new(|object| {
+            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.clear::<VM>(object, Ordering::SeqCst);
+        });
+        self.treadmill.enumerate_objects(&mut enumator);
+    }
 }
 
 fn get_super_page(cell: Address) -> Address {

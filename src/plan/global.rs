@@ -331,6 +331,11 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
             space.verify_side_metadata_sanity(&mut side_metadata_sanity_checker);
         })
     }
+
+    #[cfg(feature = "satb")]
+    fn gc_pause_start(&self, _scheduler: &GCWorkScheduler<Self::VM>) {}
+    #[cfg(feature = "satb")]
+    fn gc_pause_end(&self) {}
 }
 
 impl_downcast!(Plan assoc VM);
@@ -593,6 +598,16 @@ impl<VM: VMBinding> CommonPlan<VM> {
         self.los.prepare(full_heap);
         self.nonmoving.prepare();
         self.base.prepare(tls, full_heap)
+    }
+
+    #[cfg(feature = "satb")]
+    pub fn initial_pause_prepare(&mut self) {
+        self.los.initial_pause_prepare();
+    }
+
+    #[cfg(feature = "satb")]
+    pub fn final_pause_release(&mut self) {
+        self.los.final_pause_release();
     }
 
     pub fn release(&mut self, tls: VMWorkerThread, full_heap: bool) {

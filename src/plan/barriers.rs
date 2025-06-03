@@ -21,6 +21,7 @@ pub enum BarrierSelector {
     NoBarrier,
     /// Object remembering barrier is used.
     ObjectBarrier,
+    SATBBarrier,
 }
 
 impl BarrierSelector {
@@ -44,6 +45,9 @@ impl BarrierSelector {
 /// and call the slow-path (`object_reference_write_slow`) only if necessary.
 pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
     fn flush(&mut self) {}
+
+    /// load referent from java.lang.Reference
+    fn load_reference(&mut self, _referent: ObjectReference) {}
 
     /// Subsuming barrier for object reference write
     fn object_reference_write(
@@ -91,6 +95,8 @@ pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
         VM::VMMemorySlice::copy(&src, &dst);
         self.memory_region_copy_post(src, dst);
     }
+
+    fn object_reference_clone_pre(&mut self, _obj: ObjectReference) {}
 
     /// Full pre-barrier for array copy
     fn memory_region_copy_pre(&mut self, _src: VM::VMMemorySlice, _dst: VM::VMMemorySlice) {}
@@ -156,6 +162,11 @@ pub trait BarrierSemantics: 'static + Send {
         src: <Self::VM as VMBinding>::VMMemorySlice,
         dst: <Self::VM as VMBinding>::VMMemorySlice,
     );
+
+    /// load referent from java.lang.Reference
+    fn load_reference(&mut self, _referent: ObjectReference) {}
+
+    fn object_reference_clone_pre(&mut self, _obj: ObjectReference) {}
 
     /// Object will probably be modified
     fn object_probable_write_slow(&mut self, _obj: ObjectReference) {}
@@ -248,5 +259,81 @@ impl<S: BarrierSemantics> Barrier<S::VM> for ObjectBarrier<S> {
         if self.object_is_unlogged(obj) {
             self.semantics.object_probable_write_slow(obj);
         }
+    }
+}
+
+#[cfg(feature = "satb")]
+pub struct SATBBarrier<S: BarrierSemantics> {
+    semantics: S,
+}
+
+#[cfg(feature = "satb")]
+impl<S: BarrierSemantics> SATBBarrier<S> {
+    pub fn new(semantics: S) -> Self {
+        Self { semantics }
+    }
+}
+
+#[cfg(feature = "satb")]
+impl<S: BarrierSemantics> Barrier<S::VM> for SATBBarrier<S> {
+    fn flush(&mut self) {
+        self.semantics.flush();
+    }
+
+    fn load_reference(&mut self, o: ObjectReference) {
+        self.semantics.load_reference(o)
+    }
+
+    fn object_reference_clone_pre(&mut self, obj: ObjectReference) {
+        self.semantics.object_reference_clone_pre(obj);
+    }
+
+    fn object_probable_write(&mut self, obj: ObjectReference) {
+        self.semantics.object_probable_write_slow(obj);
+    }
+
+    fn object_reference_write_pre(
+        &mut self,
+        src: ObjectReference,
+        slot: <S::VM as VMBinding>::VMSlot,
+        target: Option<ObjectReference>,
+    ) {
+        self.semantics
+            .object_reference_write_slow(src, slot, target);
+    }
+
+    fn object_reference_write_post(
+        &mut self,
+        _src: ObjectReference,
+        _slot: <S::VM as VMBinding>::VMSlot,
+        _target: Option<ObjectReference>,
+    ) {
+        unimplemented!()
+    }
+
+    fn object_reference_write_slow(
+        &mut self,
+        src: ObjectReference,
+        slot: <S::VM as VMBinding>::VMSlot,
+        target: Option<ObjectReference>,
+    ) {
+        self.semantics
+            .object_reference_write_slow(src, slot, target);
+    }
+
+    fn memory_region_copy_pre(
+        &mut self,
+        src: <S::VM as VMBinding>::VMMemorySlice,
+        dst: <S::VM as VMBinding>::VMMemorySlice,
+    ) {
+        self.semantics.memory_region_copy_slow(src, dst);
+    }
+
+    fn memory_region_copy_post(
+        &mut self,
+        _src: <S::VM as VMBinding>::VMMemorySlice,
+        _dst: <S::VM as VMBinding>::VMMemorySlice,
+    ) {
+        unimplemented!()
     }
 }

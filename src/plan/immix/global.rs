@@ -1,5 +1,5 @@
-use super::gc_work::ImmixGCWorkContext;
 use super::mutator::ALLOCATOR_MAPPING;
+use super::Pause;
 use crate::plan::global::BasePlan;
 use crate::plan::global::CommonPlan;
 use crate::plan::global::CreateGeneralPlanArgs;
@@ -8,7 +8,6 @@ use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::ImmixSpaceArgs;
-use crate::policy::immix::{TRACE_KIND_DEFRAG, TRACE_KIND_FAST};
 use crate::policy::space::Space;
 use crate::scheduler::*;
 use crate::util::alloc::allocators::AllocatorSelector;
@@ -20,10 +19,20 @@ use crate::vm::VMBinding;
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use std::sync::atomic::AtomicBool;
 
+use atomic::Atomic;
 use atomic::Ordering;
 use enum_map::EnumMap;
 
 use mmtk_macros::{HasSpaces, PlanTraceObject};
+
+#[cfg(feature = "satb")]
+#[derive(Debug, Clone, Copy, bytemuck::NoUninit)]
+#[repr(u8)]
+enum GCCause {
+    Unknown,
+    FullHeap,
+    FinalMark,
+}
 
 #[derive(HasSpaces, PlanTraceObject)]
 pub struct Immix<VM: VMBinding> {
@@ -34,6 +43,14 @@ pub struct Immix<VM: VMBinding> {
     #[parent]
     pub common: CommonPlan<VM>,
     last_gc_was_defrag: AtomicBool,
+    #[cfg(feature = "satb")]
+    current_pause: Atomic<Option<Pause>>,
+    #[cfg(feature = "satb")]
+    previous_pause: Atomic<Option<Pause>>,
+    #[cfg(feature = "satb")]
+    in_concurrent_marking: AtomicBool,
+    #[cfg(feature = "satb")]
+    gc_cause: Atomic<GCCause>,
 }
 
 /// The plan constraints for the immix plan.
@@ -47,8 +64,22 @@ pub const IMMIX_CONSTRAINTS: PlanConstraints = PlanConstraints {
 };
 
 impl<VM: VMBinding> Plan for Immix<VM> {
+    #[cfg(not(feature = "satb"))]
     fn collection_required(&self, space_full: bool, _space: Option<SpaceStats<Self::VM>>) -> bool {
         self.base().collection_required(self, space_full)
+    }
+
+    #[cfg(feature = "satb")]
+    fn collection_required(&self, space_full: bool, _space: Option<SpaceStats<Self::VM>>) -> bool {
+        if self.base().collection_required(self, space_full) {
+            self.gc_cause.store(GCCause::FullHeap, Ordering::Relaxed);
+            return true;
+        }
+        if self.concurrent_marking_in_progress() && crate::concurrent_marking_packets_drained() {
+            self.gc_cause.store(GCCause::FinalMark, Ordering::Relaxed);
+            return true;
+        }
+        false
     }
 
     fn last_collection_was_exhaustive(&self) -> bool {
@@ -73,11 +104,25 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
+        #[cfg(not(feature = "satb"))]
         Self::schedule_immix_full_heap_collection::<
             Immix<VM>,
             ImmixGCWorkContext<VM, TRACE_KIND_FAST>,
             ImmixGCWorkContext<VM, TRACE_KIND_DEFRAG>,
-        >(self, &self.immix_space, scheduler)
+        >(self, &self.immix_space, scheduler);
+        #[cfg(feature = "satb")]
+        {
+            let pause = self.select_collection_kind();
+
+            // Set current pause kind
+            self.current_pause.store(Some(pause), Ordering::SeqCst);
+            // Schedule work
+            match pause {
+                Pause::InitialMark => self.schedule_concurrent_marking_initial_pause(scheduler),
+                Pause::FinalMark => self.schedule_concurrent_marking_final_pause(scheduler),
+                _ => unreachable!(),
+            }
+        }
     }
 
     fn get_allocator_mapping(&self) -> &'static EnumMap<AllocationSemantics, AllocatorSelector> {
@@ -85,17 +130,41 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn prepare(&mut self, tls: VMWorkerThread) {
-        self.common.prepare(tls, true);
-        self.immix_space.prepare(
-            true,
-            crate::policy::immix::defrag::StatsForDefrag::new(self),
-        );
+        if cfg!(feature = "satb") {
+            let pause = self.current_pause().unwrap();
+            if pause == Pause::InitialMark {
+                self.common.prepare(tls, true);
+                self.immix_space.prepare(
+                    true,
+                    crate::policy::immix::defrag::StatsForDefrag::new(self),
+                );
+                self.immix_space.initial_pause_prepare();
+                self.common.initial_pause_prepare();
+            }
+        } else {
+            self.common.prepare(tls, true);
+            self.immix_space.prepare(
+                true,
+                crate::policy::immix::defrag::StatsForDefrag::new(self),
+            );
+        }
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
-        self.common.release(tls, true);
-        // release the collected region
-        self.immix_space.release(true);
+        if cfg!(feature = "satb") {
+            let pause = self.current_pause().unwrap();
+            if pause == Pause::FinalMark {
+                self.immix_space.final_pause_release();
+                self.common.final_pause_release();
+                self.common.release(tls, true);
+                // release the collected region
+                self.immix_space.release(true);
+            }
+        } else {
+            self.common.release(tls, true);
+            // release the collected region
+            self.immix_space.release(true);
+        }
     }
 
     fn end_of_gc(&mut self, _tls: VMWorkerThread) {
@@ -125,6 +194,32 @@ impl<VM: VMBinding> Plan for Immix<VM> {
 
     fn common(&self) -> &CommonPlan<VM> {
         &self.common
+    }
+
+    #[cfg(feature = "satb")]
+    fn gc_pause_start(&self, _scheduler: &GCWorkScheduler<VM>) {
+        use crate::vm::ActivePlan;
+
+        let pause = self.current_pause().unwrap();
+
+        if pause == Pause::FinalMark {
+            // Flush barrier buffers
+            for mutator in <VM as VMBinding>::VMActivePlan::mutators() {
+                mutator.barrier.flush();
+            }
+            self.set_concurrent_marking_state(false);
+        }
+    }
+
+    #[cfg(feature = "satb")]
+    fn gc_pause_end(&self) {
+        // self.immix_space.flush_page_resource();
+        let pause = self.current_pause().unwrap();
+        if pause == Pause::InitialMark {
+            self.set_concurrent_marking_state(true);
+        }
+        self.previous_pause.store(Some(pause), Ordering::SeqCst);
+        self.current_pause.store(None, Ordering::SeqCst);
     }
 }
 
@@ -157,6 +252,14 @@ impl<VM: VMBinding> Immix<VM> {
             ),
             common: CommonPlan::new(plan_args),
             last_gc_was_defrag: AtomicBool::new(false),
+            #[cfg(feature = "satb")]
+            current_pause: Atomic::new(None),
+            #[cfg(feature = "satb")]
+            previous_pause: Atomic::new(None),
+            #[cfg(feature = "satb")]
+            in_concurrent_marking: AtomicBool::new(false),
+            #[cfg(feature = "satb")]
+            gc_cause: Atomic::new(GCCause::Unknown),
         };
 
         immix.verify_side_metadata_sanity();
@@ -193,7 +296,139 @@ impl<VM: VMBinding> Immix<VM> {
         }
     }
 
+    #[cfg(feature = "satb")]
+    fn select_collection_kind(&self) -> Pause {
+        // let emergency = self.base().global_state.is_emergency_collection();
+        // let user_triggered = self.base().global_state.is_user_triggered_collection();
+        let concurrent_marking_in_progress = self.concurrent_marking_in_progress();
+        let concurrent_marking_packets_drained = crate::concurrent_marking_packets_drained();
+
+        // If CM is finished, do a final mark pause
+        if concurrent_marking_in_progress && concurrent_marking_packets_drained {
+            return Pause::FinalMark;
+        }
+
+        // // Either final mark pause or full pause for emergency GC
+        // if emergency || user_triggered {
+        //     return if concurrent_marking_in_progress {
+        //         Pause::FinalMark
+        //     } else {
+        //         Pause::InitialMark
+        //     };
+        // }
+
+        Pause::InitialMark
+    }
+
+    #[cfg(feature = "satb")]
+    fn disable_unnecessary_buckets(&'static self, scheduler: &GCWorkScheduler<VM>, pause: Pause) {
+        if pause == Pause::InitialMark {
+            scheduler.work_buckets[WorkBucketStage::Closure].set_as_disabled();
+            scheduler.work_buckets[WorkBucketStage::WeakRefClosure].set_as_disabled();
+            scheduler.work_buckets[WorkBucketStage::FinalRefClosure].set_as_disabled();
+            scheduler.work_buckets[WorkBucketStage::PhantomRefClosure].set_as_disabled();
+        }
+        scheduler.work_buckets[WorkBucketStage::TPinningClosure].set_as_disabled();
+        scheduler.work_buckets[WorkBucketStage::PinningRootsTrace].set_as_disabled();
+        scheduler.work_buckets[WorkBucketStage::VMRefClosure].set_as_disabled();
+        scheduler.work_buckets[WorkBucketStage::VMRefForwarding].set_as_disabled();
+        scheduler.work_buckets[WorkBucketStage::SoftRefClosure].set_as_disabled();
+        scheduler.work_buckets[WorkBucketStage::CalculateForwarding].set_as_disabled();
+        scheduler.work_buckets[WorkBucketStage::SecondRoots].set_as_disabled();
+        scheduler.work_buckets[WorkBucketStage::RefForwarding].set_as_disabled();
+        scheduler.work_buckets[WorkBucketStage::FinalizableForwarding].set_as_disabled();
+        scheduler.work_buckets[WorkBucketStage::Compact].set_as_disabled();
+    }
+
+    #[cfg(feature = "satb")]
+    pub(crate) fn schedule_concurrent_marking_initial_pause(
+        &'static self,
+        scheduler: &GCWorkScheduler<VM>,
+    ) {
+        use crate::{
+            plan::immix::{
+                concurrent_marking::ProcessRootEdges, gc_work::ConcurrentImmixGCWorkContext,
+            },
+            scheduler::gc_work::{Prepare, Release, StopMutators, UnsupportedProcessEdges},
+        };
+
+        self.disable_unnecessary_buckets(scheduler, Pause::InitialMark);
+        // self.process_prev_roots(scheduler);
+        scheduler.work_buckets[WorkBucketStage::Unconstrained].add_prioritized(Box::new(
+            StopMutators::<ConcurrentImmixGCWorkContext<ProcessRootEdges<VM>>>::new(),
+        ));
+        scheduler.work_buckets[WorkBucketStage::Prepare].add(Prepare::<
+            ConcurrentImmixGCWorkContext<UnsupportedProcessEdges<VM>>,
+        >::new(self));
+        scheduler.work_buckets[WorkBucketStage::Release].add(Release::<
+            ConcurrentImmixGCWorkContext<UnsupportedProcessEdges<VM>>,
+        >::new(self));
+    }
+
+    #[cfg(feature = "satb")]
+    fn schedule_concurrent_marking_final_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
+        use super::gc_work::ConcurrentImmixGCWorkContext;
+        use crate::{
+            plan::immix::concurrent_marking::ProcessRootEdges,
+            scheduler::gc_work::{Prepare, Release, StopMutators, UnsupportedProcessEdges},
+        };
+
+        self.disable_unnecessary_buckets(scheduler, Pause::FinalMark);
+        // if self.concurrent_marking_in_progress() {
+        //     crate::MOVE_CONCURRENT_MARKING_TO_STW.store(true, Ordering::SeqCst);
+        // }
+        // self.process_prev_roots(scheduler);
+        scheduler.work_buckets[WorkBucketStage::Unconstrained].add_prioritized(Box::new(
+            StopMutators::<ConcurrentImmixGCWorkContext<ProcessRootEdges<VM>>>::new(),
+        ));
+
+        scheduler.work_buckets[WorkBucketStage::Prepare].add(Prepare::<
+            ConcurrentImmixGCWorkContext<UnsupportedProcessEdges<VM>>,
+        >::new(self));
+        scheduler.work_buckets[WorkBucketStage::Release].add(Release::<
+            ConcurrentImmixGCWorkContext<UnsupportedProcessEdges<VM>>,
+        >::new(self));
+        // scheduler.schedule_ref_proc_work::<LXRWeakRefWorkContext<VM>>(self);
+    }
+
     pub(in crate::plan) fn set_last_gc_was_defrag(&self, defrag: bool, order: Ordering) {
         self.last_gc_was_defrag.store(defrag, order)
+    }
+
+    #[cfg(feature = "satb")]
+    pub fn concurrent_marking_enabled(&self) -> bool {
+        self.immix_space.concurrent_marking_enabled
+    }
+
+    #[cfg(feature = "satb")]
+    pub fn concurrent_marking_in_progress(&self) -> bool {
+        self.in_concurrent_marking.load(Ordering::Relaxed)
+    }
+
+    #[cfg(feature = "satb")]
+    fn set_concurrent_marking_state(&self, active: bool) {
+        use crate::vm::Collection;
+
+        <VM as VMBinding>::VMCollection::set_concurrent_marking_state(active);
+        self.in_concurrent_marking.store(active, Ordering::SeqCst);
+    }
+
+    #[cfg(feature = "satb")]
+    pub fn current_pause(&self) -> Option<Pause> {
+        self.current_pause.load(Ordering::SeqCst)
+    }
+
+    #[cfg(feature = "satb")]
+    pub fn previous_pause(&self) -> Option<Pause> {
+        self.previous_pause.load(Ordering::SeqCst)
+    }
+
+    #[cfg(feature = "satb")]
+    pub fn is_marked(&self, o: crate::util::ObjectReference) -> bool {
+        if self.immix_space.in_space(o) {
+            self.immix_space.is_marked(o)
+        } else {
+            self.common.los.is_marked(o)
+        }
     }
 }

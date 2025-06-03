@@ -209,8 +209,11 @@ impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
             mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
                 .add(ScanMutatorRoots::<C>(mutator));
         });
+        mmtk.scheduler.set_in_gc_pause(true);
         trace!("stop_all_mutators end");
         mmtk.scheduler.notify_mutators_paused(mmtk);
+        #[cfg(feature = "satb")]
+        mmtk.get_plan().gc_pause_start(&mmtk.scheduler);
         mmtk.scheduler.work_buckets[WorkBucketStage::Prepare].add(ScanVMSpecificRoots::<C>::new());
     }
 }
@@ -440,6 +443,55 @@ impl<C: GCWorkContext> GCWork<C::VM> for ScanVMSpecificRoots<C> {
             C::PinningProcessEdges,
         >::new(mmtk);
         <C::VM as VMBinding>::VMScanning::scan_vm_specific_roots(worker.tls, factory);
+    }
+}
+
+#[cfg(feature = "satb")]
+#[repr(u8)]
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
+pub enum RootKind {
+    Strong,
+    /// Some OpenJDK roots are slow to scan. We only collect newly created or modified ones in the previous mutator phase.
+    ///
+    /// Possible roots:
+    /// * Strong CLD roots
+    /// * Weak CLD roots (weak)
+    /// * CodeCache roots
+    /// * WeakHandle roots (weak)
+    ///
+    /// FOR LXR:
+    /// * Don't apply decrements to these roots
+    /// * Mark them at the start of SATB
+    /// * StrongCLD / CodeCache roots: for SATB correctness, collect the complete set of them at Initial/Final SATB pause, to make sure they are marked and forwarded properly.
+    /// * Mature evac: Add these roots to remset, so that any roots that is modified during the concurrent phase will be scanned.
+    StrongCLDRoots,
+    YoungStrongCLDRoots,
+    YoungWeakCLDRoots,
+    YoungCodeCacheRoots,
+    YoungWeakHandleRoots,
+    Weak,
+}
+
+#[cfg(feature = "satb")]
+impl RootKind {
+    pub fn should_record_remset(&self) -> bool {
+        matches!(self, RootKind::YoungWeakCLDRoots)
+            || matches!(self, RootKind::YoungWeakHandleRoots)
+            || matches!(self, RootKind::YoungCodeCacheRoots)
+    }
+
+    pub fn should_skip_mark_and_decs(&self) -> bool {
+        matches!(self, RootKind::YoungCodeCacheRoots)
+            || matches!(self, RootKind::YoungWeakHandleRoots)
+    }
+
+    pub fn should_skip_decs(&self) -> bool {
+        matches!(self, RootKind::YoungCodeCacheRoots)
+            || matches!(self, RootKind::StrongCLDRoots)
+            || matches!(self, RootKind::YoungStrongCLDRoots)
+            || matches!(self, RootKind::YoungWeakCLDRoots)
+            || matches!(self, RootKind::YoungWeakHandleRoots)
+            || matches!(self, RootKind::Weak)
     }
 }
 

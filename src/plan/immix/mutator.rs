@@ -1,4 +1,6 @@
 use super::Immix;
+use crate::plan::barriers::SATBBarrier;
+use crate::plan::immix::barrier::SATBBarrierSemantics;
 use crate::plan::mutator_context::create_allocator_mapping;
 use crate::plan::mutator_context::create_space_mapping;
 use crate::plan::mutator_context::unreachable_prepare_func;
@@ -55,5 +57,11 @@ pub fn create_immix_mutator<VM: VMBinding>(
     };
 
     let builder = MutatorBuilder::new(mutator_tls, mmtk, config);
-    builder.build()
+    if cfg!(feature = "satb") {
+        builder
+            .barrier(Box::new(SATBBarrier::new(SATBBarrierSemantics::new(mmtk))))
+            .build()
+    } else {
+        builder.build()
+    }
 }

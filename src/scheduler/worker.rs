@@ -20,7 +20,25 @@ pub type ThreadId = usize;
 thread_local! {
     /// Current worker's ordinal
     static WORKER_ORDINAL: Atomic<ThreadId> = const { Atomic::new(ThreadId::MAX) };
+    #[cfg(feature = "satb")]
+    static _WORKER: Atomic<usize> = Atomic::new(0);
 }
+
+#[cfg(feature = "satb")]
+lazy_static! {
+    static ref _WORKERS: Mutex<Vec<OpaquePointer>> = Mutex::new(Vec::new());
+}
+
+// #[cfg(feature = "satb")]
+// pub fn reset_workers<VM: VMBinding>() {
+//     let workers = _WORKERS.lock().unwrap();
+//     for w in workers.iter() {
+//         let w = w.as_mut_ptr::<GCWorker<VM>>();
+//         unsafe {
+//             (*w).get_copy_context_mut().release();
+//         }
+//     }
+// }
 
 /// Get current worker ordinal. Return `None` if the current thread is not a worker.
 pub fn current_worker_ordinal() -> ThreadId {
@@ -226,6 +244,18 @@ impl<VM: VMBinding> GCWorker<VM> {
             crate::util::rust_util::debug_process_thread_id(),
         );
         WORKER_ORDINAL.with(|x| x.store(self.ordinal, Ordering::SeqCst));
+        let worker = (&mut *self as &mut Self) as *mut Self;
+        _WORKER.with(|x| {
+            x.store(
+                (&mut *self as &mut Self) as *mut Self as usize,
+                Ordering::SeqCst,
+            )
+        });
+        _WORKERS
+            .lock()
+            .unwrap()
+            .push(OpaquePointer::from_mut_ptr(worker));
+
         self.scheduler.resolve_affinity(self.ordinal);
         self.tls = tls;
         self.copy = crate::plan::create_gc_worker_context(tls, mmtk);
@@ -264,6 +294,24 @@ impl<VM: VMBinding> GCWorker<VM> {
         probe!(mmtk, gcworker_exit);
 
         mmtk.scheduler.surrender_gc_worker(self);
+    }
+
+    #[cfg(feature = "satb")]
+    /// Get current worker.
+    pub fn current() -> &'static mut Self {
+        let ptr = _WORKER.with(|x| x.load(Ordering::Relaxed)) as *mut Self;
+        unsafe { &mut *ptr }
+    }
+
+    #[cfg(feature = "satb")]
+    pub fn add_boxed_work(&mut self, bucket: WorkBucketStage, work: Box<dyn GCWork<VM>>) {
+        if !self.scheduler().work_buckets[bucket].is_activated()
+            || self.local_work_buffer.len() >= Self::LOCALLY_CACHED_WORK_PACKETS
+        {
+            self.scheduler.work_buckets[bucket].add_boxed(work);
+            return;
+        }
+        self.local_work_buffer.push(work);
     }
 }
 

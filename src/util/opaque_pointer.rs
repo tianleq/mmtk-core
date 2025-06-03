@@ -36,6 +36,14 @@ impl OpaquePointer {
     pub fn is_null(self) -> bool {
         self.0.is_null()
     }
+
+    pub fn from_mut_ptr<T>(ptr: *mut T) -> Self {
+        OpaquePointer(ptr as *mut c_void)
+    }
+
+    pub fn as_mut_ptr<T>(self) -> *mut T {
+        self.0 as *mut T
+    }
 }
 
 /// A VMThread is an opaque pointer that can uniquely identify a thread in the VM.

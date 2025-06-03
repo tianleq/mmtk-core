@@ -37,14 +37,14 @@ pub use plan_constraints::PlanConstraints;
 pub(crate) use plan_constraints::DEFAULT_PLAN_CONSTRAINTS;
 
 mod tracing;
-pub use tracing::{ObjectQueue, ObjectsClosure, VectorObjectQueue, VectorQueue};
+pub use tracing::{ObjectQueue, ObjectsClosure, SlotIterator, VectorObjectQueue, VectorQueue};
 
 /// Generational plans (with a copying nursery)
 mod generational;
 /// Sticky plans (using sticky marks for generational behaviors without a copying nursery)
 mod sticky;
 
-mod immix;
+pub mod immix;
 mod markcompact;
 mod marksweep;
 mod nogc;

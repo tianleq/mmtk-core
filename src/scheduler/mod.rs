@@ -32,3 +32,5 @@ pub use worker::GCWorker;
 
 pub(crate) mod gc_work;
 pub use gc_work::ProcessEdgesWork;
+#[cfg(feature = "satb")]
+pub use gc_work::RootKind;

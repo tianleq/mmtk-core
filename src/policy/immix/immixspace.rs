@@ -55,6 +55,8 @@ pub struct ImmixSpace<VM: VMBinding> {
     scheduler: Arc<GCWorkScheduler<VM>>,
     /// Some settings for this space
     space_args: ImmixSpaceArgs,
+    #[cfg(feature = "satb")]
+    pub concurrent_marking_enabled: bool,
 }
 
 /// Some arguments for Immix Space.
@@ -341,6 +343,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             mark_state: Self::MARKED_STATE,
             scheduler: scheduler.clone(),
             space_args,
+            #[cfg(feature = "satb")]
+            concurrent_marking_enabled: true,
         }
     }
 
@@ -469,6 +473,24 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     .chunk_map
                     .generate_tasks(|chunk| Box::new(ClearVOBitsAfterPrepare { chunk, scope }));
                 self.scheduler.work_buckets[WorkBucketStage::ClearVOBits].bulk_add(work_packets);
+            }
+        }
+    }
+
+    #[cfg(feature = "satb")]
+    pub fn initial_pause_prepare(&mut self) {
+        if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC {
+            for chunk in self.chunk_map.all_chunks() {
+                side.bset_metadata(chunk.start(), Chunk::BYTES);
+            }
+        }
+    }
+
+    #[cfg(feature = "satb")]
+    pub fn final_pause_release(&mut self) {
+        if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC {
+            for chunk in self.chunk_map.all_chunks() {
+                side.bzero_metadata(chunk.start(), Chunk::BYTES);
             }
         }
     }
@@ -861,6 +883,18 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     pub(crate) fn is_defrag_enabled(&self) -> bool {
         !self.space_args.never_move_objects
     }
+
+    #[cfg(feature = "satb")]
+    pub fn generate_concurrent_mark_table_zeroing_tasks(&self) -> Vec<Box<dyn GCWork<VM>>> {
+        self.chunk_map
+            .generate_tasks_batched(|chunks| Box::new(ConcurrentChunkMetadataZeroing { chunks }))
+    }
+
+    #[cfg(feature = "satb")]
+    pub fn schedule_mark_table_zeroing_tasks(&self, stage: WorkBucketStage) {
+        let work_packets = self.generate_concurrent_mark_table_zeroing_tasks();
+        self.scheduler().work_buckets[stage].bulk_add(work_packets);
+    }
 }
 
 /// A work packet to prepare each block for a major GC.
@@ -1161,6 +1195,39 @@ impl ClearVOBitsAfterPrepare {
             .filter(|block| block.get_state() != BlockState::Unallocated)
         {
             block.clear_vo_bits_for_unmarked_regions(line_mark_state);
+        }
+    }
+}
+
+pub(super) struct ConcurrentChunkMetadataZeroing {
+    pub chunks: std::ops::Range<Chunk>,
+}
+
+impl ConcurrentChunkMetadataZeroing {
+    /// Clear object mark table
+    #[allow(unused)]
+    fn reset_object_mark<VM: VMBinding>(chunk: Chunk) {
+        VM::VMObjectModel::LOCAL_MARK_BIT_SPEC
+            .extract_side_spec()
+            .bzero_metadata(chunk.start(), Chunk::BYTES);
+    }
+}
+
+impl<VM: VMBinding> GCWork<VM> for ConcurrentChunkMetadataZeroing {
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        let num_chunks = (self.chunks.end.start() - self.chunks.start.start()) >> Chunk::LOG_BYTES;
+        let ix_space = &mmtk
+            .get_plan()
+            .downcast_ref::<crate::plan::immix::Immix<VM>>()
+            .unwrap()
+            .immix_space;
+        for i in 0..num_chunks {
+            let chunk = self.chunks.start.next_nth(i);
+
+            if ix_space.chunk_map.get(chunk).is_none() {
+                continue;
+            }
+            Self::reset_object_mark::<VM>(chunk);
         }
     }
 }

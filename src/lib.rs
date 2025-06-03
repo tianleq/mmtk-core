@@ -41,6 +41,9 @@ extern crate static_assertions;
 extern crate probe;
 
 mod mmtk;
+#[cfg(feature = "satb")]
+use std::sync::atomic::AtomicUsize;
+
 pub use mmtk::MMTKBuilder;
 pub(crate) use mmtk::MMAPPER;
 pub use mmtk::MMTK;
@@ -60,3 +63,11 @@ pub mod vm;
 pub use crate::plan::{
     AllocationSemantics, BarrierSelector, Mutator, MutatorContext, ObjectQueue, Plan,
 };
+
+#[cfg(feature = "satb")]
+static NUM_CONCURRENT_TRACING_PACKETS: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(feature = "satb")]
+fn concurrent_marking_packets_drained() -> bool {
+    crate::NUM_CONCURRENT_TRACING_PACKETS.load(std::sync::atomic::Ordering::SeqCst) == 0
+}

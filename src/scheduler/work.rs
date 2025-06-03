@@ -56,6 +56,15 @@ pub trait GCWork<VM: VMBinding>: 'static + Send {
     fn get_type_name(&self) -> &'static str {
         std::any::type_name::<Self>()
     }
+
+    #[cfg(feature = "satb")]
+    fn should_defer(&self) -> bool {
+        false
+    }
+    #[cfg(feature = "satb")]
+    fn is_concurrent_marking_work(&self) -> bool {
+        false
+    }
 }
 
 use super::gc_work::ProcessEdgesWork;

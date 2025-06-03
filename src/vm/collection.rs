@@ -162,4 +162,7 @@ pub trait Collection<VM: VMBinding> {
     fn create_gc_trigger() -> Box<dyn GCTriggerPolicy<VM>> {
         unimplemented!()
     }
+
+    #[cfg(feature = "satb")]
+    fn set_concurrent_marking_state(active: bool);
 }

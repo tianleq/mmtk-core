@@ -7,20 +7,28 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 struct BucketQueue<VM: VMBinding> {
+    #[cfg(not(feature = "satb"))]
     queue: Injector<Box<dyn GCWork<VM>>>,
+    #[cfg(feature = "satb")]
+    queue: std::sync::RwLock<Injector<Box<dyn GCWork<VM>>>>,
 }
 
 impl<VM: VMBinding> BucketQueue<VM> {
     fn new() -> Self {
         Self {
+            #[cfg(not(feature = "satb"))]
             queue: Injector::new(),
+            #[cfg(feature = "satb")]
+            queue: std::sync::RwLock::new(Injector::new()),
         }
     }
 
+    #[cfg(not(feature = "satb"))]
     fn is_empty(&self) -> bool {
         self.queue.is_empty()
     }
 
+    #[cfg(not(feature = "satb"))]
     fn steal_batch_and_pop(
         &self,
         dest: &Worker<Box<dyn GCWork<VM>>>,
@@ -28,13 +36,40 @@ impl<VM: VMBinding> BucketQueue<VM> {
         self.queue.steal_batch_and_pop(dest)
     }
 
+    #[cfg(not(feature = "satb"))]
     fn push(&self, w: Box<dyn GCWork<VM>>) {
         self.queue.push(w);
     }
 
+    #[cfg(not(feature = "satb"))]
     fn push_all(&self, ws: Vec<Box<dyn GCWork<VM>>>) {
         for w in ws {
             self.queue.push(w);
+        }
+    }
+
+    #[cfg(feature = "satb")]
+    fn is_empty(&self) -> bool {
+        self.queue.read().unwrap().is_empty()
+    }
+
+    #[cfg(feature = "satb")]
+    fn steal_batch_and_pop(
+        &self,
+        dest: &Worker<Box<dyn GCWork<VM>>>,
+    ) -> Steal<Box<dyn GCWork<VM>>> {
+        self.queue.read().unwrap().steal_batch_and_pop(dest)
+    }
+
+    #[cfg(feature = "satb")]
+    fn push(&self, w: Box<dyn GCWork<VM>>) {
+        self.queue.read().unwrap().push(w);
+    }
+
+    #[cfg(feature = "satb")]
+    fn push_all(&self, ws: Vec<Box<dyn GCWork<VM>>>) {
+        for w in ws {
+            self.queue.read().unwrap().push(w);
         }
     }
 }
@@ -59,6 +94,10 @@ pub struct WorkBucket<VM: VMBinding> {
     /// recursively, such as ephemerons and Java-style SoftReference and finalizers.  Sentinels
     /// can be used repeatedly to discover and process more such objects.
     sentinel: Mutex<Option<Box<dyn GCWork<VM>>>>,
+    #[cfg(feature = "satb")]
+    in_concurrent: AtomicBool,
+    #[cfg(feature = "satb")]
+    disable: AtomicBool,
 }
 
 impl<VM: VMBinding> WorkBucket<VM> {
@@ -70,7 +109,62 @@ impl<VM: VMBinding> WorkBucket<VM> {
             monitor,
             can_open: None,
             sentinel: Mutex::new(None),
+            #[cfg(feature = "satb")]
+            in_concurrent: AtomicBool::new(true),
+            #[cfg(feature = "satb")]
+            disable: AtomicBool::new(false),
         }
+    }
+
+    #[cfg(feature = "satb")]
+    pub fn set_in_concurrent(&self, in_concurrent: bool) {
+        self.in_concurrent.store(in_concurrent, Ordering::SeqCst);
+    }
+
+    #[cfg(feature = "satb")]
+    pub fn set_as_enabled(&self) {
+        self.disable.store(false, Ordering::SeqCst)
+    }
+
+    #[cfg(feature = "satb")]
+    pub fn set_as_disabled(&self) {
+        self.disable.store(true, Ordering::SeqCst)
+    }
+
+    #[cfg(feature = "satb")]
+    pub fn disabled(&self) -> bool {
+        self.disable.load(Ordering::Relaxed)
+    }
+
+    #[cfg(feature = "satb")]
+    pub fn enable_prioritized_queue(&mut self) {
+        self.prioritized_queue = Some(BucketQueue::new());
+    }
+
+    #[cfg(feature = "satb")]
+    pub fn swap_queue(
+        &self,
+        mut new_queue: Injector<Box<dyn GCWork<VM>>>,
+    ) -> Injector<Box<dyn GCWork<VM>>> {
+        let mut queue = self.queue.queue.write().unwrap();
+        std::mem::swap::<Injector<Box<dyn GCWork<VM>>>>(&mut queue, &mut new_queue);
+        new_queue
+    }
+
+    #[cfg(feature = "satb")]
+    pub fn swap_queue_prioritized(
+        &self,
+        mut new_queue: Injector<Box<dyn GCWork<VM>>>,
+    ) -> Injector<Box<dyn GCWork<VM>>> {
+        let mut queue = self
+            .prioritized_queue
+            .as_ref()
+            .unwrap()
+            .queue
+            .write()
+            .unwrap();
+        std::mem::swap::<Injector<Box<dyn GCWork<VM>>>>(&mut queue, &mut new_queue);
+        new_queue
     }
 
     fn notify_one_worker(&self) {
@@ -240,6 +334,7 @@ impl<VM: VMBinding> WorkBucket<VM> {
 pub enum WorkBucketStage {
     /// This bucket is always open.
     Unconstrained,
+    Initial,
     /// Preparation work.  Plans, spaces, GC workers, mutators, etc. should be prepared for GC at
     /// this stage.
     Prepare,

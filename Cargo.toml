@@ -224,6 +224,9 @@ malloc_jemalloc = ["dep:jemalloc-sys"]
 # is not compiled in default builds.
 malloc_native_mimalloc = []
 
+# Concurrent Marking Immix
+satb = []
+
 # If there are more groups, they should be inserted above this line
 # Group:end
 

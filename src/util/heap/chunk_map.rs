@@ -192,4 +192,29 @@ impl ChunkMap {
         }
         work_packets
     }
+
+    #[cfg(feature = "satb")]
+    pub fn generate_tasks_batched<VM: VMBinding>(
+        &self,
+        func: impl Fn(Range<Chunk>) -> Box<dyn GCWork<VM>>,
+    ) -> Vec<Box<dyn GCWork<VM>>> {
+        use crate::scheduler::GCWorker;
+
+        let mut work_packets: Vec<Box<dyn GCWork<VM>>> = vec![];
+        let chunk_range = self.chunk_range.lock();
+        let chunks = (chunk_range.end.start() - chunk_range.start.start()) >> Chunk::LOG_BYTES;
+        let num_bins = GCWorker::<VM>::current().mmtk.scheduler.num_workers() * 8;
+        let bin_size = chunks.div_ceil(num_bins);
+        for i in (0..chunks).step_by(bin_size) {
+            let start = chunk_range.start.next_nth(i);
+            let end = chunk_range.start.next_nth(i + bin_size);
+            let end = if end > chunk_range.end {
+                chunk_range.end
+            } else {
+                end
+            };
+            work_packets.push(func(start..end));
+        }
+        work_packets
+    }
 }

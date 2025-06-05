@@ -118,6 +118,8 @@ impl<VM: VMBinding> Plan for StickyImmix<VM> {
             self.immix.immix_space.prepare(
                 false,
                 crate::policy::immix::defrag::StatsForDefrag::new(self),
+                #[cfg(feature = "satb")]
+                None,
             );
             self.immix.common.los.prepare(false);
         } else {
@@ -128,7 +130,11 @@ impl<VM: VMBinding> Plan for StickyImmix<VM> {
 
     fn release(&mut self, tls: crate::util::VMWorkerThread) {
         if self.is_current_gc_nursery() {
-            self.immix.immix_space.release(false);
+            self.immix.immix_space.release(
+                false,
+                #[cfg(feature = "satb")]
+                None,
+            );
             self.immix.common.los.release(false);
         } else {
             self.immix.release(tls);

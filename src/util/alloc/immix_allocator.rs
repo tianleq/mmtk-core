@@ -265,6 +265,17 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     // Update the hole-searching cursor to None.
                     Some(end_line)
                 };
+                #[cfg(feature = "satb")]
+                {
+                    // mark objects if concurrent marking is active
+                    if crate::CONCURRENT_MARKING_ACTIVE.load(std::sync::atomic::Ordering::Relaxed) {
+                        Line::MARK_TABLE.bset_metadata(
+                            start_line.start(),
+                            self.bump_pointer.limit - self.bump_pointer.cursor,
+                        );
+                        Line::initialize_mark_table_as_marked::<VM>(start_line..end_line);
+                    }
+                }
                 return true;
             } else {
                 // No more recyclable lines. Set the hole-searching cursor to None.
@@ -301,6 +312,16 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 // Bulk clear stale line mark state
                 Line::MARK_TABLE
                     .bzero_metadata(block.start(), crate::policy::immix::block::Block::BYTES);
+                #[cfg(feature = "satb")]
+                {
+                    // mark objects if concurrent marking is active
+                    if crate::CONCURRENT_MARKING_ACTIVE.load(std::sync::atomic::Ordering::Relaxed) {
+                        Line::MARK_TABLE.bset_metadata(block.start(), size);
+                        Line::initialize_mark_table_as_marked::<VM>(
+                            block.start_line()..block.end_line(),
+                        );
+                    }
+                }
                 if self.request_for_large {
                     self.large_bump_pointer.cursor = block.start();
                     self.large_bump_pointer.limit = block.end();

@@ -117,7 +117,8 @@ impl<VM: VMBinding> GCWork<VM> for ConcurrentTraceObjects<VM> {
             while !self.next_objects.is_empty() {
                 let pause_opt = self.plan.current_pause();
                 if !(pause_opt == Some(Pause::FinalMark) || pause_opt.is_none()) {
-                    break;
+                    panic!("should not reach here");
+                    // break;
                 }
                 next_objects.clear();
                 self.next_objects.swap(&mut next_objects);

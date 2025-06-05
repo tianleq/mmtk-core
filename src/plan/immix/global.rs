@@ -137,6 +137,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 self.immix_space.prepare(
                     true,
                     crate::policy::immix::defrag::StatsForDefrag::new(self),
+                    Some(pause),
                 );
                 self.immix_space.initial_pause_prepare();
                 self.common.initial_pause_prepare();
@@ -146,6 +147,8 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             self.immix_space.prepare(
                 true,
                 crate::policy::immix::defrag::StatsForDefrag::new(self),
+                #[cfg(feature = "satb")]
+                None,
             );
         }
     }
@@ -158,12 +161,16 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 self.common.final_pause_release();
                 self.common.release(tls, true);
                 // release the collected region
-                self.immix_space.release(true);
+                self.immix_space.release(true, Some(pause));
             }
         } else {
             self.common.release(tls, true);
             // release the collected region
-            self.immix_space.release(true);
+            self.immix_space.release(
+                true,
+                #[cfg(feature = "satb")]
+                None,
+            );
         }
     }
 
@@ -208,6 +215,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 mutator.barrier.flush();
             }
             self.set_concurrent_marking_state(false);
+            crate::CONCURRENT_MARKING_ACTIVE.store(false, Ordering::Release);
         }
     }
 
@@ -217,6 +225,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         let pause = self.current_pause().unwrap();
         if pause == Pause::InitialMark {
             self.set_concurrent_marking_state(true);
+            crate::CONCURRENT_MARKING_ACTIVE.store(true, Ordering::Release);
         }
         self.previous_pause.store(Some(pause), Ordering::SeqCst);
         self.current_pause.store(None, Ordering::SeqCst);

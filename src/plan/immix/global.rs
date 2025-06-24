@@ -26,11 +26,12 @@ use enum_map::EnumMap;
 use mmtk_macros::{HasSpaces, PlanTraceObject};
 
 #[cfg(feature = "satb")]
-#[derive(Debug, Clone, Copy, bytemuck::NoUninit)]
+#[derive(Debug, Clone, Copy, bytemuck::NoUninit, PartialEq, Eq)]
 #[repr(u8)]
 enum GCCause {
     Unknown,
     FullHeap,
+    InitialMark,
     FinalMark,
 }
 
@@ -70,13 +71,29 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     #[cfg(feature = "satb")]
+    fn stop_the_world_collection_required(
+        &self,
+        _space_full: bool,
+        _space: Option<SpaceStats<Self::VM>>,
+    ) -> bool {
+        self.get_available_pages() <= 32
+    }
+
+    #[cfg(feature = "satb")]
     fn collection_required(&self, space_full: bool, _space: Option<SpaceStats<Self::VM>>) -> bool {
-        if self.base().collection_required(self, space_full) {
+        if self.concurrent_marking_in_progress() && crate::concurrent_marking_packets_drained() {
+            self.gc_cause.store(GCCause::FinalMark, Ordering::Relaxed);
+            return true;
+        }
+        if self.stop_the_world_collection_required(space_full, _space) {
             self.gc_cause.store(GCCause::FullHeap, Ordering::Relaxed);
             return true;
         }
-        if self.concurrent_marking_in_progress() && crate::concurrent_marking_packets_drained() {
-            self.gc_cause.store(GCCause::FinalMark, Ordering::Relaxed);
+        if !self.concurrent_marking_in_progress()
+            && self.base().collection_required(self, space_full)
+        {
+            debug_assert!(crate::concurrent_marking_packets_drained());
+            self.gc_cause.store(GCCause::InitialMark, Ordering::Relaxed);
             return true;
         }
         false
@@ -112,15 +129,37 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         >(self, &self.immix_space, scheduler);
         #[cfg(feature = "satb")]
         {
-            let pause = self.select_collection_kind();
+            let cause = self.gc_cause.load(Ordering::Relaxed);
+            if cause == GCCause::FullHeap {
+                use crate::{
+                    plan::immix::gc_work::ImmixGCWorkContext,
+                    policy::immix::{TRACE_KIND_DEFRAG, TRACE_KIND_FAST},
+                };
 
-            // Set current pause kind
-            self.current_pause.store(Some(pause), Ordering::SeqCst);
-            // Schedule work
-            match pause {
-                Pause::InitialMark => self.schedule_concurrent_marking_initial_pause(scheduler),
-                Pause::FinalMark => self.schedule_concurrent_marking_final_pause(scheduler),
-                _ => unreachable!(),
+                let in_defrag = Self::schedule_immix_full_heap_collection::<
+                    Immix<VM>,
+                    ImmixGCWorkContext<VM, TRACE_KIND_FAST>,
+                    ImmixGCWorkContext<VM, TRACE_KIND_DEFRAG>,
+                >(self, &self.immix_space, scheduler);
+                self.current_pause.store(
+                    Some(if in_defrag {
+                        Pause::FullDefrag
+                    } else {
+                        Pause::Full
+                    }),
+                    Ordering::SeqCst,
+                );
+            } else {
+                let pause = self.select_collection_kind();
+
+                // Set current pause kind
+                self.current_pause.store(Some(pause), Ordering::SeqCst);
+                // Schedule work
+                match pause {
+                    Pause::InitialMark => self.schedule_concurrent_marking_initial_pause(scheduler),
+                    Pause::FinalMark => self.schedule_concurrent_marking_final_pause(scheduler),
+                    _ => unreachable!(),
+                }
             }
         }
     }
@@ -132,15 +171,27 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     fn prepare(&mut self, tls: VMWorkerThread) {
         if cfg!(feature = "satb") {
             let pause = self.current_pause().unwrap();
-            if pause == Pause::InitialMark {
-                self.common.prepare(tls, true);
-                self.immix_space.prepare(
-                    true,
-                    crate::policy::immix::defrag::StatsForDefrag::new(self),
-                    Some(pause),
-                );
-                self.immix_space.initial_pause_prepare();
-                self.common.initial_pause_prepare();
+            match pause {
+                Pause::Full | Pause::FullDefrag => {
+                    self.common.prepare(tls, true);
+                    self.immix_space.prepare(
+                        true,
+                        crate::policy::immix::defrag::StatsForDefrag::new(self),
+                        #[cfg(feature = "satb")]
+                        None,
+                    );
+                }
+                Pause::InitialMark => {
+                    self.common.prepare(tls, true);
+                    self.immix_space.prepare(
+                        true,
+                        crate::policy::immix::defrag::StatsForDefrag::new(self),
+                        Some(pause),
+                    );
+                    self.immix_space.initial_pause_prepare();
+                    self.common.initial_pause_prepare();
+                }
+                Pause::FinalMark => (),
             }
         } else {
             self.common.prepare(tls, true);
@@ -156,12 +207,24 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     fn release(&mut self, tls: VMWorkerThread) {
         if cfg!(feature = "satb") {
             let pause = self.current_pause().unwrap();
-            if pause == Pause::FinalMark {
-                self.immix_space.final_pause_release();
-                self.common.final_pause_release();
-                self.common.release(tls, true);
-                // release the collected region
-                self.immix_space.release(true, Some(pause));
+            match pause {
+                Pause::Full | Pause::FullDefrag => {
+                    self.common.release(tls, true);
+                    // release the collected region
+                    self.immix_space.release(
+                        true,
+                        #[cfg(feature = "satb")]
+                        None,
+                    );
+                }
+                Pause::InitialMark => (),
+                Pause::FinalMark => {
+                    self.immix_space.final_pause_release();
+                    self.common.final_pause_release();
+                    self.common.release(tls, true);
+                    // release the collected region
+                    self.immix_space.release(true, Some(pause));
+                }
             }
         } else {
             self.common.release(tls, true);
@@ -209,13 +272,27 @@ impl<VM: VMBinding> Plan for Immix<VM> {
 
         let pause = self.current_pause().unwrap();
 
-        if pause == Pause::FinalMark {
-            // Flush barrier buffers
-            for mutator in <VM as VMBinding>::VMActivePlan::mutators() {
-                mutator.barrier.flush();
+        match pause {
+            Pause::Full | Pause::FullDefrag => {
+                debug_assert!(self.concurrent_marking_in_progress());
+                debug_assert!(crate::CONCURRENT_MARKING_ACTIVE.load(Ordering::Relaxed));
+                self.set_concurrent_marking_state(false);
+                crate::CONCURRENT_MARKING_ACTIVE.store(false, Ordering::Release);
             }
-            self.set_concurrent_marking_state(false);
-            crate::CONCURRENT_MARKING_ACTIVE.store(false, Ordering::Release);
+            Pause::InitialMark => {
+                debug_assert!(!self.concurrent_marking_in_progress());
+                debug_assert!(!crate::CONCURRENT_MARKING_ACTIVE.load(Ordering::Relaxed));
+            }
+            Pause::FinalMark => {
+                debug_assert!(self.concurrent_marking_in_progress());
+                debug_assert!(crate::CONCURRENT_MARKING_ACTIVE.load(Ordering::Relaxed));
+                // Flush barrier buffers
+                for mutator in <VM as VMBinding>::VMActivePlan::mutators() {
+                    mutator.barrier.flush();
+                }
+                self.set_concurrent_marking_state(false);
+                crate::CONCURRENT_MARKING_ACTIVE.store(false, Ordering::Release);
+            }
         }
     }
 
@@ -245,6 +322,9 @@ impl<VM: VMBinding> Immix<VM> {
                 unlog_object_when_traced: false,
                 #[cfg(feature = "vo_bit")]
                 mixed_age: false,
+                #[cfg(feature = "satb")]
+                never_move_objects: true,
+                #[cfg(not(feature = "satb"))]
                 never_move_objects: false,
             },
         )
@@ -286,7 +366,7 @@ impl<VM: VMBinding> Immix<VM> {
         plan: &'static DefragContext::PlanType,
         immix_space: &ImmixSpace<VM>,
         scheduler: &GCWorkScheduler<VM>,
-    ) {
+    ) -> bool {
         let in_defrag = immix_space.decide_whether_to_defrag(
             plan.base().global_state.is_emergency_collection(),
             true,
@@ -303,6 +383,7 @@ impl<VM: VMBinding> Immix<VM> {
         } else {
             scheduler.schedule_common_work::<FastContext>(plan);
         }
+        in_defrag
     }
 
     #[cfg(feature = "satb")]

@@ -21,7 +21,7 @@ thread_local! {
     /// Current worker's ordinal
     static WORKER_ORDINAL: Atomic<ThreadId> = const { Atomic::new(ThreadId::MAX) };
     #[cfg(feature = "satb")]
-    static _WORKER: Atomic<usize> = Atomic::new(0);
+    static _WORKER: Atomic<usize> = const { Atomic::new(0) };
 }
 
 #[cfg(feature = "satb")]

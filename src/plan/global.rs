@@ -160,6 +160,11 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
     /// Schedule work for the upcoming GC.
     fn schedule_collection(&'static self, _scheduler: &GCWorkScheduler<Self::VM>);
 
+    #[cfg(feature = "satb")]
+    fn schedule_concurrent_collection(&'static self, scheduler: &GCWorkScheduler<Self::VM>) {
+        self.schedule_collection(scheduler);
+    }
+
     /// Get the common plan. CommonPlan is included by most of MMTk GC plans.
     fn common(&self) -> &CommonPlan<Self::VM> {
         panic!("Common Plan not handled!")

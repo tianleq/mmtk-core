@@ -28,8 +28,19 @@ impl<VM: VMBinding> GCWork<VM> for ScheduleCollection {
         // Set to GcPrepare
         mmtk.set_gc_status(GcStatus::GcPrepare);
 
-        // Let the plan to schedule collection work
-        mmtk.get_plan().schedule_collection(worker.scheduler());
+        if cfg!(feature = "satb") {
+            if mmtk.is_user_triggered_collection() {
+                // user triggered collection is always stop-the-world
+                mmtk.get_plan().schedule_collection(worker.scheduler());
+            } else {
+                // Let the plan to schedule collection work
+                mmtk.get_plan()
+                    .schedule_concurrent_collection(worker.scheduler());
+            }
+        } else {
+            // Let the plan to schedule collection work
+            mmtk.get_plan().schedule_collection(worker.scheduler());
+        }
     }
 }
 

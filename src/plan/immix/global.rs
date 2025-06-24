@@ -4,10 +4,13 @@ use crate::plan::global::BasePlan;
 use crate::plan::global::CommonPlan;
 use crate::plan::global::CreateGeneralPlanArgs;
 use crate::plan::global::CreateSpecificPlanArgs;
+use crate::plan::immix::gc_work::ImmixGCWorkContext;
 use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
 use crate::policy::immix::ImmixSpaceArgs;
+use crate::policy::immix::TRACE_KIND_DEFRAG;
+use crate::policy::immix::TRACE_KIND_FAST;
 use crate::policy::space::Space;
 use crate::scheduler::*;
 use crate::util::alloc::allocators::AllocatorSelector;
@@ -121,45 +124,45 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
-        #[cfg(not(feature = "satb"))]
         Self::schedule_immix_full_heap_collection::<
             Immix<VM>,
             ImmixGCWorkContext<VM, TRACE_KIND_FAST>,
             ImmixGCWorkContext<VM, TRACE_KIND_DEFRAG>,
         >(self, &self.immix_space, scheduler);
-        #[cfg(feature = "satb")]
-        {
-            let cause = self.gc_cause.load(Ordering::Relaxed);
-            if cause == GCCause::FullHeap {
-                use crate::{
-                    plan::immix::gc_work::ImmixGCWorkContext,
-                    policy::immix::{TRACE_KIND_DEFRAG, TRACE_KIND_FAST},
-                };
+    }
 
-                let in_defrag = Self::schedule_immix_full_heap_collection::<
-                    Immix<VM>,
-                    ImmixGCWorkContext<VM, TRACE_KIND_FAST>,
-                    ImmixGCWorkContext<VM, TRACE_KIND_DEFRAG>,
-                >(self, &self.immix_space, scheduler);
-                self.current_pause.store(
-                    Some(if in_defrag {
-                        Pause::FullDefrag
-                    } else {
-                        Pause::Full
-                    }),
-                    Ordering::SeqCst,
-                );
-            } else {
-                let pause = self.select_collection_kind();
+    #[cfg(feature = "satb")]
+    fn schedule_concurrent_collection(&'static self, scheduler: &GCWorkScheduler<Self::VM>) {
+        let cause = self.gc_cause.load(Ordering::Relaxed);
+        if cause == GCCause::FullHeap {
+            use crate::{
+                plan::immix::gc_work::ImmixGCWorkContext,
+                policy::immix::{TRACE_KIND_DEFRAG, TRACE_KIND_FAST},
+            };
 
-                // Set current pause kind
-                self.current_pause.store(Some(pause), Ordering::SeqCst);
-                // Schedule work
-                match pause {
-                    Pause::InitialMark => self.schedule_concurrent_marking_initial_pause(scheduler),
-                    Pause::FinalMark => self.schedule_concurrent_marking_final_pause(scheduler),
-                    _ => unreachable!(),
-                }
+            let in_defrag = Self::schedule_immix_full_heap_collection::<
+                Immix<VM>,
+                ImmixGCWorkContext<VM, TRACE_KIND_FAST>,
+                ImmixGCWorkContext<VM, TRACE_KIND_DEFRAG>,
+            >(self, &self.immix_space, scheduler);
+            self.current_pause.store(
+                Some(if in_defrag {
+                    Pause::FullDefrag
+                } else {
+                    Pause::Full
+                }),
+                Ordering::SeqCst,
+            );
+        } else {
+            let pause = self.select_collection_kind();
+
+            // Set current pause kind
+            self.current_pause.store(Some(pause), Ordering::SeqCst);
+            // Schedule work
+            match pause {
+                Pause::InitialMark => self.schedule_concurrent_marking_initial_pause(scheduler),
+                Pause::FinalMark => self.schedule_concurrent_marking_final_pause(scheduler),
+                _ => unreachable!(),
             }
         }
     }
@@ -261,8 +264,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
 
         match pause {
             Pause::Full | Pause::FullDefrag => {
-                debug_assert!(self.concurrent_marking_in_progress());
-                debug_assert!(crate::CONCURRENT_MARKING_ACTIVE.load(Ordering::Relaxed));
                 self.set_concurrent_marking_state(false);
                 crate::CONCURRENT_MARKING_ACTIVE.store(false, Ordering::Release);
             }

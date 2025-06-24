@@ -177,8 +177,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                     self.immix_space.prepare(
                         true,
                         crate::policy::immix::defrag::StatsForDefrag::new(self),
-                        #[cfg(feature = "satb")]
-                        None,
                     );
                 }
                 Pause::InitialMark => {
@@ -186,7 +184,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                     self.immix_space.prepare(
                         true,
                         crate::policy::immix::defrag::StatsForDefrag::new(self),
-                        Some(pause),
                     );
                     self.immix_space.initial_pause_prepare();
                     self.common.initial_pause_prepare();
@@ -198,8 +195,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             self.immix_space.prepare(
                 true,
                 crate::policy::immix::defrag::StatsForDefrag::new(self),
-                #[cfg(feature = "satb")]
-                None,
             );
         }
     }
@@ -211,11 +206,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 Pause::Full | Pause::FullDefrag => {
                     self.common.release(tls, true);
                     // release the collected region
-                    self.immix_space.release(
-                        true,
-                        #[cfg(feature = "satb")]
-                        None,
-                    );
+                    self.immix_space.release(true);
                 }
                 Pause::InitialMark => (),
                 Pause::FinalMark => {
@@ -223,17 +214,13 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                     self.common.final_pause_release();
                     self.common.release(tls, true);
                     // release the collected region
-                    self.immix_space.release(true, Some(pause));
+                    self.immix_space.release(true);
                 }
             }
         } else {
             self.common.release(tls, true);
             // release the collected region
-            self.immix_space.release(
-                true,
-                #[cfg(feature = "satb")]
-                None,
-            );
+            self.immix_space.release(true);
         }
     }
 

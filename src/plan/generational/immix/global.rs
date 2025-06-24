@@ -132,8 +132,6 @@ impl<VM: VMBinding> Plan for GenImmix<VM> {
             self.immix_space.prepare(
                 full_heap,
                 crate::policy::immix::defrag::StatsForDefrag::new(self),
-                #[cfg(feature = "satb")]
-                None,
             );
         }
     }
@@ -142,11 +140,7 @@ impl<VM: VMBinding> Plan for GenImmix<VM> {
         let full_heap = !self.gen.is_current_gc_nursery();
         self.gen.release(tls);
         if full_heap {
-            self.immix_space.release(
-                full_heap,
-                #[cfg(feature = "satb")]
-                None,
-            );
+            self.immix_space.release(full_heap);
         }
         self.last_gc_was_full_heap
             .store(full_heap, Ordering::Relaxed);

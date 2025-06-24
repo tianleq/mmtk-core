@@ -1,8 +1,6 @@
 use super::defrag::StatsForDefrag;
 use super::line::*;
 use super::{block::*, defrag::Defrag};
-#[cfg(feature = "satb")]
-use crate::plan::immix::Pause;
 use crate::plan::VectorObjectQueue;
 use crate::policy::gc_work::{TraceKind, TRACE_KIND_TRANSITIVE_PIN};
 use crate::policy::sft::GCWorkerMutRef;
@@ -393,12 +391,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self.scheduler
     }
 
-    pub fn prepare(
-        &mut self,
-        major_gc: bool,
-        plan_stats: StatsForDefrag,
-        #[cfg(feature = "satb")] pause: Option<Pause>,
-    ) {
+    pub fn prepare(&mut self, major_gc: bool, plan_stats: StatsForDefrag) {
         if major_gc {
             // Update mark_state
             if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
@@ -439,21 +432,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.scheduler().work_buckets[WorkBucketStage::Prepare].bulk_add(work_packets);
 
             if !super::BLOCK_ONLY {
-                if cfg!(feature = "satb") {
-                    // Do not update line mark state during final mark
-                    if pause.is_none() || pause == Some(Pause::InitialMark) {
-                        self.line_mark_state.fetch_add(1, Ordering::AcqRel);
-                        if self.line_mark_state.load(Ordering::Acquire) > Line::MAX_MARK_STATE {
-                            self.line_mark_state
-                                .store(Line::RESET_MARK_STATE, Ordering::Release);
-                        }
-                    }
-                } else {
-                    self.line_mark_state.fetch_add(1, Ordering::AcqRel);
-                    if self.line_mark_state.load(Ordering::Acquire) > Line::MAX_MARK_STATE {
-                        self.line_mark_state
-                            .store(Line::RESET_MARK_STATE, Ordering::Release);
-                    }
+                self.line_mark_state.fetch_add(1, Ordering::AcqRel);
+                if self.line_mark_state.load(Ordering::Acquire) > Line::MAX_MARK_STATE {
+                    self.line_mark_state
+                        .store(Line::RESET_MARK_STATE, Ordering::Release);
                 }
             }
         }
@@ -516,7 +498,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Release for the immix space.
-    pub fn release(&mut self, major_gc: bool, #[cfg(feature = "satb")] pause: Option<Pause>) {
+    pub fn release(&mut self, major_gc: bool) {
         if major_gc {
             // Update line_unavail_state for hole searching after this GC.
             if !super::BLOCK_ONLY {

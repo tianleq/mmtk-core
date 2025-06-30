@@ -103,10 +103,8 @@ impl<VM: VMBinding> GCWork<VM> for ConcurrentTraceObjects<VM> {
     fn is_concurrent_marking_work(&self) -> bool {
         true
     }
-    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         self.worker = worker;
-        debug_assert!(!mmtk.scheduler.work_buckets[WorkBucketStage::Initial].is_activated());
-
         // mark objects
         if let Some(objects) = self.objects.take() {
             self.trace_objects(&objects)
@@ -117,8 +115,7 @@ impl<VM: VMBinding> GCWork<VM> for ConcurrentTraceObjects<VM> {
             while !self.next_objects.is_empty() {
                 let pause_opt = self.plan.current_pause();
                 if !(pause_opt == Some(Pause::FinalMark) || pause_opt.is_none()) {
-                    panic!("should not reach here");
-                    // break;
+                    break;
                 }
                 next_objects.clear();
                 self.next_objects.swap(&mut next_objects);
@@ -155,11 +152,11 @@ impl<VM: VMBinding> GCWork<VM> for ProcessModBufSATB {
     }
 }
 
-pub struct ProcessRootEdges<VM: VMBinding> {
+pub struct ProcessRootSlots<VM: VMBinding> {
     base: ProcessEdgesBase<VM>,
 }
 
-impl<VM: VMBinding> ProcessEdgesWork for ProcessRootEdges<VM> {
+impl<VM: VMBinding> ProcessEdgesWork for ProcessRootSlots<VM> {
     type VM = VM;
     type ScanObjectsWorkType = ScanObjects<Self>;
     const OVERWRITE_REFERENCE: bool = false;
@@ -176,6 +173,8 @@ impl<VM: VMBinding> ProcessEdgesWork for ProcessRootEdges<VM> {
         Self { base }
     }
 
+    fn flush(&mut self) {}
+
     fn trace_object(&mut self, _object: ObjectReference) -> ObjectReference {
         unreachable!()
     }
@@ -186,33 +185,40 @@ impl<VM: VMBinding> ProcessEdgesWork for ProcessRootEdges<VM> {
             .plan()
             .downcast_ref::<Immix<VM>>()
             .unwrap()
-            .current_pause();
+            .current_pause()
+            .unwrap();
+        // No need to scan roots in the final mark
+        if pause == Pause::FinalMark {
+            return;
+        }
+        let mut root_objects = Vec::with_capacity(Self::CAPACITY);
         if !self.slots.is_empty() {
-            let mut roots = Vec::with_capacity(Self::CAPACITY);
             let slots = std::mem::take(&mut self.slots);
             for slot in slots {
                 if let Some(object) = slot.load() {
-                    roots.push(object);
-                    if roots.len() == Self::CAPACITY {
+                    root_objects.push(object);
+                    if root_objects.len() == Self::CAPACITY {
                         // create the packet
                         let worker = self.worker();
                         let mmtk = self.mmtk();
-                        let w = ConcurrentTraceObjects::new(roots.clone(), mmtk);
+                        let w = ConcurrentTraceObjects::new(root_objects.clone(), mmtk);
+
                         match pause {
-                            Some(pause) => {
-                                if pause == Pause::InitialMark {
-                                    worker.scheduler().postpone(w);
-                                } else if pause == Pause::FinalMark {
-                                    worker.add_work(WorkBucketStage::Closure, w);
-                                } else {
-                                    unreachable!()
-                                }
-                            }
-                            None => unreachable!(),
+                            Pause::InitialMark => worker.scheduler().postpone(w),
+                            _ => unreachable!(),
                         }
 
-                        roots.clear();
+                        root_objects.clear();
                     }
+                }
+            }
+            if !root_objects.is_empty() {
+                let worker = self.worker();
+                let w = ConcurrentTraceObjects::new(root_objects.clone(), self.mmtk());
+
+                match pause {
+                    Pause::InitialMark => worker.scheduler().postpone(w),
+                    _ => unreachable!(),
                 }
             }
         }
@@ -223,14 +229,14 @@ impl<VM: VMBinding> ProcessEdgesWork for ProcessRootEdges<VM> {
     }
 }
 
-impl<VM: VMBinding> Deref for ProcessRootEdges<VM> {
+impl<VM: VMBinding> Deref for ProcessRootSlots<VM> {
     type Target = ProcessEdgesBase<VM>;
     fn deref(&self) -> &Self::Target {
         &self.base
     }
 }
 
-impl<VM: VMBinding> DerefMut for ProcessRootEdges<VM> {
+impl<VM: VMBinding> DerefMut for ProcessRootSlots<VM> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.base
     }

@@ -118,6 +118,8 @@ impl<VM: VMBinding> Plan for StickyImmix<VM> {
             self.immix.immix_space.prepare(
                 false,
                 crate::policy::immix::defrag::StatsForDefrag::new(self),
+                #[cfg(feature = "satb")]
+                immix::Pause::Full,
             );
             self.immix.common.los.prepare(false);
         } else {

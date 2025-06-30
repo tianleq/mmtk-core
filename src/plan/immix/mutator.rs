@@ -27,6 +27,18 @@ pub fn immix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMW
     immix_allocator.reset();
 }
 
+#[cfg(feature = "satb")]
+pub fn immix_mutator_prepare<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {
+    let immix_allocator = unsafe {
+        mutator
+            .allocators
+            .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Default])
+    }
+    .downcast_mut::<ImmixAllocator<VM>>()
+    .unwrap();
+    immix_allocator.reset();
+}
+
 pub(in crate::plan) const RESERVED_ALLOCATORS: ReservedAllocators = ReservedAllocators {
     n_immix: 1,
     ..ReservedAllocators::DEFAULT
@@ -52,7 +64,11 @@ pub fn create_immix_mutator<VM: VMBinding>(
             vec.push((AllocatorSelector::Immix(0), &immix.immix_space));
             vec
         }),
-        prepare_func: &unreachable_prepare_func,
+        prepare_func: if cfg!(feature = "satb") {
+            &immix_mutator_prepare
+        } else {
+            &unreachable_prepare_func
+        },
         release_func: &immix_mutator_release,
     };
 

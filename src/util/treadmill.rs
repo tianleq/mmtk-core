@@ -3,6 +3,8 @@ use std::mem::swap;
 use std::sync::Mutex;
 
 use crate::util::ObjectReference;
+#[cfg(feature = "satb")]
+use crate::vm::VMBinding;
 
 use super::object_enum::ObjectEnumerator;
 
@@ -34,16 +36,50 @@ impl TreadMill {
         }
     }
 
+    #[cfg(feature = "satb")]
+    pub fn is_nursery_object<VM: VMBinding>(object: ObjectReference) -> bool {
+        use crate::vm::ObjectModel;
+        const NURSERY_BIT: u8 = 0b10;
+        VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC.load_atomic::<VM, u8>(
+            object,
+            None,
+            std::sync::atomic::Ordering::Relaxed,
+        ) & NURSERY_BIT
+            == NURSERY_BIT
+    }
+
+    #[cfg(feature = "satb")]
+    pub fn add_to_treadmill<VM: VMBinding>(&self, object: ObjectReference, nursery: bool) {
+        if nursery {
+            trace!("Adding {} to nursery", object);
+            debug_assert!(
+                Self::is_nursery_object::<VM>(object),
+                "object: {:?} should be nursery",
+                object
+            );
+            self.alloc_nursery.lock().unwrap().insert(object);
+        } else {
+            trace!("Adding {} to to_space", object);
+            debug_assert!(
+                !Self::is_nursery_object::<VM>(object),
+                "object: {:?} should not be nursery",
+                object
+            );
+            self.to_space.lock().unwrap().insert(object);
+        }
+    }
+
+    #[cfg(not(feature = "satb"))]
     pub fn add_to_treadmill(&self, object: ObjectReference, nursery: bool) {
         if nursery {
             trace!("Adding {} to nursery", object);
             self.alloc_nursery.lock().unwrap().insert(object);
         } else {
             trace!("Adding {} to to_space", object);
+
             self.to_space.lock().unwrap().insert(object);
         }
     }
-
     pub fn collect_nursery(&self) -> Vec<ObjectReference> {
         let mut guard = self.collect_nursery.lock().unwrap();
         let vals = guard.iter().copied().collect();
@@ -65,8 +101,11 @@ impl TreadMill {
             let mut guard = self.collect_nursery.lock().unwrap();
             debug_assert!(
                 guard.contains(&object),
-                "copy source object ({}) must be in collect_nursery",
-                object
+                "copy source object ({}) must be in collect_nursery in alloc: {}, in from: {}, in to: {}",
+                object,
+                self.alloc_nursery.lock().unwrap().contains(&object),
+                self.from_space.lock().unwrap().contains(&object),
+                self.to_space.lock().unwrap().contains(&object)
             );
             guard.remove(&object);
         } else {
@@ -100,6 +139,18 @@ impl TreadMill {
             swap(&mut self.from_space, &mut self.to_space);
             trace!("Flipped from_space and to_space");
         }
+    }
+
+    #[cfg(feature = "satb")]
+    pub(crate) fn enumerate_to_space_objects(&self, enumerator: &mut dyn ObjectEnumerator) {
+        let mut visit_objects = |set: &Mutex<HashSet<ObjectReference>>| {
+            let set = set.lock().unwrap();
+            for object in set.iter() {
+                enumerator.visit_object(*object);
+            }
+        };
+
+        visit_objects(&self.to_space);
     }
 
     pub(crate) fn enumerate_objects(&self, enumerator: &mut dyn ObjectEnumerator) {

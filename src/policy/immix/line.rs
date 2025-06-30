@@ -84,6 +84,7 @@ impl Line {
         marked_lines
     }
 
+    #[cfg(feature = "satb")]
     pub fn initialize_mark_table_as_marked<VM: VMBinding>(lines: Range<Line>) {
         let meta = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec();
         let start: *mut u8 = address_to_meta_address(meta, lines.start.start()).to_mut_ptr();

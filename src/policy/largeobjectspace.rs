@@ -58,6 +58,30 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
         true
     }
     fn initialize_object_metadata(&self, object: ObjectReference, alloc: bool) {
+        #[cfg(feature = "satb")]
+        {
+            if crate::CONCURRENT_MARKING_ACTIVE.load(Ordering::Acquire) {
+                VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC.store_atomic::<VM, u8>(
+                    object,
+                    self.mark_state,
+                    None,
+                    Ordering::SeqCst,
+                );
+                debug_assert!(
+                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.load_atomic::<VM, u8>(
+                        object,
+                        None,
+                        Ordering::Acquire
+                    ) == 0
+                );
+                #[cfg(feature = "satb")]
+                self.treadmill.add_to_treadmill::<VM>(object, false);
+                #[cfg(not(feature = "satb"))]
+                self.treadmill.add_to_treadmill(object, false);
+                return;
+            }
+        }
+
         let old_value = VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC.load_atomic::<VM, u8>(
             object,
             None,
@@ -91,7 +115,9 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
                 "The raw address of ObjectReference is not in the first 512 bytes of a page. The internal pointer searching for LOS won't work."
             );
         }
-
+        #[cfg(feature = "satb")]
+        self.treadmill.add_to_treadmill::<VM>(object, alloc);
+        #[cfg(not(feature = "satb"))]
         self.treadmill.add_to_treadmill(object, alloc);
     }
     #[cfg(feature = "is_mmtk_object")]
@@ -227,8 +253,21 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     }
 
     pub fn prepare(&mut self, full_heap: bool) {
+        #[cfg(feature = "satb")]
+        {
+            use crate::util::object_enum::ClosureObjectEnumerator;
+
+            let mut f = ClosureObjectEnumerator::<_, VM>::new(|object| {
+                assert!(
+                    !self.is_in_nursery(object),
+                    "object: {:?} should not be nursery",
+                    object
+                )
+            });
+            self.treadmill.enumerate_to_space_objects(&mut f);
+        }
         if full_heap {
-            debug_assert!(self.treadmill.is_from_space_empty());
+            // debug_assert!(self.treadmill.is_from_space_empty());
             self.mark_state = MARK_BIT - self.mark_state;
         }
         self.treadmill.flip(full_heap);
@@ -242,6 +281,29 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             self.sweep_large_pages(false);
         }
     }
+
+    #[cfg(feature = "satb")]
+    pub fn initial_pause_prepare(&self) {
+        use crate::util::object_enum::ClosureObjectEnumerator;
+
+        debug_assert!(self.treadmill.is_from_space_empty());
+        debug_assert!(self.treadmill.is_nursery_empty());
+        let mut enumator = ClosureObjectEnumerator::<_, VM>::new(|object| {
+            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(object, Ordering::SeqCst);
+        });
+        self.treadmill.enumerate_objects(&mut enumator);
+    }
+
+    #[cfg(feature = "satb")]
+    pub fn final_pause_release(&self) {
+        use crate::util::object_enum::ClosureObjectEnumerator;
+
+        let mut enumator = ClosureObjectEnumerator::<_, VM>::new(|object| {
+            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.clear::<VM>(object, Ordering::SeqCst);
+        });
+        self.treadmill.enumerate_objects(&mut enumator);
+    }
+
     // Allow nested-if for this function to make it clear that test_and_mark() is only executed
     // for the outer condition is met.
     #[allow(clippy::collapsible_if)]
@@ -303,7 +365,7 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             }
         } else {
             for object in self.treadmill.collect() {
-                sweep(object)
+                sweep(object);
             }
         }
     }
@@ -373,26 +435,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     #[cfg(feature = "satb")]
     pub fn is_marked(&self, object: ObjectReference) -> bool {
         self.test_mark_bit(object, self.mark_state)
-    }
-
-    #[cfg(feature = "satb")]
-    pub fn initial_pause_prepare(&self) {
-        use crate::util::object_enum::ClosureObjectEnumerator;
-
-        let mut enumator = ClosureObjectEnumerator::<_, VM>::new(|object| {
-            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(object, Ordering::SeqCst);
-        });
-        self.treadmill.enumerate_objects(&mut enumator);
-    }
-
-    #[cfg(feature = "satb")]
-    pub fn final_pause_release(&self) {
-        use crate::util::object_enum::ClosureObjectEnumerator;
-
-        let mut enumator = ClosureObjectEnumerator::<_, VM>::new(|object| {
-            VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.clear::<VM>(object, Ordering::SeqCst);
-        });
-        self.treadmill.enumerate_objects(&mut enumator);
     }
 }
 

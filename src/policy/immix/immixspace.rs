@@ -57,6 +57,8 @@ pub struct ImmixSpace<VM: VMBinding> {
     space_args: ImmixSpaceArgs,
     #[cfg(feature = "satb")]
     pub concurrent_marking_enabled: bool,
+    #[cfg(all(feature = "satb", debug_assertions))]
+    pub blocks: std::sync::Mutex<std::collections::HashSet<Block>>,
 }
 
 /// Some arguments for Immix Space.
@@ -345,6 +347,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             space_args,
             #[cfg(feature = "satb")]
             concurrent_marking_enabled: true,
+            #[cfg(all(feature = "satb", debug_assertions))]
+            blocks: std::sync::Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -391,7 +395,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self.scheduler
     }
 
-    pub fn prepare(&mut self, major_gc: bool, plan_stats: StatsForDefrag) {
+    pub fn prepare(
+        &mut self,
+        major_gc: bool,
+        plan_stats: StatsForDefrag,
+        #[cfg(feature = "satb")] pause: crate::plan::immix::Pause,
+    ) {
         if major_gc {
             // Update mark_state
             if VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.is_on_side() {
@@ -402,7 +411,16 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             }
 
             if self.common.needs_log_bit {
-                if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC {
+                if cfg!(feature = "satb") {
+                    if pause != crate::plan::immix::Pause::InitialMark {
+                        if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                        {
+                            for chunk in self.chunk_map.all_chunks() {
+                                side.bzero_metadata(chunk.start(), Chunk::BYTES);
+                            }
+                        }
+                    }
+                } else if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC {
                     for chunk in self.chunk_map.all_chunks() {
                         side.bzero_metadata(chunk.start(), Chunk::BYTES);
                     }
@@ -517,6 +535,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.scheduler().work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
 
         self.lines_consumed.store(0, Ordering::Relaxed);
+        #[cfg(feature = "satb")]
+        {
+            #[cfg(debug_assertions)]
+            self.blocks.lock().unwrap().clear();
+        }
     }
 
     /// This is called when a GC finished.

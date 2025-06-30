@@ -60,6 +60,9 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             WorkBucket::new(active, worker_monitor.clone())
         }));
 
+        #[cfg(feature = "satb")]
+        work_buckets[WorkBucketStage::Unconstrained].enable_prioritized_queue();
+
         // Set the open condition of each bucket.
         {
             let first_stw_stage = WorkBucketStage::first_stw_stage();

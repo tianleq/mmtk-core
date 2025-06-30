@@ -215,17 +215,27 @@ impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
         trace!("stop_all_mutators start");
         mmtk.state.prepare_for_stack_scanning();
         <C::VM as VMBinding>::VMCollection::stop_all_mutators(worker.tls, |mutator| {
+            #[cfg(feature = "satb")]
+            {
+                mutator.prepare(worker.tls);
+            }
             // TODO: The stack scanning work won't start immediately, as the `Prepare` bucket is not opened yet (the bucket is opened in notify_mutators_paused).
             // Should we push to Unconstrained instead?
             mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
                 .add(ScanMutatorRoots::<C>(mutator));
         });
         mmtk.scheduler.set_in_gc_pause(true);
-        trace!("stop_all_mutators end");
-        mmtk.scheduler.notify_mutators_paused(mmtk);
         #[cfg(feature = "satb")]
         mmtk.get_plan().gc_pause_start(&mmtk.scheduler);
-        mmtk.scheduler.work_buckets[WorkBucketStage::Prepare].add(ScanVMSpecificRoots::<C>::new());
+        let factory = ProcessEdgesWorkRootsWorkFactory::<
+            C::VM,
+            C::DefaultProcessEdges,
+            C::PinningProcessEdges,
+        >::new(mmtk);
+        <C::VM as VMBinding>::VMScanning::scan_vm_specific_roots(worker.tls, factory);
+        // mmtk.scheduler.work_buckets[WorkBucketStage::Prepare].add(ScanVMSpecificRoots::<C>::new());
+        trace!("stop_all_mutators end");
+        mmtk.scheduler.notify_mutators_paused(mmtk);
     }
 }
 
@@ -425,6 +435,7 @@ impl<C: GCWorkContext> GCWork<C::VM> for ScanMutatorRoots<C> {
             unsafe { &mut *(self.0 as *mut _) },
             factory,
         );
+
         self.0.flush();
 
         if mmtk.state.inform_stack_scanned(mutators) {

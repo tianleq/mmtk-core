@@ -268,11 +268,18 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 #[cfg(feature = "satb")]
                 {
                     // mark objects if concurrent marking is active
-                    if crate::CONCURRENT_MARKING_ACTIVE.load(std::sync::atomic::Ordering::Relaxed) {
-                        Line::MARK_TABLE.bset_metadata(
-                            start_line.start(),
-                            self.bump_pointer.limit - self.bump_pointer.cursor,
-                        );
+                    if crate::CONCURRENT_MARKING_ACTIVE.load(std::sync::atomic::Ordering::Acquire) {
+                        let state = self
+                            .space
+                            .line_mark_state
+                            .load(std::sync::atomic::Ordering::Acquire);
+
+                        for line in crate::util::linear_scan::RegionIterator::<Line>::new(
+                            start_line, end_line,
+                        ) {
+                            line.mark(state);
+                        }
+
                         Line::initialize_mark_table_as_marked::<VM>(start_line..end_line);
                     }
                 }
@@ -315,13 +322,28 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 #[cfg(feature = "satb")]
                 {
                     // mark objects if concurrent marking is active
-                    if crate::CONCURRENT_MARKING_ACTIVE.load(std::sync::atomic::Ordering::Relaxed) {
-                        Line::MARK_TABLE.bset_metadata(block.start(), size);
+                    if crate::CONCURRENT_MARKING_ACTIVE.load(std::sync::atomic::Ordering::Acquire) {
+                        // Line::MARK_TABLE.bset_metadata(
+                        //     block.start(),
+                        //     crate::policy::immix::block::Block::BYTES,
+                        // );
+                        let state = self
+                            .space
+                            .line_mark_state
+                            .load(std::sync::atomic::Ordering::Acquire);
+                        for line in block.lines() {
+                            line.mark(state);
+                        }
+
                         Line::initialize_mark_table_as_marked::<VM>(
                             block.start_line()..block.end_line(),
                         );
+
+                        #[cfg(debug_assertions)]
+                        self.space.blocks.lock().unwrap().insert(block);
                     }
                 }
+
                 if self.request_for_large {
                     self.large_bump_pointer.cursor = block.start();
                     self.large_bump_pointer.limit = block.end();

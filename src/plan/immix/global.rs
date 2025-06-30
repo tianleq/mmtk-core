@@ -64,6 +64,10 @@ pub const IMMIX_CONSTRAINTS: PlanConstraints = PlanConstraints {
     // Max immix object size is half of a block.
     max_non_los_default_alloc_bytes: crate::policy::immix::MAX_IMMIX_OBJECT_SIZE,
     needs_prepare_mutator: false,
+    #[cfg(feature = "satb")]
+    needs_log_bit: true,
+    #[cfg(feature = "satb")]
+    barrier: crate::BarrierSelector::SATBBarrier,
     ..PlanConstraints::default()
 };
 
@@ -79,7 +83,18 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         _space_full: bool,
         _space: Option<SpaceStats<Self::VM>>,
     ) -> bool {
-        self.get_available_pages() <= 32
+        use crate::util::conversions;
+        use crate::vm::Collection;
+
+        let used_pages = self.get_used_pages();
+
+        let vm_live_bytes = <Self::VM as VMBinding>::VMCollection::vm_live_bytes();
+        // Note that `vm_live_bytes` may not be the exact number of bytes in whole pages.  The VM
+        // binding is allowed to return an approximate value if it is expensive or impossible to
+        // compute the exact number of pages occupied.
+        let vm_live_pages = conversions::bytes_to_pages_up(vm_live_bytes);
+        let total = self.get_total_pages();
+        total <= used_pages + vm_live_pages + 8
     }
 
     #[cfg(feature = "satb")]
@@ -124,6 +139,21 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
+        #[cfg(feature = "satb")]
+        {
+            let defrag = Self::is_defrag_collection::<
+                Immix<VM>,
+                ImmixGCWorkContext<VM, TRACE_KIND_DEFRAG>,
+            >(self, &self.immix_space);
+            self.current_pause.store(
+                if defrag {
+                    Some(Pause::FullDefrag)
+                } else {
+                    Some(Pause::Full)
+                },
+                Ordering::SeqCst,
+            );
+        }
         Self::schedule_immix_full_heap_collection::<
             Immix<VM>,
             ImmixGCWorkContext<VM, TRACE_KIND_FAST>,
@@ -139,20 +169,24 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 plan::immix::gc_work::ImmixGCWorkContext,
                 policy::immix::{TRACE_KIND_DEFRAG, TRACE_KIND_FAST},
             };
+            let defrag = Self::is_defrag_collection::<
+                Immix<VM>,
+                ImmixGCWorkContext<VM, TRACE_KIND_DEFRAG>,
+            >(self, &self.immix_space);
+            self.current_pause.store(
+                if defrag {
+                    Some(Pause::FullDefrag)
+                } else {
+                    Some(Pause::Full)
+                },
+                Ordering::SeqCst,
+            );
 
-            let in_defrag = Self::schedule_immix_full_heap_collection::<
+            Self::schedule_immix_full_heap_collection::<
                 Immix<VM>,
                 ImmixGCWorkContext<VM, TRACE_KIND_FAST>,
                 ImmixGCWorkContext<VM, TRACE_KIND_DEFRAG>,
             >(self, &self.immix_space, scheduler);
-            self.current_pause.store(
-                Some(if in_defrag {
-                    Pause::FullDefrag
-                } else {
-                    Pause::Full
-                }),
-                Ordering::SeqCst,
-            );
         } else {
             let pause = self.select_collection_kind();
 
@@ -180,16 +214,20 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                     self.immix_space.prepare(
                         true,
                         crate::policy::immix::defrag::StatsForDefrag::new(self),
+                        pause,
                     );
                 }
                 Pause::InitialMark => {
+                    // init prepare has to be executed first, otherwise, los objects will not be
+                    // dealt with properly
+                    self.common.initial_pause_prepare();
+                    self.immix_space.initial_pause_prepare();
                     self.common.prepare(tls, true);
                     self.immix_space.prepare(
                         true,
                         crate::policy::immix::defrag::StatsForDefrag::new(self),
+                        pause,
                     );
-                    self.immix_space.initial_pause_prepare();
-                    self.common.initial_pause_prepare();
                 }
                 Pause::FinalMark => (),
             }
@@ -198,6 +236,8 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             self.immix_space.prepare(
                 true,
                 crate::policy::immix::defrag::StatsForDefrag::new(self),
+                #[cfg(feature = "satb")]
+                Pause::Full,
             );
         }
     }
@@ -261,7 +301,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         use crate::vm::ActivePlan;
 
         let pause = self.current_pause().unwrap();
-
         match pause {
             Pause::Full | Pause::FullDefrag => {
                 self.set_concurrent_marking_state(false);
@@ -269,11 +308,11 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             }
             Pause::InitialMark => {
                 debug_assert!(!self.concurrent_marking_in_progress());
-                debug_assert!(!crate::CONCURRENT_MARKING_ACTIVE.load(Ordering::Relaxed));
+                debug_assert!(!crate::CONCURRENT_MARKING_ACTIVE.load(Ordering::Acquire));
             }
             Pause::FinalMark => {
                 debug_assert!(self.concurrent_marking_in_progress());
-                debug_assert!(crate::CONCURRENT_MARKING_ACTIVE.load(Ordering::Relaxed));
+                debug_assert!(crate::CONCURRENT_MARKING_ACTIVE.load(Ordering::Acquire));
                 // Flush barrier buffers
                 for mutator in <VM as VMBinding>::VMActivePlan::mutators() {
                     mutator.barrier.flush();
@@ -282,6 +321,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 crate::CONCURRENT_MARKING_ACTIVE.store(false, Ordering::Release);
             }
         }
+        trace!("pause {:?} start", pause);
     }
 
     #[cfg(feature = "satb")]
@@ -294,15 +334,23 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         }
         self.previous_pause.store(Some(pause), Ordering::SeqCst);
         self.current_pause.store(None, Ordering::SeqCst);
+        trace!("pause {:?} end", pause);
     }
 }
 
 impl<VM: VMBinding> Immix<VM> {
     pub fn new(args: CreateGeneralPlanArgs<VM>) -> Self {
+        let spec = if cfg!(feature = "satb") {
+            use crate::vm::ObjectModel;
+            crate::util::metadata::extract_side_metadata(&[*VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC])
+        } else {
+            vec![]
+        };
+
         let plan_args = CreateSpecificPlanArgs {
             global_args: args,
             constraints: &IMMIX_CONSTRAINTS,
-            global_side_metadata_specs: SideMetadataContext::new_global_specs(&[]),
+            global_side_metadata_specs: SideMetadataContext::new_global_specs(&spec),
         };
         Self::new_with_args(
             plan_args,
@@ -374,6 +422,25 @@ impl<VM: VMBinding> Immix<VM> {
         in_defrag
     }
 
+    pub(crate) fn is_defrag_collection<
+        PlanType: Plan<VM = VM>,
+        DefragContext: GCWorkContext<VM = VM, PlanType = PlanType>,
+    >(
+        plan: &'static DefragContext::PlanType,
+        immix_space: &ImmixSpace<VM>,
+    ) -> bool {
+        immix_space.decide_whether_to_defrag(
+            plan.base().global_state.is_emergency_collection(),
+            true,
+            plan.base()
+                .global_state
+                .cur_collection_attempts
+                .load(Ordering::SeqCst),
+            plan.base().global_state.is_user_triggered_collection(),
+            *plan.base().options.full_heap_system_gc,
+        )
+    }
+
     #[cfg(feature = "satb")]
     fn select_collection_kind(&self) -> Pause {
         // let emergency = self.base().global_state.is_emergency_collection();
@@ -425,30 +492,30 @@ impl<VM: VMBinding> Immix<VM> {
     ) {
         use crate::{
             plan::immix::{
-                concurrent_marking::ProcessRootEdges, gc_work::ConcurrentImmixGCWorkContext,
+                concurrent_marking::ProcessRootSlots, gc_work::ConcurrentImmixGCWorkContext,
             },
-            scheduler::gc_work::{Prepare, Release, StopMutators, UnsupportedProcessEdges},
+            scheduler::gc_work::{Prepare, StopMutators, UnsupportedProcessEdges},
         };
 
         self.disable_unnecessary_buckets(scheduler, Pause::InitialMark);
         // self.process_prev_roots(scheduler);
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add_prioritized(Box::new(
-            StopMutators::<ConcurrentImmixGCWorkContext<ProcessRootEdges<VM>>>::new(),
+            StopMutators::<ConcurrentImmixGCWorkContext<ProcessRootSlots<VM>>>::new(),
         ));
         scheduler.work_buckets[WorkBucketStage::Prepare].add(Prepare::<
             ConcurrentImmixGCWorkContext<UnsupportedProcessEdges<VM>>,
         >::new(self));
-        scheduler.work_buckets[WorkBucketStage::Release].add(Release::<
-            ConcurrentImmixGCWorkContext<UnsupportedProcessEdges<VM>>,
-        >::new(self));
+        // scheduler.work_buckets[WorkBucketStage::Release].add(Release::<
+        //     ConcurrentImmixGCWorkContext<UnsupportedProcessEdges<VM>>,
+        // >::new(self));
     }
 
     #[cfg(feature = "satb")]
     fn schedule_concurrent_marking_final_pause(&'static self, scheduler: &GCWorkScheduler<VM>) {
         use super::gc_work::ConcurrentImmixGCWorkContext;
         use crate::{
-            plan::immix::concurrent_marking::ProcessRootEdges,
-            scheduler::gc_work::{Prepare, Release, StopMutators, UnsupportedProcessEdges},
+            plan::immix::concurrent_marking::ProcessRootSlots,
+            scheduler::gc_work::{Release, StopMutators, UnsupportedProcessEdges},
         };
 
         self.disable_unnecessary_buckets(scheduler, Pause::FinalMark);
@@ -457,12 +524,12 @@ impl<VM: VMBinding> Immix<VM> {
         // }
         // self.process_prev_roots(scheduler);
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add_prioritized(Box::new(
-            StopMutators::<ConcurrentImmixGCWorkContext<ProcessRootEdges<VM>>>::new(),
+            StopMutators::<ConcurrentImmixGCWorkContext<ProcessRootSlots<VM>>>::new(),
         ));
 
-        scheduler.work_buckets[WorkBucketStage::Prepare].add(Prepare::<
-            ConcurrentImmixGCWorkContext<UnsupportedProcessEdges<VM>>,
-        >::new(self));
+        // scheduler.work_buckets[WorkBucketStage::Prepare].add(Prepare::<
+        //     ConcurrentImmixGCWorkContext<UnsupportedProcessEdges<VM>>,
+        // >::new(self));
         scheduler.work_buckets[WorkBucketStage::Release].add(Release::<
             ConcurrentImmixGCWorkContext<UnsupportedProcessEdges<VM>>,
         >::new(self));

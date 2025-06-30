@@ -45,4 +45,4 @@ pub const DEFRAG_HEADROOM_PERCENT: usize = if cfg!(feature = "immix_stress_copyi
 
 /// Mark lines when scanning objects.
 /// Otherwise, do it at mark time.
-pub const MARK_LINE_AT_SCAN_TIME: bool = true;
+pub const MARK_LINE_AT_SCAN_TIME: bool = false;

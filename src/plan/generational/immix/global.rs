@@ -132,6 +132,8 @@ impl<VM: VMBinding> Plan for GenImmix<VM> {
             self.immix_space.prepare(
                 full_heap,
                 crate::policy::immix::defrag::StatsForDefrag::new(self),
+                #[cfg(feature = "satb")]
+                crate::plan::immix::Pause::Full,
             );
         }
     }

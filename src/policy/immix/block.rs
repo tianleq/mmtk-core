@@ -68,7 +68,7 @@ impl BlockState {
 
 /// Data structure to reference an immix block.
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialOrd, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Eq, Hash)]
 pub struct Block(Address);
 
 impl Region for Block {
@@ -268,7 +268,16 @@ impl Block {
             if marked_lines == 0 {
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_region_swept::<VM, _>(self, false);
-
+                debug_assert!(self.get_state() != BlockState::Marked);
+                #[cfg(all(feature = "satb", debug_assertions))]
+                {
+                    assert!(
+                        !space.blocks.lock().unwrap().contains(self),
+                        "#######block: {:?}",
+                        self
+                    );
+                    // println!("release block: {:?}", self);
+                }
                 // Release the block if non of its lines are marked.
                 space.release_block(*self);
                 true
@@ -279,6 +288,10 @@ impl Block {
                     self.set_state(BlockState::Reusable {
                         unavailable_lines: marked_lines as _,
                     });
+                    // #[cfg(all(feature = "satb", debug_assertions))]
+                    // {
+                    //     println!("release reusable block: {:?}", self);
+                    // }
                     space.reusable_blocks.push(*self)
                 } else {
                     // Clear mark state.

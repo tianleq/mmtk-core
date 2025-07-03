@@ -272,6 +272,9 @@ impl<S: BarrierSemantics> SATBBarrier<S> {
     pub fn new(semantics: S) -> Self {
         Self { semantics }
     }
+    fn object_is_unlogged(&self, object: ObjectReference) -> bool {
+        unsafe { S::UNLOG_BIT_SPEC.load::<S::VM, u8>(object, None) != 0 }
+    }
 }
 
 #[cfg(feature = "satb")]
@@ -298,8 +301,10 @@ impl<S: BarrierSemantics> Barrier<S::VM> for SATBBarrier<S> {
         slot: <S::VM as VMBinding>::VMSlot,
         target: Option<ObjectReference>,
     ) {
-        self.semantics
-            .object_reference_write_slow(src, slot, target);
+        if self.object_is_unlogged(src) {
+            self.semantics
+                .object_reference_write_slow(src, slot, target);
+        }
     }
 
     fn object_reference_write_post(

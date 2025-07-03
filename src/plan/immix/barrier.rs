@@ -43,38 +43,44 @@ impl<VM: VMBinding> SATBBarrierSemantics<VM> {
         slot: VM::VMSlot,
         _new: Option<ObjectReference>,
     ) -> bool {
+        // if let Some(old) = slot.load() {
+        //     if self.log_object(old) {
+        //         self.slow(src, slot, old);
+        //         return true;
+        //     }
+        // }
+        // false
         if let Some(old) = slot.load() {
-            if self.log_object(old) {
-                self.slow(src, slot, old);
-                return true;
-            }
+            self.slow(src, slot, old);
         }
-        false
+        true
     }
 
     /// Attempt to atomically log an object.
     /// Returns true if the object is not logged previously.
     fn log_object(&self, object: ObjectReference) -> bool {
-        loop {
-            let old_value =
-                Self::UNLOG_BIT_SPEC.load_atomic::<VM, u8>(object, None, Ordering::SeqCst);
-            if old_value == 0 {
-                return false;
-            }
-            if Self::UNLOG_BIT_SPEC
-                .compare_exchange_metadata::<VM, u8>(
-                    object,
-                    1,
-                    0,
-                    None,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                )
-                .is_ok()
-            {
-                return true;
-            }
-        }
+        // loop {
+        //     let old_value =
+        //         Self::UNLOG_BIT_SPEC.load_atomic::<VM, u8>(object, None, Ordering::SeqCst);
+        //     if old_value == 0 {
+        //         return false;
+        //     }
+        //     if Self::UNLOG_BIT_SPEC
+        //         .compare_exchange_metadata::<VM, u8>(
+        //             object,
+        //             1,
+        //             0,
+        //             None,
+        //             Ordering::SeqCst,
+        //             Ordering::SeqCst,
+        //         )
+        //         .is_ok()
+        //     {
+        //         return true;
+        //     }
+        // }
+        Self::UNLOG_BIT_SPEC.store_atomic::<VM, u8>(object, 0, None, Ordering::SeqCst);
+        true
     }
 
     fn flush_satb(&mut self) {
@@ -118,10 +124,12 @@ impl<VM: VMBinding> BarrierSemantics for SATBBarrierSemantics<VM> {
     fn object_reference_write_slow(
         &mut self,
         src: ObjectReference,
-        slot: <Self::VM as VMBinding>::VMSlot,
-        target: Option<ObjectReference>,
+        _slot: <Self::VM as VMBinding>::VMSlot,
+        _target: Option<ObjectReference>,
     ) {
-        self.enqueue_node(Some(src), slot, target);
+        // self.enqueue_node(Some(src), slot, target);
+        self.object_probable_write_slow(src);
+        self.log_object(src);
     }
 
     fn memory_region_copy_slow(

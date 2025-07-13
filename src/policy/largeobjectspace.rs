@@ -60,7 +60,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
     fn initialize_object_metadata(&self, object: ObjectReference, alloc: bool) {
         #[cfg(feature = "satb")]
         {
-            if crate::CONCURRENT_MARKING_ACTIVE.load(Ordering::Acquire) {
+            if self.concurrent_marking_active() {
                 VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC.store_atomic::<VM, u8>(
                     object,
                     self.mark_state,
@@ -201,6 +201,13 @@ impl<VM: VMBinding> Space<VM> for LargeObjectSpace<VM> {
     fn enumerate_objects(&self, enumerator: &mut dyn ObjectEnumerator) {
         self.treadmill.enumerate_objects(enumerator);
     }
+    #[cfg(feature = "satb")]
+    fn concurrent_marking_active(&self) -> bool {
+        self.common()
+            .global_state
+            .concurrent_marking_active
+            .load(Ordering::Acquire)
+    }
 }
 
 use crate::scheduler::GCWorker;
@@ -214,7 +221,16 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LargeObjec
         _copy: Option<CopySemantics>,
         _worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
-        self.trace_object(queue, object)
+        if KIND == crate::policy::gc_work::TRACE_KIND_VERIFY {
+            debug_assert!(
+                self.is_marked(object),
+                "los object: {:?} is missing in concurrent phase",
+                object
+            );
+            object
+        } else {
+            self.trace_object(queue, object)
+        }
     }
     fn may_move_objects<const KIND: crate::policy::gc_work::TraceKind>() -> bool {
         false

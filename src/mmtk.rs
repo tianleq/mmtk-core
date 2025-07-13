@@ -129,6 +129,14 @@ pub struct MMTK<VM: VMBinding> {
     /// Analysis counters. The feature analysis allows us to periodically stop the world and collect some statistics.
     #[cfg(feature = "analysis")]
     pub(crate) analysis_manager: Arc<AnalysisManager<VM>>,
+    #[cfg(feature = "satb")]
+    pub(crate) roots:
+        std::sync::Mutex<std::collections::HashMap<VM::VMSlot, crate::util::ObjectReference>>,
+    #[cfg(feature = "satb")]
+    pub(crate) sanity_roots:
+        std::sync::Mutex<std::collections::HashMap<crate::util::ObjectReference, VM::VMSlot>>,
+    #[cfg(feature = "satb")]
+    pub missing_objects: std::sync::Mutex<std::collections::HashSet<crate::util::ObjectReference>>,
 }
 
 unsafe impl<VM: VMBinding> Sync for MMTK<VM> {}
@@ -228,6 +236,12 @@ impl<VM: VMBinding> MMTK<VM> {
             gc_trigger,
             gc_requester,
             stats,
+            #[cfg(feature = "satb")]
+            roots: std::sync::Mutex::new(std::collections::HashMap::new()),
+            #[cfg(feature = "satb")]
+            sanity_roots: std::sync::Mutex::new(std::collections::HashMap::new()),
+            #[cfg(feature = "satb")]
+            missing_objects: std::sync::Mutex::new(std::collections::HashSet::new()),
         }
     }
 

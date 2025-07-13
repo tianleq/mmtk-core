@@ -87,8 +87,14 @@ impl<VM: VMBinding> SATBBarrierSemantics<VM> {
         if !self.satb.is_empty() {
             if self.should_create_satb_packets() {
                 let satb = self.satb.take();
-                self.mmtk.scheduler.work_buckets[WorkBucketStage::Unconstrained]
-                    .add(ProcessModBufSATB::new(satb));
+                if let Some(pause) = self.immix.current_pause() {
+                    debug_assert_ne!(pause, Pause::InitialMark);
+                    self.mmtk.scheduler.work_buckets[WorkBucketStage::Closure]
+                        .add(ProcessModBufSATB::new(satb));
+                } else {
+                    self.mmtk.scheduler.work_buckets[WorkBucketStage::Unconstrained]
+                        .add(ProcessModBufSATB::new(satb));
+                }
             } else {
                 let _ = self.satb.take();
             };
@@ -100,15 +106,20 @@ impl<VM: VMBinding> SATBBarrierSemantics<VM> {
         if !self.refs.is_empty() {
             debug_assert!(self.should_create_satb_packets());
             let nodes = self.refs.take();
-            self.mmtk.scheduler.work_buckets[WorkBucketStage::Unconstrained]
-                .add(ProcessModBufSATB::new(nodes));
+            if let Some(pause) = self.immix.current_pause() {
+                debug_assert_ne!(pause, Pause::InitialMark);
+                self.mmtk.scheduler.work_buckets[WorkBucketStage::Closure]
+                    .add(ProcessModBufSATB::new(nodes));
+            } else {
+                self.mmtk.scheduler.work_buckets[WorkBucketStage::Unconstrained]
+                    .add(ProcessModBufSATB::new(nodes));
+            }
         }
     }
 
     fn should_create_satb_packets(&self) -> bool {
-        self.immix.concurrent_marking_enabled()
-            && (self.immix.concurrent_marking_in_progress()
-                || self.immix.current_pause() == Some(Pause::FinalMark))
+        self.immix.concurrent_marking_in_progress()
+            || self.immix.current_pause() == Some(Pause::FinalMark)
     }
 }
 
@@ -142,15 +153,15 @@ impl<VM: VMBinding> BarrierSemantics for SATBBarrierSemantics<VM> {
         }
     }
 
-    // fn load_reference(&mut self, o: ObjectReference) {
-    //     if !self.immix.concurrent_marking_in_progress() || self.immix.is_marked(o) {
-    //         return;
-    //     }
-    //     self.refs.push(o);
-    //     if self.refs.is_full() {
-    //         self.flush_weak_refs();
-    //     }
-    // }
+    fn load_reference(&mut self, o: ObjectReference) {
+        if !self.immix.concurrent_marking_in_progress() {
+            return;
+        }
+        self.refs.push(o);
+        if self.refs.is_full() {
+            self.flush_weak_refs();
+        }
+    }
 
     fn object_probable_write_slow(&mut self, obj: ObjectReference) {
         obj.iterate_fields::<VM, _>(|s| {

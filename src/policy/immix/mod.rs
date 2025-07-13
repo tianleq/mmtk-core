@@ -40,7 +40,7 @@ pub const DEFRAG_EVERY_BLOCK: bool = cfg!(feature = "immix_stress_copying");
 pub const DEFRAG_HEADROOM_PERCENT: usize = if cfg!(feature = "immix_stress_copying") {
     50
 } else {
-    20
+    30
 };
 
 /// Mark lines when scanning objects.

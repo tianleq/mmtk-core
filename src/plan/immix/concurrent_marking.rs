@@ -45,9 +45,13 @@ impl<VM: VMBinding> ConcurrentTraceObjects<VM> {
         if !self.next_objects.is_empty() {
             let objects = self.next_objects.take();
             let worker = GCWorker::<VM>::current();
-            debug_assert!(self.plan.concurrent_marking_enabled());
             let w = Self::new(objects, worker.mmtk);
-            worker.add_work(WorkBucketStage::Unconstrained, w);
+            if let Some(pause) = self.plan.current_pause() {
+                debug_assert!(pause != Pause::InitialMark);
+                worker.add_work(WorkBucketStage::Closure, w);
+            } else {
+                worker.add_work(WorkBucketStage::Unconstrained, w);
+            }
         }
     }
 
@@ -193,9 +197,11 @@ impl<VM: VMBinding> ProcessEdgesWork for ProcessRootSlots<VM> {
         }
         let mut root_objects = Vec::with_capacity(Self::CAPACITY);
         if !self.slots.is_empty() {
+            let mut original_roots = self.base.mmtk().roots.lock().unwrap();
             let slots = std::mem::take(&mut self.slots);
             for slot in slots {
                 if let Some(object) = slot.load() {
+                    original_roots.insert(slot, object);
                     root_objects.push(object);
                     if root_objects.len() == Self::CAPACITY {
                         // create the packet

@@ -271,11 +271,7 @@ impl Block {
                 debug_assert!(self.get_state() != BlockState::Marked);
                 #[cfg(all(feature = "satb", debug_assertions))]
                 {
-                    assert!(
-                        !space.blocks.lock().unwrap().contains(self),
-                        "#######block: {:?}",
-                        self
-                    );
+                    crate::util::memory::set(self.start(), 0xAB, Self::BYTES);
                     // println!("release block: {:?}", self);
                 }
                 // Release the block if non of its lines are marked.

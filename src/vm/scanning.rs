@@ -43,6 +43,12 @@ impl<F: FnMut(ObjectReference) -> ObjectReference> ObjectTracer for F {
     }
 }
 
+pub trait ObjectGraphTraversal<SL: Slot> {
+    fn report_roots(&mut self, root_slots: Vec<SL>);
+
+    fn traverse_from_roots(&mut self);
+}
+
 /// An `ObjectTracerContext` gives a GC worker temporary access to an `ObjectTracer`, allowing
 /// the GC worker to trace objects.  This trait is intended to abstract out the implementation
 /// details of tracing objects, enqueuing objects, and creating work packets that expand the
@@ -222,6 +228,20 @@ pub trait Scanning<VM: VMBinding> {
     ) {
         unreachable!("scan_object_and_trace_edges() will not be called when support_slot_enqueuing() is always true.")
     }
+
+    fn single_threaded_scan_vm_specific_roots(
+        tls: VMWorkerThread,
+
+        closure: impl ObjectGraphTraversal<VM::VMSlot>,
+    );
+
+    fn single_threaded_scan_roots_in_mutator_thread(
+        tls: VMWorkerThread,
+
+        mutator: &'static mut Mutator<VM>,
+
+        closure: impl ObjectGraphTraversal<VM::VMSlot>,
+    );
 
     /// MMTk calls this method at the first time during a collection that thread's stacks
     /// have been scanned. This can be used (for example) to clean up

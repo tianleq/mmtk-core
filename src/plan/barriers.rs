@@ -273,7 +273,8 @@ impl<S: BarrierSemantics> SATBBarrier<S> {
         Self { semantics }
     }
     fn object_is_unlogged(&self, object: ObjectReference) -> bool {
-        unsafe { S::UNLOG_BIT_SPEC.load::<S::VM, u8>(object, None) != 0 }
+        // unsafe { S::UNLOG_BIT_SPEC.load::<S::VM, u8>(object, None) != 0 }
+        S::UNLOG_BIT_SPEC.load_atomic::<S::VM, u8>(object, None, Ordering::SeqCst) != 0
     }
 }
 
@@ -305,6 +306,8 @@ impl<S: BarrierSemantics> Barrier<S::VM> for SATBBarrier<S> {
             self.semantics
                 .object_reference_write_slow(src, slot, target);
         }
+        // self.semantics
+        //     .object_reference_write_slow(src, slot, target);
     }
 
     fn object_reference_write_post(

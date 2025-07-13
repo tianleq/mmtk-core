@@ -47,8 +47,6 @@ use std::sync::atomic::AtomicUsize;
 pub use mmtk::MMTKBuilder;
 pub(crate) use mmtk::MMAPPER;
 pub use mmtk::MMTK;
-#[cfg(feature = "satb")]
-use portable_atomic::AtomicBool;
 
 mod global_state;
 pub use crate::global_state::LiveBytesStats;
@@ -73,6 +71,3 @@ static NUM_CONCURRENT_TRACING_PACKETS: AtomicUsize = AtomicUsize::new(0);
 fn concurrent_marking_packets_drained() -> bool {
     crate::NUM_CONCURRENT_TRACING_PACKETS.load(std::sync::atomic::Ordering::SeqCst) == 0
 }
-
-#[cfg(feature = "satb")]
-static CONCURRENT_MARKING_ACTIVE: AtomicBool = AtomicBool::new(false);

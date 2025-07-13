@@ -1,6 +1,7 @@
 use super::work_bucket::WorkBucketStage;
 use super::*;
 use crate::global_state::GcStatus;
+use crate::plan::immix::Pause;
 use crate::plan::ObjectsClosure;
 use crate::plan::VectorObjectQueue;
 use crate::util::*;
@@ -29,7 +30,7 @@ impl<VM: VMBinding> GCWork<VM> for ScheduleCollection {
         mmtk.set_gc_status(GcStatus::GcPrepare);
 
         if cfg!(feature = "satb") {
-            if mmtk.is_user_triggered_collection() {
+            if mmtk.is_user_triggered_collection() || is_emergency {
                 // user triggered collection is always stop-the-world
                 mmtk.get_plan().schedule_collection(worker.scheduler());
             } else {
@@ -144,6 +145,47 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
     fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
         trace!("Release Global");
 
+        #[cfg(feature = "satb")]
+        {
+            let mut missing_objects = mmtk.missing_objects.lock().unwrap();
+
+            let mut roots = mmtk.sanity_roots.lock().unwrap();
+            let mut original_roots = mmtk.roots.lock().unwrap();
+            println!(
+                "roots: {}, original roots: {}",
+                roots.len(),
+                original_roots.len()
+            );
+
+            for o in missing_objects.iter() {
+                let root = roots.contains_key(o);
+                if root {
+                    <C::VM as VMBinding>::VMObjectModel::dump_object(*o);
+                    <C::VM as VMBinding>::VMObjectModel::dump_object(
+                        *original_roots.get(roots.get(o).unwrap()).unwrap(),
+                    );
+
+                    println!(
+                        "object: {:?} missing, slot: {:?}, original object: {:?}",
+                        o,
+                        roots.get(o).unwrap(),
+                        original_roots.get(roots.get(o).unwrap())
+                    );
+                } else {
+                    println!("object: {:?} missing", o);
+                }
+            }
+            debug_assert!(
+                missing_objects.len() == 0,
+                "missing {} objects",
+                missing_objects.len(),
+            );
+
+            missing_objects.clear();
+            roots.clear();
+            original_roots.clear();
+        }
+
         mmtk.gc_trigger.policy.on_gc_release(mmtk);
         // We assume this is the only running work packet that accesses plan at the point of execution
 
@@ -202,11 +244,27 @@ impl<VM: VMBinding> GCWork<VM> for ReleaseCollector {
 ///
 /// TODO: Smaller work granularity
 #[derive(Default)]
-pub struct StopMutators<C: GCWorkContext>(PhantomData<C>);
+pub struct StopMutators<C: GCWorkContext> {
+    #[cfg(feature = "satb")]
+    pause: Pause,
+    phantom: PhantomData<C>,
+}
 
 impl<C: GCWorkContext> StopMutators<C> {
     pub fn new() -> Self {
-        Self(PhantomData)
+        Self {
+            #[cfg(feature = "satb")]
+            pause: Pause::Full,
+            phantom: PhantomData,
+        }
+    }
+
+    pub fn new_args(#[cfg(feature = "satb")] pause: Pause) -> Self {
+        Self {
+            #[cfg(feature = "satb")]
+            pause,
+            phantom: PhantomData,
+        }
     }
 }
 
@@ -218,7 +276,14 @@ impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
             #[cfg(feature = "satb")]
             {
                 mutator.prepare(worker.tls);
+                if self.pause != Pause::FinalMark {
+                    mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
+                        .add(ScanMutatorRoots::<C>(mutator));
+                } else {
+                    mutator.flush();
+                }
             }
+            #[cfg(not(feature = "satb"))]
             // TODO: The stack scanning work won't start immediately, as the `Prepare` bucket is not opened yet (the bucket is opened in notify_mutators_paused).
             // Should we push to Unconstrained instead?
             mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
@@ -708,6 +773,18 @@ pub trait ProcessEdgesWork:
     fn process_slots(&mut self) {
         probe!(mmtk, process_slots, self.slots.len(), self.is_roots());
         for i in 0..self.slots.len() {
+            #[cfg(feature = "satb")]
+            {
+                if self.roots {
+                    if let Some(object) = self.slots[i].load() {
+                        self.mmtk
+                            .roots
+                            .lock()
+                            .unwrap()
+                            .insert(self.slots[i], object);
+                    }
+                }
+            }
             self.process_slot(self.slots[i])
         }
     }

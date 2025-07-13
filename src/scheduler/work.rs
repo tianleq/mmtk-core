@@ -1,6 +1,6 @@
 use super::worker::*;
-use crate::mmtk::MMTK;
 use crate::vm::VMBinding;
+use crate::{mmtk::MMTK, plan::PlanTraceObject};
 #[cfg(feature = "work_packet_stats")]
 use std::any::{type_name, TypeId};
 
@@ -82,7 +82,7 @@ use crate::plan::Plan;
 /// `PhantomData`, and will automatically have `Send + 'static`.
 pub trait GCWorkContext: Send + 'static {
     type VM: VMBinding;
-    type PlanType: Plan<VM = Self::VM>;
+    type PlanType: Plan<VM = Self::VM> + PlanTraceObject<Self::VM> + Send;
 
     // FIXME: We should use `SFTProcessEdges` as the default value for `DefaultProcessEdges`, and
     // `UnsupportedProcessEdges` for `PinningProcessEdges`.  However, this requires

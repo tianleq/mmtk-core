@@ -81,6 +81,9 @@ pub trait Collection<VM: VMBinding> {
     /// * `tls`: The thread pointer for the current GC thread.
     fn schedule_finalization(_tls: VMWorkerThread) {}
 
+    #[cfg(feature = "satb")]
+    fn set_concurrent_marking_state(_active: bool) {}
+
     /// A hook for the VM to do work after forwarding objects.
     ///
     /// This function is called after all of the following have finished:
@@ -162,7 +165,4 @@ pub trait Collection<VM: VMBinding> {
     fn create_gc_trigger() -> Box<dyn GCTriggerPolicy<VM>> {
         unimplemented!()
     }
-
-    #[cfg(feature = "satb")]
-    fn set_concurrent_marking_state(active: bool);
 }

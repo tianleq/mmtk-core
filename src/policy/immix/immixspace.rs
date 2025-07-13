@@ -55,8 +55,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     scheduler: Arc<GCWorkScheduler<VM>>,
     /// Some settings for this space
     space_args: ImmixSpaceArgs,
-    #[cfg(feature = "satb")]
-    pub concurrent_marking_enabled: bool,
+
     #[cfg(all(feature = "satb", debug_assertions))]
     pub blocks: std::sync::Mutex<std::collections::HashSet<Block>>,
 }
@@ -192,6 +191,13 @@ impl<VM: VMBinding> Space<VM> for ImmixSpace<VM> {
     fn enumerate_objects(&self, enumerator: &mut dyn ObjectEnumerator) {
         object_enum::enumerate_blocks_from_chunk_map::<Block>(enumerator, &self.chunk_map);
     }
+    #[cfg(feature = "satb")]
+    fn concurrent_marking_active(&self) -> bool {
+        self.common()
+            .global_state
+            .concurrent_marking_active
+            .load(Ordering::Acquire)
+    }
 }
 
 impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace<VM> {
@@ -224,6 +230,27 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
             }
         } else if KIND == TRACE_KIND_FAST {
             self.trace_object_without_moving(queue, object)
+        } else if KIND == crate::policy::gc_work::TRACE_KIND_VERIFY {
+            // debug_assert!(
+            //     self.is_marked(object),
+            //     "object: {:?} is missed in concurrent phase, newly allocated: {}",
+            //     object,
+            //     self.blocks
+            //         .lock()
+            //         .unwrap()
+            //         .contains(&Block::containing(object))
+            // );
+            // debug_assert!(
+            //     Line::lines_marked::<VM>(object, self.line_mark_state.load(Ordering::Acquire)),
+            //     "object: {:?} lives in unmarked lines",
+            //     object
+            // );
+            if !self.is_marked(object)
+                || !Line::lines_marked::<VM>(object, self.line_mark_state.load(Ordering::Acquire))
+            {
+                worker.mmtk.missing_objects.lock().unwrap().insert(object);
+            }
+            object
         } else {
             unreachable!()
         }
@@ -345,8 +372,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             mark_state: Self::MARKED_STATE,
             scheduler: scheduler.clone(),
             space_args,
-            #[cfg(feature = "satb")]
-            concurrent_marking_enabled: true,
             #[cfg(all(feature = "satb", debug_assertions))]
             blocks: std::sync::Mutex::new(std::collections::HashSet::new()),
         }

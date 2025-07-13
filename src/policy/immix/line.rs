@@ -84,6 +84,24 @@ impl Line {
         marked_lines
     }
 
+    pub fn lines_marked<VM: VMBinding>(object: ObjectReference, state: u8) -> bool {
+        debug_assert!(!super::BLOCK_ONLY);
+        let start = object.to_object_start::<VM>();
+        let end = start + VM::VMObjectModel::get_current_size(object);
+        let start_line = Line::from_unaligned_address(start);
+        let mut end_line = Line::from_unaligned_address(end);
+        if !Line::is_aligned(end) {
+            end_line = end_line.next();
+        }
+        let iter = RegionIterator::<Line>::new(start_line, end_line);
+        for line in iter {
+            if !line.is_marked(state) {
+                return false;
+            }
+        }
+        true
+    }
+
     #[cfg(feature = "satb")]
     pub fn initialize_mark_table_as_marked<VM: VMBinding>(lines: Range<Line>) {
         let meta = VM::VMObjectModel::LOCAL_MARK_BIT_SPEC.extract_side_spec();

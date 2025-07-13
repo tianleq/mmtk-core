@@ -17,7 +17,7 @@ pub(crate) use scheduler::GCWorkScheduler;
 mod stat;
 mod work_counter;
 
-mod work;
+pub mod work;
 pub use work::GCWork;
 pub(crate) use work::GCWorkContext;
 
@@ -34,3 +34,5 @@ pub(crate) mod gc_work;
 pub use gc_work::ProcessEdgesWork;
 #[cfg(feature = "satb")]
 pub use gc_work::RootKind;
+#[cfg(feature = "satb")]
+pub(crate) mod single_thread_gc_work;

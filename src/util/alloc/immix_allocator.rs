@@ -268,7 +268,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 #[cfg(feature = "satb")]
                 {
                     // mark objects if concurrent marking is active
-                    if crate::CONCURRENT_MARKING_ACTIVE.load(std::sync::atomic::Ordering::Acquire) {
+                    if self.immix_space().concurrent_marking_active() {
                         let state = self
                             .space
                             .line_mark_state
@@ -322,11 +322,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 #[cfg(feature = "satb")]
                 {
                     // mark objects if concurrent marking is active
-                    if crate::CONCURRENT_MARKING_ACTIVE.load(std::sync::atomic::Ordering::Acquire) {
-                        // Line::MARK_TABLE.bset_metadata(
-                        //     block.start(),
-                        //     crate::policy::immix::block::Block::BYTES,
-                        // );
+                    if self.immix_space().concurrent_marking_active() {
                         let state = self
                             .space
                             .line_mark_state

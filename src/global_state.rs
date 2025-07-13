@@ -47,6 +47,8 @@ pub struct GlobalState {
     pub(crate) malloc_bytes: AtomicUsize,
     /// This stores the live bytes and the used bytes (by pages) for each space in last GC. This counter is only updated in the GC release phase.
     pub(crate) live_bytes_in_last_gc: AtomicRefCell<HashMap<&'static str, LiveBytesStats>>,
+    #[cfg(feature = "satb")]
+    pub(crate) concurrent_marking_active: AtomicBool,
 }
 
 impl GlobalState {
@@ -203,6 +205,8 @@ impl Default for GlobalState {
             #[cfg(feature = "malloc_counted_size")]
             malloc_bytes: AtomicUsize::new(0),
             live_bytes_in_last_gc: AtomicRefCell::new(HashMap::new()),
+            #[cfg(feature = "satb")]
+            concurrent_marking_active: AtomicBool::new(false),
         }
     }
 }

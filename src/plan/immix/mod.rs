@@ -26,3 +26,9 @@ pub enum Pause {
 unsafe impl bytemuck::ZeroableInOption for Pause {}
 #[cfg(feature = "satb")]
 unsafe impl bytemuck::PodInOption for Pause {}
+
+impl Default for Pause {
+    fn default() -> Self {
+        Self::Full
+    }
+}

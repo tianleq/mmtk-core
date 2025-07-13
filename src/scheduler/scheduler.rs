@@ -69,6 +69,19 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             let mut open_stages: Vec<WorkBucketStage> = vec![first_stw_stage];
             let stages = (0..WorkBucketStage::LENGTH).map(WorkBucketStage::from_usize);
             for stage in stages {
+                #[cfg(feature = "satb")]
+                {
+                    if stage == WorkBucketStage::ConcurrentSentinel {
+                        work_buckets[stage].set_open_condition(
+                            move |scheduler: &GCWorkScheduler<VM>| {
+                                scheduler.work_buckets[WorkBucketStage::Unconstrained].is_drained()
+                            },
+                        );
+                        open_stages.push(stage);
+                        continue;
+                    }
+                }
+
                 // Unconstrained is always open.
                 // The first STW stage (Prepare) will be opened when the world stopped
                 // (i.e. when all mutators are suspended).

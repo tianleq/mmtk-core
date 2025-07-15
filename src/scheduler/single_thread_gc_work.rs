@@ -302,11 +302,7 @@ where
     }
 
     fn traverse_from_roots(&mut self) {
-        let mut roots = self.worker().mmtk.sanity_roots.lock().unwrap();
         while let Some(slot) = self.slots.pop() {
-            if let Some(obj) = slot.load() {
-                roots.insert(obj, slot);
-            }
             self.process_slot(slot);
         }
     }

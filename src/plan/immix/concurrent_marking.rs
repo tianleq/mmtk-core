@@ -197,11 +197,9 @@ impl<VM: VMBinding> ProcessEdgesWork for ProcessRootSlots<VM> {
         }
         let mut root_objects = Vec::with_capacity(Self::CAPACITY);
         if !self.slots.is_empty() {
-            let mut original_roots = self.base.mmtk().roots.lock().unwrap();
             let slots = std::mem::take(&mut self.slots);
             for slot in slots {
                 if let Some(object) = slot.load() {
-                    original_roots.insert(slot, object);
                     root_objects.push(object);
                     if root_objects.len() == Self::CAPACITY {
                         // create the packet

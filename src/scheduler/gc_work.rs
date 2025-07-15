@@ -145,47 +145,6 @@ impl<C: GCWorkContext + 'static> GCWork<C::VM> for Release<C> {
     fn do_work(&mut self, worker: &mut GCWorker<C::VM>, mmtk: &'static MMTK<C::VM>) {
         trace!("Release Global");
 
-        #[cfg(feature = "satb")]
-        {
-            let mut missing_objects = mmtk.missing_objects.lock().unwrap();
-
-            let mut roots = mmtk.sanity_roots.lock().unwrap();
-            let mut original_roots = mmtk.roots.lock().unwrap();
-            println!(
-                "roots: {}, original roots: {}",
-                roots.len(),
-                original_roots.len()
-            );
-
-            for o in missing_objects.iter() {
-                let root = roots.contains_key(o);
-                if root {
-                    <C::VM as VMBinding>::VMObjectModel::dump_object(*o);
-                    <C::VM as VMBinding>::VMObjectModel::dump_object(
-                        *original_roots.get(roots.get(o).unwrap()).unwrap(),
-                    );
-
-                    println!(
-                        "object: {:?} missing, slot: {:?}, original object: {:?}",
-                        o,
-                        roots.get(o).unwrap(),
-                        original_roots.get(roots.get(o).unwrap())
-                    );
-                } else {
-                    println!("object: {:?} missing", o);
-                }
-            }
-            debug_assert!(
-                missing_objects.len() == 0,
-                "missing {} objects",
-                missing_objects.len(),
-            );
-
-            missing_objects.clear();
-            roots.clear();
-            original_roots.clear();
-        }
-
         mmtk.gc_trigger.policy.on_gc_release(mmtk);
         // We assume this is the only running work packet that accesses plan at the point of execution
 
@@ -773,18 +732,6 @@ pub trait ProcessEdgesWork:
     fn process_slots(&mut self) {
         probe!(mmtk, process_slots, self.slots.len(), self.is_roots());
         for i in 0..self.slots.len() {
-            #[cfg(feature = "satb")]
-            {
-                if self.roots {
-                    if let Some(object) = self.slots[i].load() {
-                        self.mmtk
-                            .roots
-                            .lock()
-                            .unwrap()
-                            .insert(self.slots[i], object);
-                    }
-                }
-            }
             self.process_slot(self.slots[i])
         }
     }

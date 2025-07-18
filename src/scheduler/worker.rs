@@ -245,12 +245,14 @@ impl<VM: VMBinding> GCWorker<VM> {
         );
         WORKER_ORDINAL.with(|x| x.store(self.ordinal, Ordering::SeqCst));
         let worker = (&mut *self as &mut Self) as *mut Self;
+        #[cfg(feature = "satb")]
         _WORKER.with(|x| {
             x.store(
                 (&mut *self as &mut Self) as *mut Self as usize,
                 Ordering::SeqCst,
             )
         });
+        #[cfg(feature = "satb")]
         _WORKERS
             .lock()
             .unwrap()

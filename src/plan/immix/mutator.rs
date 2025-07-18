@@ -1,5 +1,7 @@
 use super::Immix;
+#[cfg(feature = "satb")]
 use crate::plan::barriers::SATBBarrier;
+#[cfg(feature = "satb")]
 use crate::plan::immix::barrier::SATBBarrierSemantics;
 use crate::plan::mutator_context::create_allocator_mapping;
 use crate::plan::mutator_context::create_space_mapping;
@@ -64,11 +66,13 @@ pub fn create_immix_mutator<VM: VMBinding>(
             vec.push((AllocatorSelector::Immix(0), &immix.immix_space));
             vec
         }),
+
         prepare_func: if cfg!(feature = "satb") {
             &immix_mutator_prepare
         } else {
             &unreachable_prepare_func
         },
+        // prepare_func: &unreachable_prepare_func,
         release_func: &immix_mutator_release,
     };
 
@@ -80,4 +84,5 @@ pub fn create_immix_mutator<VM: VMBinding>(
     } else {
         builder.build()
     }
+    // builder.build()
 }

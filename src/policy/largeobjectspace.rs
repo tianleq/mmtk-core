@@ -222,6 +222,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LargeObjec
         _worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
         if KIND == crate::policy::gc_work::TRACE_KIND_VERIFY {
+            #[cfg(feature = "satb")]
             debug_assert!(
                 self.is_marked(object),
                 "los object: {:?} is missing in concurrent phase",
@@ -388,6 +389,13 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
 
     /// Allocate an object
     pub fn allocate_pages(&self, tls: VMThread, pages: usize) -> Address {
+        #[cfg(feature = "satb")]
+        {
+            self.common()
+                .global_state
+                .concurrent_marking_threshold
+                .fetch_add(pages, Ordering::Relaxed);
+        }
         self.acquire(tls, pages)
     }
 

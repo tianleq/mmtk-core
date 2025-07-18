@@ -27,6 +27,7 @@ unsafe impl bytemuck::ZeroableInOption for Pause {}
 #[cfg(feature = "satb")]
 unsafe impl bytemuck::PodInOption for Pause {}
 
+#[cfg(feature = "satb")]
 impl Default for Pause {
     fn default() -> Self {
         Self::Full

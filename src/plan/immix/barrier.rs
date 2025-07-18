@@ -43,13 +43,6 @@ impl<VM: VMBinding> SATBBarrierSemantics<VM> {
         slot: VM::VMSlot,
         _new: Option<ObjectReference>,
     ) -> bool {
-        // if let Some(old) = slot.load() {
-        //     if self.log_object(old) {
-        //         self.slow(src, slot, old);
-        //         return true;
-        //     }
-        // }
-        // false
         if let Some(old) = slot.load() {
             self.slow(src, slot, old);
         }
@@ -59,26 +52,6 @@ impl<VM: VMBinding> SATBBarrierSemantics<VM> {
     /// Attempt to atomically log an object.
     /// Returns true if the object is not logged previously.
     fn log_object(&self, object: ObjectReference) -> bool {
-        // loop {
-        //     let old_value =
-        //         Self::UNLOG_BIT_SPEC.load_atomic::<VM, u8>(object, None, Ordering::SeqCst);
-        //     if old_value == 0 {
-        //         return false;
-        //     }
-        //     if Self::UNLOG_BIT_SPEC
-        //         .compare_exchange_metadata::<VM, u8>(
-        //             object,
-        //             1,
-        //             0,
-        //             None,
-        //             Ordering::SeqCst,
-        //             Ordering::SeqCst,
-        //         )
-        //         .is_ok()
-        //     {
-        //         return true;
-        //     }
-        // }
         Self::UNLOG_BIT_SPEC.store_atomic::<VM, u8>(object, 0, None, Ordering::SeqCst);
         true
     }
@@ -104,7 +77,7 @@ impl<VM: VMBinding> SATBBarrierSemantics<VM> {
     #[cold]
     fn flush_weak_refs(&mut self) {
         if !self.refs.is_empty() {
-            debug_assert!(self.should_create_satb_packets());
+            // debug_assert!(self.should_create_satb_packets());
             let nodes = self.refs.take();
             if let Some(pause) = self.immix.current_pause() {
                 debug_assert_ne!(pause, Pause::InitialMark);
@@ -138,7 +111,6 @@ impl<VM: VMBinding> BarrierSemantics for SATBBarrierSemantics<VM> {
         _slot: <Self::VM as VMBinding>::VMSlot,
         _target: Option<ObjectReference>,
     ) {
-        // self.enqueue_node(Some(src), slot, target);
         self.object_probable_write_slow(src);
         self.log_object(src);
     }

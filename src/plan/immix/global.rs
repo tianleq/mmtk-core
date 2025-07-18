@@ -1,4 +1,5 @@
 use super::mutator::ALLOCATOR_MAPPING;
+#[cfg(feature = "satb")]
 use super::Pause;
 use crate::plan::global::BasePlan;
 use crate::plan::global::CommonPlan;
@@ -76,39 +77,26 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     #[cfg(feature = "satb")]
-    fn stop_the_world_collection_required(
-        &self,
-        _space_full: bool,
-        _space: Option<SpaceStats<Self::VM>>,
-    ) -> bool {
-        use crate::util::conversions;
-        use crate::vm::Collection;
-
-        let used_pages = self.get_used_pages();
-
-        let vm_live_bytes = <Self::VM as VMBinding>::VMCollection::vm_live_bytes();
-        // Note that `vm_live_bytes` may not be the exact number of bytes in whole pages.  The VM
-        // binding is allowed to return an approximate value if it is expensive or impossible to
-        // compute the exact number of pages occupied.
-        let vm_live_pages = conversions::bytes_to_pages_up(vm_live_bytes);
-        let total = self.get_total_pages();
-
-        _space_full || total <= used_pages + vm_live_pages + 32
-    }
-
-    #[cfg(feature = "satb")]
     fn collection_required(&self, space_full: bool, _space: Option<SpaceStats<Self::VM>>) -> bool {
+        if self.base().collection_required(self, space_full) {
+            self.gc_cause.store(GCCause::FullHeap, Ordering::Release);
+            return true;
+        }
+
         let concurrent_marking_in_progress = self.concurrent_marking_in_progress();
 
         if concurrent_marking_in_progress && crate::concurrent_marking_packets_drained() {
             self.gc_cause.store(GCCause::FinalMark, Ordering::Release);
             return true;
         }
-        if self.stop_the_world_collection_required(space_full, _space) {
-            self.gc_cause.store(GCCause::FullHeap, Ordering::Release);
-            return true;
-        }
-        if !concurrent_marking_in_progress && self.base().collection_required(self, space_full) {
+        let threshold = self.get_total_pages() >> 1;
+        let concurrent_marking_threshold = self
+            .common
+            .base
+            .global_state
+            .concurrent_marking_threshold
+            .load(Ordering::Acquire);
+        if !concurrent_marking_in_progress && concurrent_marking_threshold > threshold {
             debug_assert!(crate::concurrent_marking_packets_drained());
             debug_assert!(!self.concurrent_marking_in_progress());
             let prev_pause = self.previous_pause();
@@ -206,7 +194,8 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn prepare(&mut self, tls: VMWorkerThread) {
-        if cfg!(feature = "satb") {
+        #[cfg(feature = "satb")]
+        {
             let pause = self.current_pause().unwrap();
             match pause {
                 Pause::Full | Pause::FullDefrag => {
@@ -231,7 +220,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 }
                 Pause::FinalMark => (),
             }
-        } else {
+        }
+        #[cfg(not(feature = "satb"))]
+        {
             self.common.prepare(tls, true);
             self.immix_space.prepare(
                 true,
@@ -243,7 +234,8 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
-        if cfg!(feature = "satb") {
+        #[cfg(feature = "satb")]
+        {
             let pause = self.current_pause().unwrap();
             match pause {
                 Pause::Full | Pause::FullDefrag => {
@@ -260,7 +252,15 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                     self.immix_space.release(true);
                 }
             }
-        } else {
+            // reset the concurrent marking page counting
+            self.common()
+                .base
+                .global_state
+                .concurrent_marking_threshold
+                .store(0, Ordering::Release);
+        }
+        #[cfg(not(feature = "satb"))]
+        {
             self.common.release(tls, true);
             // release the collected region
             self.immix_space.release(true);
@@ -320,8 +320,8 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 self.set_concurrent_marking_state(false);
             }
         }
-        #[cfg(debug_assertions)]
-        println!("pause {:?} start", pause);
+        // #[cfg(debug_assertions)]
+        // println!("pause {:?} start", pause);
     }
 
     #[cfg(feature = "satb")]
@@ -333,8 +333,8 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         }
         self.previous_pause.store(Some(pause), Ordering::SeqCst);
         self.current_pause.store(None, Ordering::SeqCst);
-        #[cfg(debug_assertions)]
-        println!("pause {:?} end", pause);
+        // #[cfg(debug_assertions)]
+        // println!("pause {:?} end", pause);
     }
 }
 

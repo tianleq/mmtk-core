@@ -55,9 +55,6 @@ pub struct ImmixSpace<VM: VMBinding> {
     scheduler: Arc<GCWorkScheduler<VM>>,
     /// Some settings for this space
     space_args: ImmixSpaceArgs,
-
-    #[cfg(all(feature = "satb", debug_assertions))]
-    pub blocks: std::sync::Mutex<std::collections::HashSet<Block>>,
 }
 
 /// Some arguments for Immix Space.
@@ -245,6 +242,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
             //     "object: {:?} lives in unmarked lines",
             //     object
             // );
+            #[cfg(feature = "satb")]
             if !self.is_marked(object)
                 || !Line::lines_marked::<VM>(object, self.line_mark_state.load(Ordering::Acquire))
             {
@@ -372,8 +370,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             mark_state: Self::MARKED_STATE,
             scheduler: scheduler.clone(),
             space_args,
-            #[cfg(all(feature = "satb", debug_assertions))]
-            blocks: std::sync::Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -436,7 +432,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             }
 
             if self.common.needs_log_bit {
-                if cfg!(feature = "satb") {
+                #[cfg(feature = "satb")]
+                {
                     if pause != crate::plan::immix::Pause::InitialMark {
                         if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
                         {
@@ -445,9 +442,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                             }
                         }
                     }
-                } else if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC {
-                    for chunk in self.chunk_map.all_chunks() {
-                        side.bzero_metadata(chunk.start(), Chunk::BYTES);
+                }
+                #[cfg(not(feature = "satb"))]
+                {
+                    if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC {
+                        for chunk in self.chunk_map.all_chunks() {
+                            side.bzero_metadata(chunk.start(), Chunk::BYTES);
+                        }
                     }
                 }
             }
@@ -560,11 +561,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.scheduler().work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
 
         self.lines_consumed.store(0, Ordering::Relaxed);
-        #[cfg(feature = "satb")]
-        {
-            #[cfg(debug_assertions)]
-            self.blocks.lock().unwrap().clear();
-        }
     }
 
     /// This is called when a GC finished.
@@ -615,6 +611,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.chunk_map.set_allocated(block.chunk(), true);
         self.lines_consumed
             .fetch_add(Block::LINES, Ordering::SeqCst);
+        #[cfg(feature = "satb")]
+        {
+            self.common()
+                .global_state
+                .concurrent_marking_threshold
+                .fetch_add(Block::PAGES, Ordering::Relaxed);
+        }
         Some(block)
     }
 
@@ -641,6 +644,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 self.lines_consumed.fetch_add(lines_delta, Ordering::SeqCst);
 
                 block.init(copy);
+                #[cfg(feature = "satb")]
+                {
+                    self.common
+                        .global_state
+                        .concurrent_marking_threshold
+                        .fetch_add(Block::PAGES, Ordering::Relaxed);
+                }
                 return Some(block);
             } else {
                 return None;

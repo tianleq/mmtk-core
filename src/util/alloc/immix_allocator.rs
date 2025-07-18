@@ -334,9 +334,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         Line::initialize_mark_table_as_marked::<VM>(
                             block.start_line()..block.end_line(),
                         );
-
-                        #[cfg(debug_assertions)]
-                        self.space.blocks.lock().unwrap().insert(block);
                     }
                 }
 

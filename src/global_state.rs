@@ -49,6 +49,8 @@ pub struct GlobalState {
     pub(crate) live_bytes_in_last_gc: AtomicRefCell<HashMap<&'static str, LiveBytesStats>>,
     #[cfg(feature = "satb")]
     pub(crate) concurrent_marking_active: AtomicBool,
+    #[cfg(feature = "satb")]
+    pub(crate) concurrent_marking_threshold: AtomicUsize,
 }
 
 impl GlobalState {
@@ -207,6 +209,8 @@ impl Default for GlobalState {
             live_bytes_in_last_gc: AtomicRefCell::new(HashMap::new()),
             #[cfg(feature = "satb")]
             concurrent_marking_active: AtomicBool::new(false),
+            #[cfg(feature = "satb")]
+            concurrent_marking_threshold: AtomicUsize::new(0),
         }
     }
 }

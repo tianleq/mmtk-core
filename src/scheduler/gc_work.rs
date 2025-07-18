@@ -1,6 +1,7 @@
 use super::work_bucket::WorkBucketStage;
 use super::*;
 use crate::global_state::GcStatus;
+#[cfg(feature = "satb")]
 use crate::plan::immix::Pause;
 use crate::plan::ObjectsClosure;
 use crate::plan::VectorObjectQueue;
@@ -28,8 +29,8 @@ impl<VM: VMBinding> GCWork<VM> for ScheduleCollection {
         }
         // Set to GcPrepare
         mmtk.set_gc_status(GcStatus::GcPrepare);
-
-        if cfg!(feature = "satb") {
+        #[cfg(feature = "satb")]
+        {
             if mmtk.is_user_triggered_collection() || is_emergency {
                 // user triggered collection is always stop-the-world
                 mmtk.get_plan().schedule_collection(worker.scheduler());
@@ -38,8 +39,9 @@ impl<VM: VMBinding> GCWork<VM> for ScheduleCollection {
                 mmtk.get_plan()
                     .schedule_concurrent_collection(worker.scheduler());
             }
-        } else {
-            // Let the plan to schedule collection work
+        }
+        #[cfg(not(feature = "satb"))]
+        {
             mmtk.get_plan().schedule_collection(worker.scheduler());
         }
     }
@@ -248,9 +250,12 @@ impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
             mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
                 .add(ScanMutatorRoots::<C>(mutator));
         });
-        mmtk.scheduler.set_in_gc_pause(true);
         #[cfg(feature = "satb")]
-        mmtk.get_plan().gc_pause_start(&mmtk.scheduler);
+        {
+            mmtk.scheduler.set_in_gc_pause(true);
+            mmtk.get_plan().gc_pause_start(&mmtk.scheduler);
+        }
+
         let factory = ProcessEdgesWorkRootsWorkFactory::<
             C::VM,
             C::DefaultProcessEdges,

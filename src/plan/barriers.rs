@@ -306,8 +306,6 @@ impl<S: BarrierSemantics> Barrier<S::VM> for SATBBarrier<S> {
             self.semantics
                 .object_reference_write_slow(src, slot, target);
         }
-        // self.semantics
-        //     .object_reference_write_slow(src, slot, target);
     }
 
     fn object_reference_write_post(

@@ -1,5 +1,7 @@
 use crate::plan::immix::Pause;
 use crate::plan::VectorQueue;
+use crate::policy::gc_work::PolicyTraceObject;
+use crate::policy::immix::TRACE_KIND_FAST;
 use crate::policy::space::Space;
 use crate::scheduler::gc_work::{ScanObjects, SlotOf};
 use crate::util::ObjectReference;
@@ -40,27 +42,26 @@ impl<VM: VMBinding> ConcurrentTraceObjects<VM> {
         }
     }
 
+    pub fn worker(&self) -> &'static mut GCWorker<VM> {
+        debug_assert_ne!(self.worker, std::ptr::null_mut());
+        unsafe { &mut *self.worker }
+    }
+
     #[cold]
     fn flush(&mut self) {
         if !self.next_objects.is_empty() {
             let objects = self.next_objects.take();
-            let worker = GCWorker::<VM>::current();
+            let worker = self.worker();
             let w = Self::new(objects, worker.mmtk);
-            if let Some(pause) = self.plan.current_pause() {
-                debug_assert!(pause != Pause::InitialMark);
-                worker.add_work(WorkBucketStage::Closure, w);
-            } else {
-                worker.add_work(WorkBucketStage::Unconstrained, w);
-            }
+            worker.add_work(WorkBucketStage::Unconstrained, w);
         }
     }
 
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
-        // debug_assert!(object.is_in_any_space(), "Invalid object {:?}", object);
         if self.plan.immix_space.in_space(object) {
             self.plan
                 .immix_space
-                .trace_object_without_moving(self, object);
+                .trace_object::<Self, { TRACE_KIND_FAST }>(self, object, None, self.worker());
         } else {
             self.plan.common().get_los().trace_object(self, object);
         }
@@ -73,7 +74,7 @@ impl<VM: VMBinding> ConcurrentTraceObjects<VM> {
         }
     }
 
-    fn scan_and_enqueue<const CHECK_REMSET: bool>(&mut self, object: ObjectReference) {
+    fn scan_and_enqueue(&mut self, object: ObjectReference) {
         object.iterate_fields::<VM, _>(|s| {
             let Some(t) = s.load() else {
                 return;
@@ -94,7 +95,7 @@ impl<VM: VMBinding> ObjectQueue for ConcurrentTraceObjects<VM> {
             "Invalid obj {:?}: address is not mapped",
             object
         );
-        self.scan_and_enqueue::<false>(object);
+        self.scan_and_enqueue(object);
     }
 }
 

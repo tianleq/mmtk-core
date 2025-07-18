@@ -221,15 +221,6 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
     /// * `space`: an option to indicate if there is a space that has failed in an allocation.
     fn collection_required(&self, space_full: bool, space: Option<SpaceStats<Self::VM>>) -> bool;
 
-    #[cfg(feature = "satb")]
-    fn stop_the_world_collection_required(
-        &self,
-        space_full: bool,
-        space: Option<SpaceStats<Self::VM>>,
-    ) -> bool {
-        self.collection_required(space_full, space)
-    }
-
     // Note: The following methods are about page accounting. The default implementation should
     // work fine for non-copying plans. For copying plans, the plan should override any of these methods
     // if necessary.

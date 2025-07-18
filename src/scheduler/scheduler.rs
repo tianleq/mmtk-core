@@ -416,6 +416,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         }
     }
 
+    #[cfg(feature = "satb")]
     pub fn in_concurrent(&self) -> bool {
         !self.in_gc_pause.load(std::sync::atomic::Ordering::SeqCst)
     }

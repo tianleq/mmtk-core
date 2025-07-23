@@ -350,10 +350,15 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                 // We just moved the object out of the logical nursery, mark it as unlogged.
                 // We also unlog mature objects as their unlog bit may have been unset before the
                 // full-heap GC
-                if self.common.needs_log_bit {
-                    VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
-                        .mark_as_unlogged::<VM>(object, Ordering::SeqCst);
+
+                #[cfg(not(feature = "satb"))]
+                {
+                    if self.common.needs_log_bit {
+                        VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
+                            .mark_as_unlogged::<VM>(object, Ordering::SeqCst);
+                    }
                 }
+
                 queue.enqueue(object);
             } else {
                 trace!(

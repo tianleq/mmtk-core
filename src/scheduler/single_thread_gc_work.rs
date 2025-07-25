@@ -97,7 +97,7 @@ where
             STObjectGraphTraversalClosure::<VM, P, TRACE_KIND_VERIFY>::new(mmtk, worker);
         // STStopMutators::<VM, P, DEFAULT_TRACE>::new().execute(&mut closure, worker, mmtk);
         for mutator in <VM as VMBinding>::VMActivePlan::mutators() {
-            STScanMutatorRoots::<VM, P, TRACE_KIND_VERIFY>::new(mutator, 1).execute(
+            STScanMutatorRoots::<VM, P, TRACE_KIND_VERIFY>::new(mutator).execute(
                 &mut closure,
                 worker,
                 mmtk,
@@ -324,7 +324,6 @@ pub(crate) struct STScanMutatorRoots<
     const KIND: TraceKind,
 > {
     pub mutator: &'static mut Mutator<VM>,
-    num_mutators: usize,
     phantom: PhantomData<(VM, P)>,
 }
 
@@ -333,10 +332,9 @@ where
     VM: VMBinding,
     P: Plan<VM = VM> + PlanTraceObject<VM>,
 {
-    pub fn new(mutator: &'static mut Mutator<VM>, num_mutators: usize) -> Self {
+    pub fn new(mutator: &'static mut Mutator<VM>) -> Self {
         Self {
             mutator,
-            num_mutators,
             phantom: PhantomData,
         }
     }

@@ -508,7 +508,7 @@ impl<VM: VMBinding> Immix<VM> {
             plan::immix::concurrent_marking::ProcessRootSlots,
             scheduler::{
                 gc_work::{Release, StopMutators, UnsupportedProcessEdges},
-                single_thread_gc_work::STTrace,
+                // single_thread_gc_work::STTrace,
             },
         };
 
@@ -520,12 +520,12 @@ impl<VM: VMBinding> Immix<VM> {
             ),
         ));
 
-        scheduler.work_buckets[WorkBucketStage::SecondRoots].add(STTrace::<
-            VM,
-            <crate::plan::immix::gc_work::ConcurrentImmixGCWorkContext<
-                crate::scheduler::gc_work::UnsupportedProcessEdges<VM>,
-            > as crate::scheduler::work::GCWorkContext>::PlanType,
-        >::new());
+        // scheduler.work_buckets[WorkBucketStage::SecondRoots].add(STTrace::<
+        //     VM,
+        //     <crate::plan::immix::gc_work::ConcurrentImmixGCWorkContext<
+        //         crate::scheduler::gc_work::UnsupportedProcessEdges<VM>,
+        //     > as crate::scheduler::work::GCWorkContext>::PlanType,
+        // >::new());
         scheduler.work_buckets[WorkBucketStage::Release].add(Release::<
             ConcurrentImmixGCWorkContext<UnsupportedProcessEdges<VM>>,
         >::new(self));

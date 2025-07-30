@@ -3,6 +3,8 @@ use std::borrow::BorrowMut;
 use super::Immix;
 #[cfg(feature = "public_bit")]
 use crate::plan::barriers::{PublicObjectMarkingBarrier, PublicObjectMarkingBarrierSemantics};
+use crate::plan::mutator_context::common_prepare_func;
+use crate::plan::mutator_context::common_release_func;
 use crate::plan::mutator_context::create_allocator_mapping;
 use crate::plan::mutator_context::create_space_mapping;
 use crate::plan::mutator_context::Mutator;
@@ -49,9 +51,10 @@ pub fn immix_mutator_prepare<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMW
         .unwrap();
         los_allocator.prepare();
     }
+    common_prepare_func(mutator, _tls);
 }
 
-pub fn immix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {
+pub fn immix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, tls: VMWorkerThread) {
     #[cfg(feature = "thread_local_gc")]
     use crate::util::alloc::LargeObjectAllocator;
     let allocators: &mut Allocators<VM> = mutator.allocators.borrow_mut();
@@ -89,6 +92,7 @@ pub fn immix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMW
         mutator.local_allocation_size = u32::MAX as usize;
         mutator.thread_local_gc_status = 0;
     }
+    common_release_func(mutator, tls);
 }
 
 #[cfg(feature = "thread_local_gc")]

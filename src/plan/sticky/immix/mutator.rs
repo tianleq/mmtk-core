@@ -11,8 +11,9 @@ use crate::plan::mutator_context::generic_thread_local_post_copy;
 use crate::plan::mutator_context::generic_thread_local_prepare;
 #[cfg(feature = "thread_local_gc")]
 use crate::plan::mutator_context::generic_thread_local_release;
-use crate::plan::mutator_context::MutatorBuilder;
-use crate::plan::mutator_context::{create_space_mapping, unreachable_prepare_func, MutatorConfig};
+use crate::plan::mutator_context::{
+    common_prepare_func, common_release_func, create_space_mapping, MutatorBuilder, MutatorConfig,
+};
 use crate::plan::sticky::immix::global::StickyImmix;
 use crate::util::alloc::AllocatorSelector;
 use crate::util::opaque_pointer::VMWorkerThread;
@@ -21,7 +22,8 @@ use crate::vm::VMBinding;
 use crate::{Mutator, MMTK};
 
 pub fn stickyimmix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, tls: VMWorkerThread) {
-    immix::mutator::immix_mutator_release(mutator, tls)
+    immix::mutator::immix_mutator_release(mutator, tls);
+    common_release_func(mutator, tls);
 }
 
 pub use immix::mutator::ALLOCATOR_MAPPING;
@@ -39,7 +41,7 @@ pub fn create_stickyimmix_mutator<VM: VMBinding>(
             vec.push((AllocatorSelector::Immix(0), stickyimmix.get_immix_space()));
             vec
         }),
-        prepare_func: &unreachable_prepare_func,
+        prepare_func: &common_prepare_func,
         release_func: &stickyimmix_mutator_release,
         #[cfg(feature = "thread_local_gc")]
         thread_local_prepare_func: &generic_thread_local_prepare,

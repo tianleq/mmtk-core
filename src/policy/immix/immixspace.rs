@@ -537,7 +537,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             if self.is_defrag_enabled() {
                 self.defrag.prepare(self, plan_stats.unwrap());
             }
-
+            #[cfg(not(feature = "thread_local_gc"))]
             // Prepare each block for GC
             let threshold = self.defrag.defrag_spill_threshold.load(Ordering::Acquire);
             // # Safety: ImmixSpace reference is always valid within this collection cycle.
@@ -546,6 +546,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 Box::new(PrepareBlockState {
                     space,
                     chunk,
+                    #[cfg(not(feature = "thread_local_gc"))]
                     defrag_threshold: if space.in_defrag() {
                         Some(threshold)
                     } else {
@@ -2009,6 +2010,7 @@ pub struct PrepareBlockState<VM: VMBinding> {
     #[allow(dead_code)]
     pub space: &'static ImmixSpace<VM>,
     pub chunk: Chunk,
+    #[cfg(not(feature = "thread_local_gc"))]
     pub defrag_threshold: Option<usize>,
 }
 

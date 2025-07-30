@@ -16,6 +16,7 @@ use enum_map::EnumMap;
 use super::barriers::NoBarrier;
 
 pub(crate) type SpaceMapping<VM> = Vec<(AllocatorSelector, &'static dyn Space<VM>)>;
+type ThreadlocalAllocCopyFn<VM> = &'static (dyn Fn(&mut Mutator<VM>, usize, usize, usize) -> Address + Send + Sync);
 
 /// A place-holder implementation for `MutatorConfig::prepare_func` that should not be called.
 /// It is the most often used by plans that sets `PlanConstraints::needs_prepare_mutator` to
@@ -95,8 +96,7 @@ pub struct MutatorConfig<VM: VMBinding> {
     pub thread_local_release_func: &'static (dyn Fn(&mut Mutator<VM>) + Send + Sync),
     #[cfg(feature = "thread_local_gc_copying")]
     /// Plan-specific code for mutator thread-local copy alloc. 
-    pub thread_local_alloc_copy_func:
-        &'static (dyn Fn(&mut Mutator<VM>, usize, usize, usize) -> Address + Send + Sync),
+    pub thread_local_alloc_copy_func: ThreadlocalAllocCopyFn<VM>,
     #[cfg(feature = "thread_local_gc_copying")]
     /// Plan-specific code for mutator post thread-local copy.
     pub thread_local_post_copy_func:

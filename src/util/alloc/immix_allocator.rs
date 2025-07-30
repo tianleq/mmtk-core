@@ -919,10 +919,12 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         }
         // pre-allocate copy reserve pages into local cache to make sure
         // local gc can always evacuate
-        match self
-            .immix_space()
-            .get_clean_blocks(self.tls, false, number_of_clean_blocks)
-        {
+        match self.immix_space().get_clean_blocks(
+            self.tls,
+            false,
+            number_of_clean_blocks,
+            self.get_context().get_alloc_options(),
+        ) {
             Some(blocks) => {
                 self.local_free_blocks.extend(blocks);
             }
@@ -1765,7 +1767,11 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             self.tls
         };
 
-        let block = self.immix_space().get_clean_block(tls, self.copy);
+        let block = self.immix_space().get_clean_block(
+            tls,
+            self.copy,
+            self.get_context().get_alloc_options(),
+        );
         #[cfg(debug_assertions)]
         debug_assert!(
             block.is_none() || block.unwrap().owner() == 0,

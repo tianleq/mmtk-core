@@ -83,7 +83,11 @@ impl<VM: VMBinding> Allocator<VM> for LargeObjectAllocator<VM> {
     }
 
     fn alloc_slow_once(&mut self, size: usize, align: usize, _offset: usize) -> Address {
-        if self.space.will_oom_on_acquire(self.tls, size) {
+        if self.space.handle_obvious_oom_request(
+            self.tls,
+            size,
+            self.get_context().get_alloc_options(),
+        ) {
             return Address::ZERO;
         }
 
@@ -123,7 +127,8 @@ impl<VM: VMBinding> Allocator<VM> for LargeObjectAllocator<VM> {
                 .live_pages
                 .fetch_add(pages, std::sync::atomic::Ordering::SeqCst);
         }
-        self.space.allocate_pages(self.tls, pages)
+        self.space
+            .allocate_pages(self.tls, pages, self.get_context().get_alloc_options())
     }
 
     #[cfg(feature = "thread_local_gc_copying")]

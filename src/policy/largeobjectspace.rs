@@ -5,6 +5,7 @@ use crate::plan::VectorObjectQueue;
 use crate::policy::sft::GCWorkerMutRef;
 use crate::policy::sft::SFT;
 use crate::policy::space::{CommonSpace, Space};
+use crate::util::alloc::allocator::AllocationOptions;
 use crate::util::constants::BYTES_IN_PAGE;
 use crate::util::heap::{FreeListPageResource, PageResource};
 use crate::util::metadata;
@@ -570,9 +571,14 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         }
     }
 
-    // /// Allocate an object
-    pub fn allocate_pages(&self, tls: VMThread, pages: usize) -> Address {
-        self.acquire(tls, pages)
+    /// Allocate an object
+    pub fn allocate_pages(
+        &self,
+        tls: VMThread,
+        pages: usize,
+        alloc_options: AllocationOptions,
+    ) -> Address {
+        self.acquire(tls, pages, alloc_options)
     }
 
     #[cfg(feature = "thread_local_gc")]

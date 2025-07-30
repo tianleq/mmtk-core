@@ -9,6 +9,7 @@ use crate::policy::sft::GCWorkerMutRef;
 use crate::policy::sft::SFT;
 use crate::policy::sft_map::SFTMap;
 use crate::policy::space::{CommonSpace, Space};
+use crate::util::alloc::allocator::AllocationOptions;
 use crate::util::alloc::allocator::AllocatorContext;
 use crate::util::alloc::immix_allocator::ImmixAllocSemantics;
 use crate::util::constants::LOG_BYTES_IN_PAGE;
@@ -694,8 +695,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Allocate a clean block.
-    pub fn get_clean_block(&self, tls: VMThread, copy: bool) -> Option<Block> {
-        let block_address = self.acquire(tls, Block::PAGES);
+    pub fn get_clean_block(
+        &self,
+        tls: VMThread,
+        copy: bool,
+        alloc_options: AllocationOptions,
+    ) -> Option<Block> {
+        let block_address = self.acquire(tls, Block::PAGES, alloc_options);
         if block_address.is_zero() {
             return None;
         }
@@ -712,10 +718,16 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     #[cfg(feature = "thread_local_gc_copying")]
     /// Allocate n clean blocks.
-    pub fn get_clean_blocks(&self, tls: VMThread, copy: bool, n: usize) -> Option<Vec<Block>> {
+    pub fn get_clean_blocks(
+        &self,
+        tls: VMThread,
+        copy: bool,
+        n: usize,
+        alloc_options: AllocationOptions,
+    ) -> Option<Vec<Block>> {
         let mut blocks = Vec::with_capacity(n);
         for _ in 0..n {
-            if let Some(block) = self.get_clean_block(tls, copy) {
+            if let Some(block) = self.get_clean_block(tls, copy, alloc_options) {
                 blocks.push(block);
             } else {
                 break;

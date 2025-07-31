@@ -4,7 +4,7 @@ use crate::plan::barriers::NoBarrier;
 #[cfg(feature = "public_bit")]
 use crate::plan::barriers::PublicObjectMarkingBarrier;
 #[cfg(feature = "public_bit")]
-use crate::plan::barriers::PublicObjectMarkingBarrierSemantics;
+use crate::plan::immix::barrier::PublicObjectMarkingBarrierSemantics;
 use crate::plan::mutator_context::common_prepare_func;
 use crate::plan::mutator_context::common_release_func;
 #[cfg(feature = "thread_local_gc_copying")]

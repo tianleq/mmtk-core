@@ -2,7 +2,9 @@ use std::borrow::BorrowMut;
 
 use super::Immix;
 #[cfg(feature = "public_bit")]
-use crate::plan::barriers::{PublicObjectMarkingBarrier, PublicObjectMarkingBarrierSemantics};
+use crate::plan::barriers::PublicObjectMarkingBarrier;
+#[cfg(feature = "public_bit")]
+use crate::plan::immix::barrier::PublicObjectMarkingBarrierSemantics;
 use crate::plan::mutator_context::common_prepare_func;
 use crate::plan::mutator_context::common_release_func;
 use crate::plan::mutator_context::create_allocator_mapping;

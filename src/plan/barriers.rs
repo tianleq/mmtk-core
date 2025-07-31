@@ -1,6 +1,6 @@
 //! Read/Write barrier implementations.
 #[cfg(feature = "public_bit")]
-use crate::util::metadata::public_bit::{is_public, set_public_bit};
+use crate::util::metadata::public_bit::is_public;
 use crate::vm::slot::{MemorySlice, Slot};
 use crate::vm::ObjectModel;
 
@@ -10,13 +10,6 @@ use crate::{
 };
 use atomic::Ordering;
 use downcast_rs::Downcast;
-
-#[cfg(feature = "public_bit")]
-use super::tracing::PublishObjectClosure;
-#[cfg(feature = "public_bit")]
-use crate::vm::Scanning;
-#[cfg(feature = "public_bit")]
-use crate::MMTK;
 
 /// BarrierSelector describes which barrier to use.
 ///
@@ -208,6 +201,9 @@ pub trait BarrierSemantics: 'static + Send {
     fn get_object_owner(&self, _object: ObjectReference) -> u32 {
         0
     }
+    fn load_reference(&mut self, _o: ObjectReference) {}
+
+    fn object_reference_clone_pre(&mut self, _obj: ObjectReference) {}
 }
 
 /// Generic object barrier with a type argument defining it's slow-path behaviour.
@@ -441,111 +437,81 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
     }
 }
 
-#[cfg(feature = "public_bit")]
-pub struct PublicObjectMarkingBarrierSemantics<VM: VMBinding> {
-    mmtk: &'static MMTK<VM>,
-    #[cfg(feature = "debug_publish_object")]
-    mutator_id: u32,
-    #[cfg(feature = "debug_thread_local_gc_copying")]
-    tls: VMMutatorThread,
+pub struct SATBBarrier<S: BarrierSemantics> {
+    semantics: S,
 }
 
-#[cfg(feature = "public_bit")]
-impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
-    pub fn new(
-        mmtk: &'static MMTK<VM>,
-        #[cfg(feature = "debug_publish_object")] mutator_id: u32,
-        #[cfg(feature = "debug_thread_local_gc_copying")] tls: VMMutatorThread,
-    ) -> Self {
-        Self {
-            mmtk,
-            #[cfg(feature = "debug_publish_object")]
-            mutator_id,
-            #[cfg(feature = "debug_thread_local_gc_copying")]
-            tls,
-        }
+impl<S: BarrierSemantics> SATBBarrier<S> {
+    pub fn new(semantics: S) -> Self {
+        Self { semantics }
     }
-
-    fn trace_public_object(&mut self, _src: ObjectReference, value: ObjectReference) {
-        let mut closure = PublishObjectClosure::<VM>::new(
-            self.mmtk,
-            #[cfg(feature = "debug_publish_object")]
-            self.mutator_id,
-            #[cfg(feature = "debug_thread_local_gc_copying")]
-            self.tls,
-        );
-        #[cfg(feature = "debug_publish_object")]
-        set_public_bit(value, Some(self.mutator_id));
-        #[cfg(not(feature = "debug_publish_object"))]
-        set_public_bit(value);
-        #[cfg(feature = "thread_local_gc")]
-        self.mmtk.get_plan().publish_object(
-            value,
-            #[cfg(feature = "debug_thread_local_gc_copying")]
-            self.tls,
-        );
-        VM::VMScanning::scan_object(VMWorkerThread(VMThread::UNINITIALIZED), value, &mut closure);
-        closure.do_closure();
-
-        #[cfg(feature = "debug_thread_local_gc_copying")]
-        {
-            use crate::vm::ActivePlan;
-
-            if VM::VMActivePlan::is_mutator(self.tls.0) {
-                let mutator = VM::VMActivePlan::mutator(self.tls);
-                mutator.stats.bytes_published += VM::VMObjectModel::get_current_size(value);
-            }
-
-            let mut guard = GLOBAL_GC_STATISTICS.lock().unwrap();
-            guard.bytes_published += VM::VMObjectModel::get_current_size(value);
-            guard.live_public_bytes += VM::VMObjectModel::get_current_size(value);
-            TOTAL_PU8LISHED_BYTES
-                .fetch_add(VM::VMObjectModel::get_current_size(value), Ordering::SeqCst);
-        }
+    fn object_is_unlogged(&self, object: ObjectReference) -> bool {
+        // unsafe { S::UNLOG_BIT_SPEC.load::<S::VM, u8>(object, None) != 0 }
+        S::UNLOG_BIT_SPEC.load_atomic::<S::VM, u8>(object, None, Ordering::SeqCst) != 0
     }
 }
 
-#[cfg(feature = "public_bit")]
-impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM> {
-    type VM = VM;
+impl<S: BarrierSemantics> Barrier<S::VM> for SATBBarrier<S> {
+    fn flush(&mut self) {
+        self.semantics.flush();
+    }
+
+    fn load_reference(&mut self, o: ObjectReference) {
+        self.semantics.load_reference(o)
+    }
+
+    fn object_reference_clone_pre(&mut self, obj: ObjectReference) {
+        self.semantics.object_reference_clone_pre(obj);
+    }
+
+    fn object_probable_write(&mut self, obj: ObjectReference) {
+        self.semantics.object_probable_write_slow(obj);
+    }
+
+    fn object_reference_write_pre(
+        &mut self,
+        src: ObjectReference,
+        slot: <S::VM as VMBinding>::VMSlot,
+        target: Option<ObjectReference>,
+    ) {
+        if self.object_is_unlogged(src) {
+            self.semantics
+                .object_reference_write_slow(src, slot, target);
+        }
+    }
+
+    fn object_reference_write_post(
+        &mut self,
+        _src: ObjectReference,
+        _slot: <S::VM as VMBinding>::VMSlot,
+        _target: Option<ObjectReference>,
+    ) {
+        unimplemented!()
+    }
 
     fn object_reference_write_slow(
         &mut self,
         src: ObjectReference,
-        _slot: VM::VMSlot,
+        slot: <S::VM as VMBinding>::VMSlot,
         target: Option<ObjectReference>,
     ) {
-        self.trace_public_object(src, target.unwrap())
+        self.semantics
+            .object_reference_write_slow(src, slot, target);
     }
 
-    fn flush(&mut self) {}
-
-    fn memory_region_copy_slow(&mut self, _src: VM::VMMemorySlice, _dst: VM::VMMemorySlice) {}
-
-    fn object_array_copy_slow(
+    fn memory_region_copy_pre(
         &mut self,
-        _src_base: ObjectReference,
-        _dst_base: ObjectReference,
-        src: <Self::VM as VMBinding>::VMMemorySlice,
-        _dst: <Self::VM as VMBinding>::VMMemorySlice,
+        src: <S::VM as VMBinding>::VMMemorySlice,
+        dst: <S::VM as VMBinding>::VMMemorySlice,
     ) {
-        // publish all objects in the src slice
-        for slot in src.iter_slots() {
-            // info!("array_copy_slow:: slot: {:?}", slot);
-            let object = slot.load();
-            // although src array is private, it may contain
-            // public objects, so need to rule out those public
-            // objects
-            if let Some(obj) = object {
-                if !is_public(obj) {
-                    self.trace_public_object(_dst_base, obj)
-                }
-            }
-        }
+        self.semantics.memory_region_copy_slow(src, dst);
     }
 
-    #[cfg(all(feature = "debug_publish_object", debug_assertions))]
-    fn get_object_owner(&self, _object: ObjectReference) -> u32 {
-        self.mmtk.get_plan().get_object_owner(_object).unwrap()
+    fn memory_region_copy_post(
+        &mut self,
+        _src: <S::VM as VMBinding>::VMMemorySlice,
+        _dst: <S::VM as VMBinding>::VMMemorySlice,
+    ) {
+        unimplemented!()
     }
 }

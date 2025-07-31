@@ -89,7 +89,7 @@ pub struct ImmixSpace<VM: VMBinding> {
     // )>,
     #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
     pub(crate) mutator_in_defrag: std::sync::Mutex<Vec<u32>>,
-    #[cfg(feature = "thread_local_gc_copying")]
+    #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
     pub left_in_place: std::sync::Mutex<std::collections::HashSet<Block>>,
 }
 
@@ -464,7 +464,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             // log_buffer: crossbeam::queue::SegQueue::new(),
             #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
             mutator_in_defrag: std::sync::Mutex::new(vec![]),
-            #[cfg(feature = "thread_local_gc_copying")]
+            #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
             left_in_place: std::sync::Mutex::new(std::collections::HashSet::new()),
         }
     }
@@ -625,11 +625,15 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         self.scheduler().work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
 
         self.lines_consumed.store(0, Ordering::Relaxed);
-        println!(
-            "left in place blocks: {}",
-            self.left_in_place.lock().unwrap().len()
-        );
-        self.left_in_place.lock().unwrap().clear();
+
+        #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
+        {
+            // println!(
+            //     "left in place blocks: {}",
+            //     self.left_in_place.lock().unwrap().len()
+            // );
+            self.left_in_place.lock().unwrap().clear();
+        }
     }
 
     /// This is called when a GC finished.
@@ -1047,6 +1051,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                         block
                     );
                     debug_assert!(block.is_block_published());
+                    #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
                     self.left_in_place.lock().unwrap().insert(block);
                 }
 

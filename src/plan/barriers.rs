@@ -55,6 +55,9 @@ impl BarrierSelector {
 pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
     fn flush(&mut self) {}
 
+    /// load referent from java.lang.Reference
+    fn load_reference(&mut self, _referent: ObjectReference) {}
+
     /// Subsuming barrier for object reference write
     fn object_reference_write(
         &mut self,
@@ -115,6 +118,8 @@ pub trait Barrier<VM: VMBinding>: 'static + Send + Downcast {
         _dst: VM::VMMemorySlice,
     ) {
     }
+
+    fn object_reference_clone_pre(&mut self, _obj: ObjectReference) {}
 
     /// Subsuming barrier for array copy
     fn memory_region_copy(&mut self, src: VM::VMMemorySlice, dst: VM::VMMemorySlice) {

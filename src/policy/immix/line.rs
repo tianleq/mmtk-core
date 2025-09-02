@@ -211,4 +211,45 @@ impl Line {
         }
         (start_line, end_line)
     }
+
+    #[cfg(all(feature = "thread_local_gc", debug_assertions))]
+    pub fn is_object_marked<VM: VMBinding>(state: u8, object: ObjectReference) -> bool {
+        let start = object.to_object_start::<VM>();
+        let end = start + VM::VMObjectModel::get_current_size(object);
+        let start_line = Line::from_unaligned_address(start);
+        let mut end_line = Line::from_unaligned_address(end);
+        if !Line::is_aligned(end) {
+            end_line = end_line.next();
+        }
+        let iter = RegionIterator::<Line>::new(start_line, end_line);
+
+        for line in iter {
+            if !line.is_marked(state) {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    #[cfg(all(feature = "thread_local_gc", debug_assertions))]
+    pub fn is_private_marked<VM: VMBinding>(state: u8, object: ObjectReference) -> bool {
+        debug_assert!(!crate::util::metadata::public_bit::is_public(object));
+        let start = object.to_object_start::<VM>();
+        let end = start + VM::VMObjectModel::get_current_size(object);
+        let start_line = Line::from_unaligned_address(start);
+        let mut end_line = Line::from_unaligned_address(end);
+        if !Line::is_aligned(end) {
+            end_line = end_line.next();
+        }
+        let iter = RegionIterator::<Line>::new(start_line, end_line);
+
+        for line in iter {
+            if line.is_marked(state) && !line.is_line_published() {
+                return true;
+            }
+        }
+
+        false
+    }
 }

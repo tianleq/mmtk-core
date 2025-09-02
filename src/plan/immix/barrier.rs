@@ -1,9 +1,10 @@
-use crate::plan::barriers::BarrierSemantics;
 #[cfg(not(feature = "debug_publish_object"))]
 use crate::util::metadata::public_bit::set_public_bit;
+use crate::{plan::barriers::BarrierSemantics, util::VMMutatorThread};
 use crate::{
     plan::PublishObjectClosure,
     util::{ObjectReference, VMThread, VMWorkerThread},
+    vm::ActivePlan,
     vm::Scanning,
     vm::VMBinding,
     MMTK,
@@ -13,7 +14,6 @@ pub struct PublicObjectMarkingBarrierSemantics<VM: VMBinding> {
     mmtk: &'static MMTK<VM>,
     #[cfg(feature = "debug_publish_object")]
     mutator_id: u32,
-    #[cfg(feature = "debug_thread_local_gc_copying")]
     tls: VMMutatorThread,
 }
 
@@ -21,13 +21,12 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
     pub fn new(
         mmtk: &'static MMTK<VM>,
         #[cfg(feature = "debug_publish_object")] mutator_id: u32,
-        #[cfg(feature = "debug_thread_local_gc_copying")] tls: VMMutatorThread,
+        tls: VMMutatorThread,
     ) -> Self {
         Self {
             mmtk,
             #[cfg(feature = "debug_publish_object")]
             mutator_id,
-            #[cfg(feature = "debug_thread_local_gc_copying")]
             tls,
         }
     }
@@ -37,7 +36,6 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
             self.mmtk,
             #[cfg(feature = "debug_publish_object")]
             self.mutator_id,
-            #[cfg(feature = "debug_thread_local_gc_copying")]
             self.tls,
         );
         #[cfg(feature = "debug_publish_object")]
@@ -50,6 +48,11 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
             #[cfg(feature = "debug_thread_local_gc_copying")]
             self.tls,
         );
+        // Assumption here is objects published by Non-Java thread are globally reachable
+        // So only keep track of objects published by Java thread
+        if VM::VMActivePlan::is_mutator(self.tls.0) {
+            VM::VMActivePlan::mutator(self.tls).remember_set.push(value);
+        }
         VM::VMScanning::scan_object(VMWorkerThread(VMThread::UNINITIALIZED), value, &mut closure);
         closure.do_closure();
 

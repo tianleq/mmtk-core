@@ -99,7 +99,6 @@ pub fn create_ss_mutator<VM: VMBinding>(
             mmtk,
             #[cfg(feature = "debug_publish_object")]
             mutator_id,
-            #[cfg(feature = "debug_thread_local_gc_copying")]
             mutator_tls,
         ),
     ));

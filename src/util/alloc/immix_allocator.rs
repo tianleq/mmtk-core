@@ -286,8 +286,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         } else {
                             self.local_reusable_blocks.push_dense_block(block);
                         }
+                        assert!(block.is_block_dirty(), "block: {:?} should be dirty", block);
                         #[cfg(not(feature = "sparse_immix_block"))]
                         self.local_reusable_blocks.push_dense_block(block);
+                        panic!("block: {:?}, should not reach here", block);
                     }
                 } else {
                     // always add non-reusable block back
@@ -507,8 +509,16 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     self.mutator_id,
                     block.owner()
                 );
+                // We may see a public block with 0 public line after introducing AllocPublic semantic
+                // A public block might be acquired but nothing has been written to it
 
-                debug_assert!(block.is_block_dirty());
+                // if block.is_block_published() {
+                //     assert!(
+                //         block.has_public_lines(),
+                //         "public block: {:?} has no public line",
+                //         block
+                //     );
+                // }
             }
 
             #[cfg(not(feature = "thread_local_gc_copying"))]
@@ -576,8 +586,11 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
             if block.thread_local_can_sweep(self.space, mark_hisogram, line_mark_state) {
                 // release free blocks for now, may cache those blocks locally
+                #[cfg(debug_assertions)]
+                {
+                    debug_assert!(!block.is_block_published() || !block.has_public_lines());
+                }
 
-                debug_assert!(!block.is_block_published());
                 self.local_free_blocks.push(block);
                 #[cfg(feature = "debug_thread_local_gc_copying")]
                 {
@@ -1065,6 +1078,10 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
     #[cfg(feature = "thread_local_gc_copying")]
     fn local_heap_in_pages(&self) -> usize {
         Block::PAGES * (self.local_blocks.len() + self.local_reusable_blocks.len())
+    }
+
+    fn alloc_slow_cold(&mut self, size: usize, align: usize, offset: usize) -> Address {
+        self.alloc_impl(size, align, offset, false)
     }
 }
 

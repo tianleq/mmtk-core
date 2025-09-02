@@ -5,6 +5,7 @@ use crate::plan::global::BasePlan;
 use crate::plan::global::CommonPlan;
 use crate::plan::global::CreateGeneralPlanArgs;
 use crate::plan::global::CreateSpecificPlanArgs;
+use crate::plan::immix::Pause;
 use crate::plan::AllocationSemantics;
 use crate::plan::Plan;
 use crate::plan::PlanConstraints;
@@ -14,13 +15,21 @@ use crate::plan::PlanThreadlocalTraceObject;
 use crate::plan::ThreadlocalTracedObjectType;
 #[cfg(feature = "thread_local_gc")]
 use crate::policy::gc_work::PolicyThreadlocalTraceObject;
+use crate::policy::gc_work::TRACE_KIND_PUBLIC;
 #[cfg(feature = "thread_local_gc")]
 use crate::policy::immix::block::Block;
 use crate::policy::immix::ImmixSpaceArgs;
+#[cfg(not(feature = "thread_local_gc"))]
 use crate::policy::immix::{TRACE_KIND_DEFRAG, TRACE_KIND_FAST};
 use crate::policy::space::Space;
+use crate::scheduler::gc_work::Prepare;
+use crate::scheduler::gc_work::Release;
+use crate::scheduler::gc_work::StopMutators;
+use crate::scheduler::single_thread_gc_work::STTrace;
 #[cfg(feature = "thread_local_gc")]
 use crate::scheduler::thread_local_gc_work::ThreadlocalPrepare;
+#[cfg(feature = "thread_local_gc")]
+use crate::scheduler::thread_local_gc_work::ACTIVE_LOCAL_GC_COUNTER;
 use crate::scheduler::*;
 use crate::util::alloc::allocators::AllocatorSelector;
 use crate::util::copy::*;
@@ -37,6 +46,7 @@ use crate::Mutator;
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
 use std::sync::atomic::AtomicBool;
 
+use atomic::Atomic;
 use atomic::Ordering;
 use enum_map::EnumMap;
 
@@ -53,6 +63,7 @@ pub struct Immix<VM: VMBinding> {
     pub common: CommonPlan<VM>,
     last_gc_was_defrag: AtomicBool,
     defrag_mutator: AtomicUsize,
+    current_pause: Atomic<Option<Pause>>,
 }
 
 /// The plan constraints for the immix plan.
@@ -119,11 +130,21 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
-        Self::schedule_immix_full_heap_collection::<
-            Immix<VM>,
-            ImmixGCWorkContext<VM, TRACE_KIND_FAST>,
-            ImmixGCWorkContext<VM, TRACE_KIND_DEFRAG>,
-        >(self, &self.immix_space, scheduler)
+        // self.current_pause
+        //     .store(Some(Pause::Full), Ordering::SeqCst);
+        // Self::schedule_immix_full_heap_collection::<
+        //     Immix<VM>,
+        //     ImmixGCWorkContext<VM, TRACE_KIND_FAST>,
+        //     ImmixGCWorkContext<VM, TRACE_KIND_DEFRAG>,
+        // >(self, &self.immix_space, scheduler);
+
+        self.current_pause
+            .store(Some(Pause::Public), Ordering::SeqCst);
+        Self::schedule_immix_public_collection::<Immix<VM>, ImmixGCWorkContext<VM, TRACE_KIND_PUBLIC>>(
+            self,
+            &self.immix_space,
+            scheduler,
+        )
     }
 
     #[cfg(feature = "thread_local_gc")]
@@ -132,12 +153,12 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         tls: VMMutatorThread,
         mmtk: &'static crate::MMTK<VM>,
     ) {
-        use crate::policy::immix::{TRACE_THREAD_LOCAL_COPY, TRACE_THREAD_LOCAL_FAST};
+        use crate::policy::immix::{TRACE_KIND_THREAD_LOCAL_COPY, TRACE_KIND_THREAD_LOCAL_FAST};
 
         Self::schedule_and_do_immix_thread_local_collection::<
             Immix<VM>,
-            ImmixGCWorkContext<VM, TRACE_THREAD_LOCAL_FAST>,
-            ImmixGCWorkContext<VM, TRACE_THREAD_LOCAL_COPY>,
+            ImmixGCWorkContext<VM, TRACE_KIND_THREAD_LOCAL_FAST>,
+            ImmixGCWorkContext<VM, TRACE_KIND_THREAD_LOCAL_COPY>,
         >(tls, self, &self.immix_space, mmtk)
     }
 
@@ -162,7 +183,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 PlanThreadlocalObjectGraphTraversalClosure<
                     VM,
                     Immix<VM>,
-                    { crate::policy::immix::TRACE_THREAD_LOCAL_DEFRAG },
+                    { crate::policy::immix::TRACE_KIND_THREAD_LOCAL_DEFRAG },
                 >,
             >::new(_tls, _mmtk, Some(_worker))
             .execute();
@@ -219,23 +240,60 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn prepare(&mut self, tls: VMWorkerThread) {
-        self.common.prepare(tls, true);
-        self.immix_space.prepare(
-            true,
-            Some(crate::policy::immix::defrag::StatsForDefrag::new(self)),
-        );
-        self.defrag_mutator.store(0, Ordering::Release);
+        let pause = self.current_pause().unwrap();
+        match pause {
+            Pause::Full => {
+                self.common.prepare(tls, true);
+                self.immix_space.prepare(
+                    true,
+                    Some(crate::policy::immix::defrag::StatsForDefrag::new(self)),
+                );
+                self.defrag_mutator.store(0, Ordering::Release);
+            }
+            Pause::InitialMark => {
+                unimplemented!()
+            }
+            Pause::FinalMark => {
+                unimplemented!()
+            }
+            Pause::Public => {
+                self.common.prepare_public_collection(tls, true);
+                self.immix_space.prepare(
+                    true,
+                    Some(crate::policy::immix::defrag::StatsForDefrag::new(self)),
+                );
+                self.defrag_mutator.store(0, Ordering::Release);
+            }
+        }
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
-        self.common.release(tls, true);
-        // release the collected region
-        self.immix_space.release(true);
+        let pause = self.current_pause().unwrap();
+        match pause {
+            Pause::Full => {
+                self.common.release(tls, true);
+                // release the collected region
+                self.immix_space.release(true);
+            }
+            Pause::InitialMark => {
+                unimplemented!()
+            }
+            Pause::FinalMark => {
+                unimplemented!()
+            }
+            Pause::Public => {
+                self.common.release_public_collection(tls, true);
+                // release the collected region
+                self.immix_space.release(true);
+            }
+        }
     }
 
     fn end_of_gc(&mut self, tls: VMWorkerThread) {
         self.last_gc_was_defrag
             .store(self.immix_space.end_of_gc(), Ordering::Relaxed);
+        #[cfg(feature = "thread_local_gc")]
+        ACTIVE_LOCAL_GC_COUNTER.store(0, Ordering::Relaxed);
         self.common.end_of_gc(tls);
     }
 
@@ -245,7 +303,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
 
     fn get_collection_reserved_pages(&self) -> usize {
         let defrag_headroom = self.immix_space.defrag_headroom_pages();
-        let mut reserved = defrag_headroom;
+        let mut reserved = defrag_headroom << 2;
         #[cfg(feature = "thread_local_gc_copying")]
         {
             let options = self.options();
@@ -431,11 +489,64 @@ impl<VM: VMBinding> Immix<VM> {
             common: CommonPlan::new(plan_args),
             last_gc_was_defrag: AtomicBool::new(false),
             defrag_mutator: AtomicUsize::new(0),
+            current_pause: Atomic::new(None),
         };
 
         immix.verify_side_metadata_sanity();
 
         immix
+    }
+
+    fn current_pause(&self) -> Option<Pause> {
+        self.current_pause.load(Ordering::SeqCst)
+    }
+
+    /// Schedule a full heap immix collection. This method is used by immix/genimmix/stickyimmix
+    /// to schedule a full heap collection. A plan must call set_collection_kind and set_gc_status before this method.
+    pub(crate) fn schedule_immix_public_collection<
+        PlanType: Plan<VM = VM>,
+        FastContext: GCWorkContext<VM = VM, PlanType = PlanType>,
+    >(
+        plan: &'static PlanType,
+        _immix_space: &ImmixSpace<VM>,
+        scheduler: &GCWorkScheduler<VM>,
+    ) {
+        use crate::plan::immix::gc_work::CreateProcessModBufWork;
+
+        // Stop mutators
+        scheduler.work_buckets[WorkBucketStage::Unconstrained]
+            .add(StopMutators::<FastContext>::new_with_args(false));
+
+        // Prepare global/collectors/mutators
+        scheduler.work_buckets[WorkBucketStage::Prepare].add(Prepare::<FastContext>::new(plan));
+        // Scan thread-local remember set
+        // cannnot create now as the remember set has not been updated yet
+        scheduler.work_buckets[WorkBucketStage::Prepare]
+            .add(CreateProcessModBufWork::<VM, Self>::new());
+
+        // The following is for debug purpose
+        {
+            use crate::scheduler::thread_local_gc_work::{
+                ExecuteThreadlocalCollectionWork, THREAD_LOCAL_GC_PENDING,
+            };
+            use crate::vm::ActivePlan;
+
+            for mutator in <VM as VMBinding>::VMActivePlan::mutators() {
+                // trigger a local GC to make sure remember set is up-to-date
+                if mutator.thread_local_gc_status == THREAD_LOCAL_GC_PENDING {
+                    scheduler.work_buckets[WorkBucketStage::Local].add(
+                        ExecuteThreadlocalCollectionWork {
+                            mutator_tls: mutator.mutator_tls,
+                        },
+                    );
+                }
+            }
+            scheduler.work_buckets[WorkBucketStage::SecondRoots].add(STTrace::<VM, Self>::new());
+        }
+
+        // PUblic GC can only release LOS objects
+        // Release global/collectors/mutators
+        scheduler.work_buckets[WorkBucketStage::Release].add(Release::<FastContext>::new(plan));
     }
 
     /// Schedule a full heap immix collection. This method is used by immix/genimmix/stickyimmix
@@ -445,7 +556,7 @@ impl<VM: VMBinding> Immix<VM> {
         FastContext: GCWorkContext<VM = VM, PlanType = PlanType>,
         DefragContext: GCWorkContext<VM = VM, PlanType = PlanType>,
     >(
-        plan: &'static DefragContext::PlanType,
+        plan: &'static PlanType,
         immix_space: &ImmixSpace<VM>,
         scheduler: &GCWorkScheduler<VM>,
     ) {
@@ -482,7 +593,7 @@ impl<VM: VMBinding> Immix<VM> {
         _immix_space: &ImmixSpace<VM>,
         mmtk: &'static crate::MMTK<VM>,
     ) {
-        use crate::policy::immix::{TRACE_THREAD_LOCAL_COPY, TRACE_THREAD_LOCAL_FAST};
+        use crate::policy::immix::{TRACE_KIND_THREAD_LOCAL_COPY, TRACE_KIND_THREAD_LOCAL_FAST};
         use crate::scheduler::thread_local_gc_work::{
             EndOfThreadLocalGC, PlanThreadlocalObjectGraphTraversalClosure, ScanMutator,
             ThreadlocalFinalization, ThreadlocalRelease,
@@ -500,7 +611,11 @@ impl<VM: VMBinding> Immix<VM> {
             //Scan mutator
             ScanMutator::<
                 VM,
-                PlanThreadlocalObjectGraphTraversalClosure<VM, Immix<VM>, TRACE_THREAD_LOCAL_COPY>,
+                PlanThreadlocalObjectGraphTraversalClosure<
+                    VM,
+                    Immix<VM>,
+                    TRACE_KIND_THREAD_LOCAL_COPY,
+                >,
             >::new(tls, mmtk, None)
             .execute();
 
@@ -512,7 +627,7 @@ impl<VM: VMBinding> Immix<VM> {
                     PlanThreadlocalObjectGraphTraversalClosure<
                         VM,
                         Immix<VM>,
-                        TRACE_THREAD_LOCAL_COPY,
+                        TRACE_KIND_THREAD_LOCAL_COPY,
                     >,
                 >::new(tls, mmtk)
                 .do_finalization();
@@ -529,7 +644,11 @@ impl<VM: VMBinding> Immix<VM> {
             //Scan mutator
             ScanMutator::<
                 VM,
-                PlanThreadlocalObjectGraphTraversalClosure<VM, Immix<VM>, TRACE_THREAD_LOCAL_FAST>,
+                PlanThreadlocalObjectGraphTraversalClosure<
+                    VM,
+                    Immix<VM>,
+                    TRACE_KIND_THREAD_LOCAL_FAST,
+                >,
             >::new(tls, mmtk, None)
             .execute();
 
@@ -541,7 +660,7 @@ impl<VM: VMBinding> Immix<VM> {
                     PlanThreadlocalObjectGraphTraversalClosure<
                         VM,
                         Immix<VM>,
-                        TRACE_THREAD_LOCAL_FAST,
+                        TRACE_KIND_THREAD_LOCAL_FAST,
                     >,
                 >::new(tls, mmtk)
                 .do_finalization();
@@ -584,6 +703,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for Immix<VM> {
     fn thread_local_trace_object<const KIND: crate::policy::gc_work::TraceKind>(
         &self,
         mutator: &mut Mutator<VM>,
+        source: ObjectReference,
         object: ObjectReference,
         worker: Option<*mut GCWorker<VM>>,
     ) -> ThreadlocalTracedObjectType {
@@ -593,6 +713,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for Immix<VM> {
             >(
                 &self.immix_space,
                 mutator,
+                source,
                 object,
                 worker,
                 Some(CopySemantics::DefaultCopy),
@@ -601,6 +722,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for Immix<VM> {
         <CommonPlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
             &self.common,
             mutator,
+            source,
             object,
             worker,
         )

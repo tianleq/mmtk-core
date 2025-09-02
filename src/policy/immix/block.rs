@@ -299,6 +299,16 @@ impl Block {
     }
 
     #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
+    pub fn has_public_lines(&self) -> bool {
+        for line in self.lines() {
+            if line.is_line_published() {
+                return true;
+            }
+        }
+        false
+    }
+
+    #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
     pub fn all_public_lines_marked(&self, state: u8) {
         if !self.is_block_published() {
             // trivially true for private block
@@ -460,11 +470,12 @@ impl Block {
             let mut holes = 0;
             let mut prev_line_is_marked = true;
             let line_mark_state = line_mark_state.unwrap();
-
             let is_published = self.is_block_published();
-
             let mut total_hole_size: u8 = 0;
             let mut hole_size: u8 = 0;
+
+            #[cfg(debug_assertions)]
+            let mut private_lines_marked: u8 = 0;
 
             for line in self.lines() {
                 #[cfg(debug_assertions)]
@@ -507,6 +518,10 @@ impl Block {
                 if line.is_marked(line_mark_state) {
                     marked_lines += 1;
                     prev_line_is_marked = true;
+                    #[cfg(debug_assertions)]
+                    if !line.is_line_published() {
+                        private_lines_marked += 1;
+                    }
                 } else {
                     if prev_line_is_marked {
                         holes += 1;
@@ -536,26 +551,38 @@ impl Block {
                 debug_assert_eq!(total_hole_size, Self::LINES as u8);
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_region_swept::<VM, _>(self, false);
-                // liveness of public block is unknown during thread-local gc
-                // so conservatively treat it as alive
-                if is_published {
-                    debug_assert!(self.get_state() == BlockState::Unmarked);
-                    false
-                } else {
-                    #[cfg(debug_assertions)]
-                    {
-                        // check if locally freed blocks exist in global reusable pool
-                        _space.reusable_blocks.iterate_blocks(|block| {
-                            debug_assert!(
-                                self.0 != block.0,
-                                "Block: {:?} is now reclaimed and should not be in the reusable pool",
-                                self
-                            )
-                        });
-                    }
-
-                    true
+                #[cfg(debug_assertions)]
+                {
+                    // check if locally freed blocks exist in global reusable pool
+                    _space.reusable_blocks.iterate_blocks(|block| {
+                        debug_assert!(
+                            self.0 != block.0,
+                            "Block: {:?} is now reclaimed and should not be in the reusable pool",
+                            self
+                        )
+                    });
                 }
+
+                true
+                // if is_published {
+                //     debug_assert!(self.get_state() == BlockState::Unmarked);
+
+                //     false
+                // } else {
+                //     #[cfg(debug_assertions)]
+                //     {
+                //         // check if locally freed blocks exist in global reusable pool
+                //         _space.reusable_blocks.iterate_blocks(|block| {
+                //             debug_assert!(
+                //                 self.0 != block.0,
+                //                 "Block: {:?} is now reclaimed and should not be in the reusable pool",
+                //                 self
+                //             )
+                //         });
+                //     }
+
+                //     true
+                // }
             } else {
                 // There are some marked lines. Keep the block live.
                 if marked_lines != Block::LINES {
@@ -566,6 +593,26 @@ impl Block {
 
                     self.set_hole_size(total_hole_size);
                 } else {
+                    #[cfg(debug_assertions)]
+                    {
+                        if private_lines_marked != 0 {
+                            debug_assert!(
+                                self.is_block_dirty(),
+                                "block: {:?} should be dirty, {} private lines marked",
+                                self,
+                                private_lines_marked
+                            );
+                        }
+                        if !self.is_block_dirty() {
+                            debug_assert!(
+                                private_lines_marked == 0,
+                                "block: {:?}, {} private lines marked",
+                                self,
+                                private_lines_marked
+                            );
+                        }
+                    }
+
                     // Clear mark state.
                     self.set_state(BlockState::Unmarked);
                     debug_assert_eq!(total_hole_size, hole_size);
@@ -582,6 +629,31 @@ impl Block {
                 false
             }
         }
+    }
+
+    fn sweep_dirty_block<VM: VMBinding>(
+        &self,
+        _space: &ImmixSpace<VM>,
+        _mark_histogram: &mut Histogram,
+        line_mark_state: u8,
+        #[cfg(feature = "debug_thread_local_gc_copying")] gc_stats: &mut crate::util::GCStatistics,
+    ) {
+        for line in self.lines() {
+            // We need to clear the line mark state at least twice in every 128 GC
+            // otherwise, the line mark state of the last GC will stick around
+            if line_mark_state > Line::MAX_MARK_STATE - 2 {
+                line.mark(0);
+            }
+            if line.is_marked(line_mark_state) {
+                debug_assert!(
+                    line.is_line_published(),
+                    "line: {:?} should be public",
+                    line
+                );
+            }
+        }
+        // conservatively treat dirty block as fully occupied
+        self.set_state(BlockState::Unmarked);
     }
 
     /// Sweep this block.
@@ -642,15 +714,26 @@ impl Block {
             let mut total_hole_size: u8 = 0;
             #[cfg(feature = "thread_local_gc_copying")]
             let mut hole_size: u8 = 0;
+            #[cfg(feature = "thread_local_gc_copying")]
+            let mut private_line_marked = false;
+
+            if self.is_block_dirty() {
+                self.sweep_dirty_block(space, mark_histogram, line_mark_state);
+                return false;
+            }
 
             for line in self.lines() {
                 if line.is_marked(line_mark_state) {
                     marked_lines += 1;
                     prev_line_is_marked = true;
+
                     // a line is public iff it is marked and line level public bit is set
                     let is_line_published = line.is_line_published();
-                    if !is_block_public && is_line_published {
+
+                    if is_line_published {
                         is_block_public = true;
+                    } else {
+                        private_line_marked = true;
                     }
                 } else {
                     if prev_line_is_marked {
@@ -696,7 +779,7 @@ impl Block {
                 }
                 // total_hole_size = std::cmp::max(total_hole_size, hole_size);
             }
-
+            assert!(!private_line_marked, "block: {:?} is corrupted", self);
             if marked_lines == 0 {
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_region_swept::<VM, _>(self, false);
@@ -730,6 +813,7 @@ impl Block {
 
                 #[cfg(feature = "thread_local_gc")]
                 if !is_block_public {
+                    // Only has private lines marked, this block must be part of some thread's local heap
                     #[cfg(debug_assertions)]
                     debug_assert!(
                         self.owner() != Self::ANONYMOUS_OWNER,
@@ -737,10 +821,17 @@ impl Block {
                         self,
                         marked_lines
                     );
+                    debug_assert!(private_line_marked, "block: {:?} corrupted", self);
+                    debug_assert!(self.is_block_dirty(), "block: {:?} shoudl be dirty", self);
                     self.reset_publication();
+                    // In a public GC, dirty block is dealt with differently and should never reach here
+                    panic!("should not reach here, block: {:?}", self);
                 } else {
                     debug_assert!(self.is_block_published());
                 }
+                // if !private_line_marked {
+                //     self.reset_dirty();
+                // }
                 // There are some marked lines. Keep the block live.
                 if marked_lines != Block::LINES {
                     // There are holes. Mark the block as reusable.
@@ -766,7 +857,15 @@ impl Block {
                             // by mutator can be reused by all mutators
                             if !self.is_block_dirty() {
                                 #[cfg(debug_assertions)]
-                                self.set_owner(Self::ANONYMOUS_OWNER);
+                                {
+                                    self.set_owner(Self::ANONYMOUS_OWNER);
+                                    assert!(
+                                        !private_line_marked,
+                                        "block: {:?} should be dirty",
+                                        self
+                                    );
+                                }
+
                                 if self.is_public_only_block() {
                                     space.public_only_reusable_blocks.push(*self);
                                 } else if high_priority {
@@ -831,7 +930,7 @@ impl Block {
         let mut prev_line_is_marked = true;
         let mut total_hole_size: u8 = 0;
         let mut hole_size: u8 = 0;
-        assert_eq!(unavail_state, current_state);
+        assert!(unavail_state == current_state || unavail_state == Line::RESET_MARK_STATE);
         for line in self.lines() {
             if line.is_marked(unavail_state) || line.is_marked(current_state) {
                 marked_lines += 1;

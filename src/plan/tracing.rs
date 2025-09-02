@@ -4,10 +4,11 @@
 use crate::scheduler::gc_work::{ProcessEdgesWork, SlotOf};
 use crate::scheduler::{GCWorker, WorkBucketStage, EDGES_WORK_BUFFER_SIZE};
 use crate::util::ObjectReference;
+#[cfg(feature = "public_bit")]
+use crate::util::VMMutatorThread;
 #[cfg(feature = "debug_thread_local_gc_copying")]
 use crate::util::VMMutatorThread;
 use crate::vm::slot::Slot;
-#[cfg(feature = "debug_thread_local_gc_copying")]
 use crate::vm::ActivePlan;
 #[cfg(feature = "public_bit")]
 use crate::vm::Scanning;
@@ -72,6 +73,18 @@ impl<T> VectorQueue<T> {
         }
         self.buffer.push(v);
     }
+
+    pub fn len(&self) -> usize {
+        self.buffer.len()
+    }
+
+    pub fn swap(&mut self, new_buffer: &mut Vec<T>) {
+        std::mem::swap(&mut self.buffer, new_buffer)
+    }
+
+    pub fn clear(&mut self) {
+        self.buffer.clear()
+    }
 }
 
 impl<T> Default for VectorQueue<T> {
@@ -91,7 +104,6 @@ impl ObjectQueue for VectorQueue<ObjectReference> {
 /// if the buffer is full or if the type gets dropped.
 pub struct ObjectsClosure<'a, E: ProcessEdgesWork> {
     buffer: VectorQueue<SlotOf<E>>,
-    #[cfg(feature = "debug_publish_object")]
     sources: VectorQueue<ObjectReference>,
     pub(crate) worker: &'a mut GCWorker<E::VM>,
     bucket: WorkBucketStage,
@@ -106,7 +118,6 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
     pub fn new(worker: &'a mut GCWorker<E::VM>, bucket: WorkBucketStage) -> Self {
         Self {
             buffer: VectorQueue::new(),
-            #[cfg(feature = "debug_publish_object")]
             sources: VectorQueue::new(),
             worker,
             bucket,
@@ -148,23 +159,23 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
 }
 
 impl<E: ProcessEdgesWork> SlotVisitor<SlotOf<E>> for ObjectsClosure<'_, E> {
-    #[cfg(not(feature = "debug_publish_object"))]
-    fn visit_slot(&mut self, slot: SlotOf<E>) {
-        #[cfg(debug_assertions)]
-        {
-            trace!(
-                "(ObjectsClosure) Visit slot {:?} (pointing to {:?})",
-                slot,
-                slot.load()
-            );
-        }
-        self.buffer.push(slot);
-        if self.buffer.is_full() {
-            self.flush();
-        }
-    }
+    // #[cfg(not(feature = "debug_publish_object"))]
+    // fn visit_slot(&mut self, slot: SlotOf<E>) {
+    //     #[cfg(debug_assertions)]
+    //     {
+    //         trace!(
+    //             "(ObjectsClosure) Visit slot {:?} (pointing to {:?})",
+    //             slot,
+    //             slot.load()
+    //         );
+    //     }
+    //     self.buffer.push(slot);
+    //     if self.buffer.is_full() {
+    //         self.flush();
+    //     }
+    // }
 
-    #[cfg(feature = "debug_publish_object")]
+    // #[cfg(feature = "debug_publish_object")]
     fn visit_slot(&mut self, object: ObjectReference, slot: SlotOf<E>) {
         #[cfg(debug_assertions)]
         {
@@ -195,7 +206,6 @@ pub struct PublishObjectClosure<VM: crate::vm::VMBinding> {
     slot_buffer: std::collections::VecDeque<VM::VMSlot>,
     #[cfg(feature = "debug_publish_object")]
     mutator_id: u32,
-    #[cfg(feature = "debug_thread_local_gc_copying")]
     tls: VMMutatorThread,
 }
 
@@ -204,14 +214,13 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
     pub fn new(
         mmtk: &'static MMTK<VM>,
         #[cfg(feature = "debug_publish_object")] mutator_id: u32,
-        #[cfg(feature = "debug_thread_local_gc_copying")] tls: VMMutatorThread,
+        tls: VMMutatorThread,
     ) -> Self {
         PublishObjectClosure {
             _mmtk: mmtk,
             slot_buffer: std::collections::VecDeque::new(),
             #[cfg(feature = "debug_publish_object")]
             mutator_id,
-            #[cfg(feature = "debug_thread_local_gc_copying")]
             tls,
         }
     }
@@ -225,7 +234,7 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
         };
         #[cfg(feature = "debug_thread_local_gc_copying")]
         let mut number_of_bytes_published = 0;
-
+        let mut local_remember_set = Vec::new();
         while !self.slot_buffer.is_empty() {
             let slot = self.slot_buffer.pop_front().unwrap();
             let object = slot.load();
@@ -234,6 +243,7 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
             }
             let object = object.unwrap();
             if !crate::util::metadata::public_bit::is_public(object) {
+                local_remember_set.push(object);
                 // set public bit on the object
                 #[cfg(feature = "debug_publish_object")]
                 crate::util::metadata::public_bit::set_public_bit::<VM>(
@@ -265,6 +275,12 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
                 }
             }
         }
+        // Move all objects published by the current
+        if VM::VMActivePlan::is_mutator(self.tls.0) {
+            VM::VMActivePlan::mutator(self.tls)
+                .remember_set
+                .append(&mut local_remember_set);
+        }
         #[cfg(feature = "debug_thread_local_gc_copying")]
         {
             use crate::util::{GLOBAL_GC_STATISTICS, TOTAL_PU8LISHED_BYTES};
@@ -279,12 +295,12 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
 
 #[cfg(feature = "public_bit")]
 impl<VM: crate::vm::VMBinding> SlotVisitor<VM::VMSlot> for PublishObjectClosure<VM> {
-    #[cfg(not(feature = "debug_publish_object"))]
-    fn visit_slot(&mut self, slot: VM::VMSlot) {
-        self.slot_buffer.push_back(slot);
-    }
+    // #[cfg(not(feature = "debug_publish_object"))]
+    // fn visit_slot(&mut self, slot: VM::VMSlot) {
+    //     self.slot_buffer.push_back(slot);
+    // }
 
-    #[cfg(feature = "debug_publish_object")]
+    // #[cfg(feature = "debug_publish_object")]
     fn visit_slot(&mut self, _object: ObjectReference, slot: VM::VMSlot) {
         self.slot_buffer.push_back(slot);
     }
@@ -296,6 +312,51 @@ impl<VM: crate::vm::VMBinding> Drop for PublishObjectClosure<VM> {
         debug_assert!(
             self.slot_buffer.is_empty(),
             "There are edges left over. Closure is not done correctly."
+        );
+    }
+}
+
+struct SlotIteratorImpl<VM: crate::vm::VMBinding, F: FnMut(VM::VMSlot)> {
+    f: F,
+    // should_discover_references: bool,
+    // should_claim_clds: bool,
+    // should_follow_clds: bool,
+    _p: std::marker::PhantomData<VM>,
+}
+
+impl<VM: crate::vm::VMBinding, F: FnMut(VM::VMSlot)> SlotVisitor<VM::VMSlot>
+    for SlotIteratorImpl<VM, F>
+{
+    fn visit_slot(&mut self, _object: ObjectReference, slot: VM::VMSlot) {
+        (self.f)(slot);
+    }
+}
+
+pub struct SlotIterator<VM: crate::vm::VMBinding> {
+    _p: std::marker::PhantomData<VM>,
+}
+
+impl<VM: crate::vm::VMBinding> SlotIterator<VM> {
+    pub fn iterate(
+        o: ObjectReference,
+        // should_discover_references: bool,
+        // should_claim_clds: bool,
+        // should_follow_clds: bool,
+        f: impl FnMut(VM::VMSlot),
+        // klass: Option<Address>,
+    ) {
+        let mut x = SlotIteratorImpl::<VM, _> {
+            f,
+            // should_discover_references,
+            // should_claim_clds,
+            // should_follow_clds,
+            _p: std::marker::PhantomData,
+        };
+
+        <VM::VMScanning as Scanning<VM>>::scan_object(
+            crate::util::VMWorkerThread(crate::util::VMThread::UNINITIALIZED),
+            o,
+            &mut x,
         );
     }
 }

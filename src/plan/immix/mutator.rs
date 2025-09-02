@@ -72,6 +72,8 @@ pub fn immix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, tls: VMWo
     {
         // For a thread local gc, it needs to sweep blocks from its local block list
         // so need to do it here
+
+        use crate::scheduler::thread_local_gc_work::THREAD_LOCAL_GC_PENDING;
         immix_allocator.release();
 
         // public allocator does not cache blocks in its local list,
@@ -90,9 +92,9 @@ pub fn immix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, tls: VMWo
         .downcast_mut::<LargeObjectAllocator<VM>>()
         .unwrap();
         los_allocator.release();
-        // Force a local gc in the next polling
-        mutator.local_allocation_size = u32::MAX as usize;
-        mutator.thread_local_gc_status = 0;
+        // // Force a local gc in the next polling
+        // mutator.local_allocation_size = u32::MAX as usize;
+        mutator.thread_local_gc_status = THREAD_LOCAL_GC_PENDING;
     }
     common_release_func(mutator, tls);
 }
@@ -115,6 +117,8 @@ pub fn immix_mutator_thread_local_prepare<VM: VMBinding>(mutator: &mut Mutator<V
     .downcast_mut::<LargeObjectAllocator<VM>>()
     .unwrap();
     los_allocator.thread_local_prepare();
+    // clear the remember set, it will be rebuilt during local GC
+    mutator.remember_set.clear();
 }
 
 #[cfg(feature = "thread_local_gc")]
@@ -232,7 +236,6 @@ pub fn create_immix_mutator<VM: VMBinding>(
             mmtk,
             #[cfg(feature = "debug_publish_object")]
             mutator_id,
-            #[cfg(feature = "debug_thread_local_gc_copying")]
             mutator_tls,
         ),
     ));

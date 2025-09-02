@@ -305,7 +305,7 @@ impl<VM: VMBinding> CompressorSpace<VM> {
                 VM::VMScanning::scan_object(
                     worker.tls,
                     object,
-                    &mut |_o: Option<ObjectReference>, s: VM::VMSlot| {
+                    &mut |_o: ObjectReference, s: VM::VMSlot| {
                         if let Some(o) = s.load() {
                             s.store(self.forward(o, false));
                         }

@@ -4,6 +4,9 @@ pub(crate) type TraceKind = u8;
 
 pub const DEFAULT_TRACE: u8 = u8::MAX;
 pub const TRACE_KIND_TRANSITIVE_PIN: u8 = DEFAULT_TRACE - 1;
+pub(crate) const TRACE_KIND_VERIFY: u8 = TRACE_KIND_TRANSITIVE_PIN - 1;
+pub(crate) const TRACE_KIND_PUBLIC: TraceKind = TRACE_KIND_VERIFY - 1;
+// pub(crate) const TRACE_KIND_CONCURRENT_PUBLIC: TraceKind = TRACE_KIND_PUBLIC - 1;
 
 use crate::plan::ObjectQueue;
 #[cfg(feature = "thread_local_gc")]
@@ -50,6 +53,7 @@ pub trait PolicyThreadlocalTraceObject<VM: VMBinding> {
     fn thread_local_trace_object<const KIND: TraceKind>(
         &self,
         mutator: &mut Mutator<VM>,
+        source: ObjectReference,
         object: ObjectReference,
         worker: Option<*mut GCWorker<VM>>,
         copy: Option<CopySemantics>,

@@ -243,12 +243,25 @@ impl<VM: VMBinding> GCWork<VM> for DefragMutator<VM> {
 /// Stop all mutators
 ///
 /// TODO: Smaller work granularity
-#[derive(Default)]
-pub struct StopMutators<C: GCWorkContext>(PhantomData<C>);
+// #[derive(Default)]
+pub struct StopMutators<C: GCWorkContext> {
+    scan_stack: bool,
+    _p: PhantomData<C>,
+}
 
 impl<C: GCWorkContext> StopMutators<C> {
     pub fn new() -> Self {
-        Self(PhantomData)
+        Self {
+            scan_stack: true,
+            _p: PhantomData,
+        }
+    }
+
+    pub fn new_with_args(scan: bool) -> Self {
+        Self {
+            scan_stack: scan,
+            _p: PhantomData,
+        }
     }
 }
 
@@ -266,19 +279,22 @@ impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
             }
             #[cfg(feature = "thread_local_gc_copying")]
             {
-                if mmtk
-                    .get_plan()
-                    .defrag_mutator_required(mmtk, mutator.mutator_tls)
-                {
-                    #[cfg(debug_assertions)]
-                    info!("mutator: {} needs defragmentation", mutator.mutator_id);
+                // A public GC does not need to scan stack roots
+                if self.scan_stack {
+                    if mmtk
+                        .get_plan()
+                        .defrag_mutator_required(mmtk, mutator.mutator_tls)
+                    {
+                        #[cfg(debug_assertions)]
+                        info!("mutator: {} needs defragmentation", mutator.mutator_id);
 
-                    // DefragMutator will evacuate public object as well, so no need to create ScanMutatorRoots packet
-                    mmtk.scheduler.work_buckets[WorkBucketStage::DefragMutator]
-                        .add(DefragMutator::<C::VM>::new(mutator.mutator_tls))
-                } else {
-                    mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
-                        .add(ScanMutatorRoots::<C>(mutator));
+                        // DefragMutator will evacuate public object as well, so no need to create ScanMutatorRoots packet
+                        mmtk.scheduler.work_buckets[WorkBucketStage::DefragMutator]
+                            .add(DefragMutator::<C::VM>::new(mutator.mutator_tls))
+                    } else {
+                        mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
+                            .add(ScanMutatorRoots::<C>(mutator));
+                    }
                 }
             }
         });

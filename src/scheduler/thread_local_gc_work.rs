@@ -3,6 +3,7 @@ use scheduler::GCWorker;
 use crate::plan::PlanThreadlocalTraceObject;
 use crate::plan::ThreadlocalTracedObjectType::*;
 use crate::policy::gc_work::TraceKind;
+use crate::scheduler::GCWork;
 use crate::util::*;
 use crate::vm::slot::Slot;
 use crate::vm::*;
@@ -11,6 +12,22 @@ use std::marker::PhantomData;
 
 pub const THREAD_LOCAL_GC_ACTIVE: u32 = 1;
 pub const THREAD_LOCAL_GC_INACTIVE: u32 = 0;
+pub const THREAD_LOCAL_GC_PENDING: u32 = u32::MAX;
+
+pub struct ExecuteThreadlocalCollectionWork {
+    pub mutator_tls: VMMutatorThread,
+}
+
+impl<VM: VMBinding> GCWork<VM> for ExecuteThreadlocalCollectionWork {
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        ExecuteThreadlocalCollection {
+            mmtk,
+            mutator_tls: self.mutator_tls,
+            start_time: std::time::Instant::now(),
+        }
+        .execute();
+    }
+}
 
 pub struct ExecuteThreadlocalCollection<VM: VMBinding> {
     pub mmtk: &'static MMTK<VM>,
@@ -202,6 +219,14 @@ where
     fn traverse_from_roots(&mut self, root_slots: Vec<VM::VMSlot>) {
         Closure::new(self.mmtk, self.tls, Some(root_slots), self.worker).do_closure();
     }
+
+    fn report_roots(&mut self, _root_slots: Vec<VM::VMSlot>) {
+        unreachable!();
+    }
+
+    fn traverse(&mut self) {
+        unreachable!();
+    }
 }
 
 impl<VM, Closure> ThreadlocalObjectGraphTraversal<VM, Closure>
@@ -243,7 +268,6 @@ pub struct PlanThreadlocalObjectGraphTraversalClosure<
     plan: &'static P,
     tls: VMMutatorThread,
     slot_buffer: Vec<VM::VMSlot>,
-    #[cfg(feature = "debug_publish_object")]
     source_buffer: Vec<Option<ObjectReference>>,
     worker: Option<*mut GCWorker<VM>>,
 }
@@ -257,28 +281,34 @@ where
     fn new(
         mmtk: &'static MMTK<VM>,
         tls: VMMutatorThread,
-        root_slots: Option<Vec<VM::VMSlot>>,
+        _root_slots: Option<Vec<VM::VMSlot>>,
         worker: Option<*mut GCWorker<VM>>,
     ) -> Self {
         let mut slot_buffer = Vec::with_capacity(4096);
-        #[cfg(feature = "debug_publish_object")]
+        let mutator = VM::VMActivePlan::mutator(tls);
+
         let mut source_buffer = Vec::new();
-        if let Some(roots) = root_slots {
-            #[cfg(feature = "debug_publish_object")]
-            {
-                source_buffer = Vec::with_capacity(roots.capacity());
-                for slot in &roots {
-                    source_buffer.push(slot.load());
+        if let Some(root_slots) = _root_slots {
+            source_buffer = Vec::with_capacity(root_slots.capacity());
+            for slot in &root_slots {
+                let root = slot.load();
+                source_buffer.push(root);
+                // push public objects to the remember set
+                // This is not needed in concurrent GC (SATB barrier should catch such objects)
+                if let Some(root) = root {
+                    if crate::util::metadata::public_bit::is_public(root) {
+                        mutator.remember_set.push(root);
+                    }
                 }
             }
-            slot_buffer = roots;
+
+            slot_buffer = root_slots;
         }
 
         Self {
             plan: mmtk.get_plan().downcast_ref::<P>().unwrap(),
             tls,
             slot_buffer,
-            #[cfg(feature = "debug_publish_object")]
             source_buffer,
             worker,
         }
@@ -293,7 +323,6 @@ where
         let mutator = VM::VMActivePlan::mutator(self.tls);
 
         while let Some(slot) = self.slot_buffer.pop() {
-            #[cfg(feature = "debug_publish_object")]
             let _source = self.source_buffer.pop().unwrap();
             let _object = slot.load();
             #[cfg(feature = "debug_publish_object")]
@@ -306,10 +335,9 @@ where
             else {
                 continue;
             };
-
+            let source = _source.unwrap();
             let new_object = match self.plan.thread_local_trace_object::<KIND>(
                 mutator,
-                #[cfg(feature = "debug_publish_object")]
                 source,
                 object,
                 self.worker,
@@ -372,32 +400,30 @@ where
 
         debug_assert!(self.worker.is_none());
 
-        let new_object = match self.plan.thread_local_trace_object::<KIND>(
-            mutator,
-            #[cfg(feature = "debug_publish_object")]
-            object,
-            object,
-            self.worker,
-        ) {
-            Scanned(new_object) => {
-                debug_assert!(
-                    object.is_live(),
-                    "object: {:?} is supposed to be alive.",
-                    object
-                );
-                new_object
-            }
-            ToBeScanned(new_object) => {
-                VM::VMScanning::scan_object(
-                    VMWorkerThread(VMThread::UNINITIALIZED),
-                    new_object,
-                    self,
-                );
-                self.plan
-                    .thread_local_post_scan_object::<KIND>(mutator, new_object);
-                new_object
-            }
-        };
+        let new_object =
+            match self
+                .plan
+                .thread_local_trace_object::<KIND>(mutator, object, object, self.worker)
+            {
+                Scanned(new_object) => {
+                    debug_assert!(
+                        object.is_live(),
+                        "object: {:?} is supposed to be alive.",
+                        object
+                    );
+                    new_object
+                }
+                ToBeScanned(new_object) => {
+                    VM::VMScanning::scan_object(
+                        VMWorkerThread(VMThread::UNINITIALIZED),
+                        new_object,
+                        self,
+                    );
+                    self.plan
+                        .thread_local_post_scan_object::<KIND>(mutator, new_object);
+                    new_object
+                }
+            };
 
         self.do_closure();
         new_object
@@ -407,13 +433,10 @@ where
         let mutator = VM::VMActivePlan::mutator(self.tls);
         debug_assert!(self.worker.is_none());
 
-        match self.plan.thread_local_trace_object::<KIND>(
-            mutator,
-            #[cfg(feature = "debug_publish_object")]
-            object,
-            object,
-            self.worker,
-        ) {
+        match self
+            .plan
+            .thread_local_trace_object::<KIND>(mutator, object, object, self.worker)
+        {
             Scanned(new_object) => new_object,
             _ => {
                 panic!(
@@ -428,16 +451,16 @@ where
 impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind>
     SlotVisitor<VM::VMSlot> for PlanThreadlocalObjectGraphTraversalClosure<VM, P, KIND>
 {
-    #[cfg(not(feature = "debug_publish_object"))]
-    fn visit_slot(&mut self, slot: VM::VMSlot) {
-        if slot.load().is_some() {
-            self.slot_buffer.push(slot);
-        }
-    }
+    // #[cfg(not(feature = "debug_publish_object"))]
+    // fn visit_slot(&mut self, slot: VM::VMSlot) {
+    //     if slot.load().is_some() {
+    //         self.slot_buffer.push(slot);
+    //     }
+    // }
 
-    #[cfg(feature = "debug_publish_object")]
+    // #[cfg(feature = "debug_publish_object")]
     fn visit_slot(&mut self, object: ObjectReference, slot: VM::VMSlot) {
-        if let Some(_) = slot.load() {
+        if slot.load().is_some() {
             self.source_buffer.push(Some(object));
             self.slot_buffer.push(slot);
         }

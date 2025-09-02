@@ -16,7 +16,7 @@ pub const BLOCK_ONLY: bool = false;
 
 /// Mark lines when scanning objects.
 /// Otherwise, do it at mark time.
-pub const MARK_LINE_AT_SCAN_TIME: bool = true;
+pub const MARK_LINE_AT_SCAN_TIME: bool = false;
 
 // #[cfg(feature = "thread_local_gc_copying")]
 // pub(crate) static LOCAL_GC_COPY_RESERVE_PAGES: std::sync::atomic::AtomicUsize =

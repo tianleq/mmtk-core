@@ -130,7 +130,7 @@ pub trait Space<VM: VMBinding>: 'static + SFT + Sync + Downcast {
         let should_poll = if should_poll {
             // tls is s mutator, if local gc is active, we cannot trigger a global gc
             VM::VMActivePlan::mutator(VMMutatorThread(tls)).thread_local_gc_status
-                == crate::scheduler::thread_local_gc_work::THREAD_LOCAL_GC_INACTIVE
+                != crate::scheduler::thread_local_gc_work::THREAD_LOCAL_GC_ACTIVE
         } else {
             false
         };
@@ -559,6 +559,9 @@ pub struct CommonSpace<VM: VMBinding> {
     pub options: Arc<Options>,
 
     p: PhantomData<VM>,
+
+    #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
+    pub objects: std::sync::Mutex<std::collections::HashSet<ObjectReference>>,
 }
 
 /// Arguments passed from a policy to create a space. This includes policy specific args.
@@ -629,6 +632,8 @@ impl<VM: VMBinding> CommonSpace<VM> {
             global_state: args.plan_args.global_state,
             options: args.plan_args.options.clone(),
             p: PhantomData,
+            #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
+            objects: std::sync::Mutex::new(std::collections::HashSet::new()),
         };
 
         let vmrequest = args.plan_args.vmrequest;

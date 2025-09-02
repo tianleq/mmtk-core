@@ -670,6 +670,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for BasePlan<VM> {
     fn thread_local_trace_object<const KIND: TraceKind>(
         &self,
         _mutator: &mut Mutator<VM>,
+        _source: ObjectReference,
         object: ObjectReference,
         _worker: Option<*mut GCWorker<VM>>,
     ) -> ThreadlocalTracedObjectType {
@@ -678,6 +679,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for BasePlan<VM> {
             return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
                 &self.code_space,
                 _mutator,
+                _source,
                 object,
                 _worker,
                 None,
@@ -689,6 +691,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for BasePlan<VM> {
             return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
                 &self.code_lo_space,
                 _mutator,
+                _source,
                 object,
                 _worker,
                 None,
@@ -711,6 +714,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for BasePlan<VM> {
             return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
                 &self.vm_space,
                 _mutator,
+                _source,
                 object,
                 _worker,
                 None,
@@ -853,7 +857,15 @@ impl<VM: VMBinding> CommonPlan<VM> {
         self.immortal.release();
         self.los.release(full_heap);
         self.release_nonmoving_space(full_heap);
-        self.base.release(tls, full_heap)
+        self.base.release(tls, full_heap);
+    }
+
+    pub fn prepare_public_collection(&mut self, tls: VMWorkerThread, full_heap: bool) {
+        self.prepare(tls, full_heap);
+    }
+
+    pub fn release_public_collection(&mut self, tls: VMWorkerThread, full_heap: bool) {
+        self.release(tls, full_heap);
     }
 
     pub fn end_of_gc(&mut self, tls: VMWorkerThread) {
@@ -975,6 +987,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
     fn thread_local_trace_object<const KIND: TraceKind>(
         &self,
         mutator: &mut Mutator<VM>,
+        source: ObjectReference,
         object: ObjectReference,
         worker: Option<*mut GCWorker<VM>>,
     ) -> ThreadlocalTracedObjectType {
@@ -984,6 +997,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
             >(
                 &self.immortal,
                 mutator,
+                source,
                 object,
                 worker,
                 None,
@@ -993,6 +1007,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
             return <LargeObjectSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
                 &self.los,
                 mutator,
+                source,
                 object,
                 worker,
                 None,
@@ -1004,6 +1019,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
                     return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
                         &self.nonmoving,
                         mutator,
+                        source,
                         object,
                         worker,
                         None,
@@ -1013,6 +1029,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
                     return <MarkSweepSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
                         &self.nonmoving,
                         mutator,
+                        source,
                         object,
                         worker,
                         None,
@@ -1023,6 +1040,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
                     return <ImmixSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
                         &self.nonmoving,
                         mutator,
+                        source,
                         object,
                         worker,
                         None,
@@ -1031,7 +1049,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
             }
         }
         <BasePlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
-            &self.base, mutator, object, worker,
+            &self.base, mutator, source, object, worker,
         )
     }
 
@@ -1183,6 +1201,7 @@ pub trait PlanThreadlocalTraceObject<VM: VMBinding> {
     fn thread_local_trace_object<const KIND: TraceKind>(
         &self,
         mutator: &mut Mutator<VM>,
+        source: ObjectReference,
         object: ObjectReference,
         worker: Option<*mut GCWorker<VM>>,
     ) -> ThreadlocalTracedObjectType;

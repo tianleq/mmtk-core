@@ -3,6 +3,7 @@ use crate::plan::ObjectQueue;
 use crate::plan::ThreadlocalTracedObjectType;
 use crate::plan::VectorObjectQueue;
 use crate::policy::gc_work::TRACE_KIND_PUBLIC;
+use crate::policy::gc_work::TRACE_KIND_UPDATE;
 use crate::policy::gc_work::TRACE_KIND_VERIFY;
 use crate::policy::sft::GCWorkerMutRef;
 use crate::policy::sft::SFT;
@@ -249,6 +250,10 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LargeObjec
                 return object;
             }
             self.trace_object(queue, object)
+        } else if KIND == TRACE_KIND_UPDATE {
+            debug_assert!(is_public(object));
+            debug_assert!(self.is_marked(object));
+            object
         } else {
             self.trace_object(queue, object)
         }
@@ -262,7 +267,6 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LargeObjec
 impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM>
     for LargeObjectSpace<VM>
 {
-    #[cfg(not(feature = "debug_publish_object"))]
     fn thread_local_trace_object<const KIND: super::gc_work::TraceKind>(
         &self,
         mutator: &mut crate::Mutator<VM>,
@@ -283,28 +287,26 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM>
         }
     }
 
-    #[cfg(feature = "debug_publish_object")]
-    fn thread_local_trace_object<const KIND: super::gc_work::TraceKind>(
+    fn thread_local_may_move_objects<const KIND: super::gc_work::TraceKind>() -> bool {
+        false
+    }
+
+    fn thread_local_update_remset<const KIND: super::gc_work::TraceKind>(
         &self,
         mutator: &mut crate::Mutator<VM>,
         source: ObjectReference,
+        slot: <VM as VMBinding>::VMSlot,
         object: ObjectReference,
         _worker: Option<*mut GCWorker<VM>>,
         _copy: Option<CopySemantics>,
     ) -> ThreadlocalTracedObjectType {
-        use super::immix::TRACE_KIND_THREAD_LOCAL_DEFRAG;
-        if KIND == TRACE_THREAD_LOCAL_DEFRAG {
-            #[cfg(feature = "thread_local_gc_copying")]
-            return self.thread_local_trace_object_defrag(source, object, mutator);
-            #[cfg(not(feature = "thread_local_gc_copying"))]
-            unreachable!()
-        } else {
-            self.thread_local_trace_object(source, object, mutator)
+        if is_public(object) {
+            if !is_public(source) {
+                mutator.remember_set.push(slot);
+            }
+            return ThreadlocalTracedObjectType::Scanned(object);
         }
-    }
-
-    fn thread_local_may_move_objects<const KIND: super::gc_work::TraceKind>() -> bool {
-        false
+        self.thread_local_trace_object(source, object, mutator)
     }
 }
 
@@ -361,15 +363,12 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     #[cfg(feature = "thread_local_gc")]
     fn thread_local_trace_object(
         &self,
-        source: ObjectReference,
+        _source: ObjectReference,
         object: ObjectReference,
         _mutator: &mut crate::Mutator<VM>,
     ) -> ThreadlocalTracedObjectType {
         #[cfg(not(feature = "debug_publish_object"))]
         if crate::util::metadata::public_bit::is_public(object) {
-            if !crate::util::metadata::public_bit::is_public(source) {
-                _mutator.remember_set.push(object);
-            }
             return ThreadlocalTracedObjectType::Scanned(object);
         }
         #[cfg(feature = "debug_publish_object")]

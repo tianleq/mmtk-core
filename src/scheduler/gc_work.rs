@@ -290,7 +290,8 @@ impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
 
                         // DefragMutator will evacuate public object as well, so no need to create ScanMutatorRoots packet
                         mmtk.scheduler.work_buckets[WorkBucketStage::DefragMutator]
-                            .add(DefragMutator::<C::VM>::new(mutator.mutator_tls))
+                            .add(DefragMutator::<C::VM>::new(mutator.mutator_tls));
+                        panic!("should not reach here");
                     } else {
                         mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
                             .add(ScanMutatorRoots::<C>(mutator));

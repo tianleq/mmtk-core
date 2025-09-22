@@ -5,7 +5,8 @@ use super::{block::*, defrag::Defrag};
 use crate::plan::ThreadlocalTracedObjectType;
 use crate::plan::VectorObjectQueue;
 use crate::policy::gc_work::{
-    TraceKind, DEFAULT_TRACE, TRACE_KIND_PUBLIC, TRACE_KIND_TRANSITIVE_PIN, TRACE_KIND_VERIFY,
+    TraceKind, DEFAULT_TRACE, TRACE_KIND_PUBLIC, TRACE_KIND_TRANSITIVE_PIN, TRACE_KIND_UPDATE,
+    TRACE_KIND_VERIFY,
 };
 use crate::policy::sft::GCWorkerMutRef;
 use crate::policy::sft::SFT;
@@ -282,7 +283,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
                 let public = is_public(object);
 
                 if public {
-                    debug_assert!(self.is_marked(object), "public object:{:?} missing", object);
+                    debug_assert!(self.is_marked(object), "public object:{:?} missing", object,);
                     debug_assert!(
                         Line::is_object_marked::<VM>(
                             self.line_mark_state.load(Ordering::Relaxed),
@@ -291,6 +292,11 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
                         "object: {:?} has unmarked lines, line mark state: {}",
                         object,
                         self.line_mark_state.load(Ordering::Relaxed)
+                    );
+                    debug_assert!(
+                        self.get_forwarded_object(object).is_none(),
+                        "found from space object: {:?}",
+                        object
                     );
                 } else {
                     debug_assert!(
@@ -307,18 +313,48 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
                         object
                     );
                 }
+                let mut objects = self.common.objects.lock().unwrap();
+                if !objects.contains(&object) {
+                    queue.enqueue(object);
+                    objects.insert(object);
+                }
             }
-            let mut objects = self.common.objects.lock().unwrap();
-            if !objects.contains(&object) {
-                queue.enqueue(object);
-                objects.insert(object);
-            }
+
             object
         } else if KIND == TRACE_KIND_PUBLIC {
             if !is_public(object) {
                 return object;
             }
-            self.trace_object_without_moving(queue, object)
+
+            // self.trace_object_without_moving(queue, object)
+            if Block::containing(object).is_defrag_source() {
+                self.trace_object_with_opportunistic_copy(
+                    queue,
+                    object,
+                    copy.unwrap(),
+                    worker,
+                    // This should not be nursery collection. Nursery collection does not use PolicyTraceObject.
+                    false,
+                )
+            } else {
+                self.trace_object_without_moving(queue, object)
+            }
+        } else if KIND == TRACE_KIND_UPDATE {
+            debug_assert!(is_public(object));
+            // The object should be either left in place or forwarded
+            let new_object = if let Some(new_object) = self.get_forwarded_object(object) {
+                new_object
+            } else {
+                // object is left-in-place
+                object
+            };
+            // regardless of object forwarded or not, it is always marked
+            debug_assert!(
+                self.is_marked(new_object),
+                "object: {:?} should be marked",
+                object
+            );
+            new_object
         } else {
             unreachable!()
         }
@@ -345,7 +381,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
             // See https://github.com/mmtk/mmtk-core/issues/1314 for details.
             false
         } else if KIND == TRACE_KIND_PUBLIC {
-            false
+            true
         } else if KIND == TRACE_KIND_VERIFY {
             false
         } else {
@@ -920,7 +956,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             } else {
                 block.set_state(BlockState::Marked);
             }
-
+            // println!("mark object: {:?}", object);
             // Visit node
             queue.enqueue(object);
             self.unlog_object_if_needed(object);
@@ -1136,7 +1172,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                         crate::util::metadata::public_bit::set_public_bit(_new_object);
                     },
                 );
-
                 new_object
             };
             debug_assert_eq!(
@@ -1152,6 +1187,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             //     new_object.to_address::<VM>().class_pointer::<VM>(),
             //     Block::containing(object).is_defrag_source(),
             // ));
+            // println!("scan new_object: {:?}, object: {:?}", new_object, object);
             queue.enqueue(new_object);
             debug_assert!(new_object.is_live());
             self.unlog_object_if_needed(new_object);
@@ -1251,22 +1287,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     pub fn thread_local_trace_object_with_opportunistic_copy(
         &self,
         mutator: &mut Mutator<VM>,
-        source: ObjectReference,
+        _source: ObjectReference,
         object: ObjectReference,
         semantics: CopySemantics,
         // nursery_collection: bool,
     ) -> ThreadlocalTracedObjectType {
         let block = Block::containing(object);
-        // public block is now defrag source, so simply leave those public
-        // objects in place
-        if crate::util::metadata::public_bit::is_public(object) {
-            // found private --> public, store public object to the remember set
-            if !crate::util::metadata::public_bit::is_public(source) {
-                mutator.remember_set.push(object);
-            }
-
-            return ThreadlocalTracedObjectType::Scanned(object);
-        }
 
         #[cfg(debug_assertions)]
         {
@@ -1946,7 +1972,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
 #[cfg(feature = "thread_local_gc")]
 impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for ImmixSpace<VM> {
-    #[cfg(not(feature = "debug_publish_object"))]
     fn thread_local_trace_object<const KIND: TraceKind>(
         &self,
         mutator: &mut Mutator<VM>,
@@ -1955,6 +1980,9 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
         _worker: Option<*mut GCWorker<VM>>,
         _copy: Option<CopySemantics>,
     ) -> ThreadlocalTracedObjectType {
+        if crate::util::metadata::public_bit::is_public(object) {
+            return ThreadlocalTracedObjectType::Scanned(object);
+        }
         if KIND == TRACE_KIND_THREAD_LOCAL_FAST {
             #[cfg(feature = "thread_local_gc_copying")]
             panic!("local gc always do defrag");
@@ -1991,63 +2019,15 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
         }
     }
 
-    #[cfg(feature = "debug_publish_object")]
-    fn thread_local_trace_object<const KIND: TraceKind>(
-        &self,
-        mutator: &mut Mutator<VM>,
-        _source: ObjectReference,
-        object: ObjectReference,
-        _worker: Option<*mut GCWorker<VM>>,
-        _copy: Option<CopySemantics>,
-    ) -> ThreadlocalTracedObjectType {
-        if KIND == TRACE_KIND_THREAD_LOCAL_FAST {
-            #[cfg(feature = "thread_local_gc_copying")]
-            panic!("local gc always do defrag");
-            #[cfg(not(feature = "thread_local_gc_copying"))]
-            self.thread_local_trace_object_without_moving(mutator, _source, _slot, object)
-        } else if KIND == TRACE_KIND_THREAD_LOCAL_COPY {
-            #[cfg(not(feature = "thread_local_gc_copying"))]
-            unreachable!();
-            #[cfg(feature = "thread_local_gc_copying")]
-            {
-                self.thread_local_trace_object_with_opportunistic_copy(
-                    mutator,
-                    _source,
-                    object,
-                    _copy.unwrap(),
-                    // // This should not be nursery collection. Nursery collection does not use PolicyTraceObject.
-                    // false,
-                )
-            }
-        } else if KIND == TRACE_KIND_THREAD_LOCAL_DEFRAG {
-            #[cfg(not(feature = "thread_local_gc_copying"))]
-            unreachable!();
-            // This branch is only reachable during global
-            // gc, it is doing defrag mutator
-            #[cfg(feature = "thread_local_gc_copying")]
-            {
-                self.thread_local_trace_object_defrag(
-                    mutator,
-                    _source,
-                    object,
-                    unsafe { &mut *_worker.unwrap() },
-                    _copy.unwrap(),
-                )
-            }
-        } else {
-            unreachable!()
-        }
-    }
-
     fn thread_local_post_scan_object<const KIND: TraceKind>(
         &self,
         _mutator: &Mutator<VM>,
         object: ObjectReference,
     ) {
         if super::MARK_LINE_AT_SCAN_TIME && !super::BLOCK_ONLY {
-            debug_assert!(self.in_space(object));
             #[cfg(debug_assertions)]
             {
+                debug_assert!(self.in_space(object));
                 if KIND == TRACE_KIND_THREAD_LOCAL_COPY {
                     // local gc will never mark a public object
                     debug_assert!(!crate::util::metadata::public_bit::is_public(object));
@@ -2086,6 +2066,40 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
         return true;
         #[cfg(feature = "thread_local_gc_ibm_style")]
         return false;
+    }
+
+    fn thread_local_update_remset<const KIND: TraceKind>(
+        &self,
+        mutator: &mut Mutator<VM>,
+        source: ObjectReference,
+        slot: <VM as VMBinding>::VMSlot,
+        object: ObjectReference,
+        worker: Option<*mut GCWorker<VM>>,
+        copy: Option<CopySemantics>,
+    ) -> ThreadlocalTracedObjectType {
+        // public block is now defrag source, so simply leave those public
+        // objects in place
+        if crate::util::metadata::public_bit::is_public(object) {
+            // found private --> public, store public object to the remember set
+            // stack slot will not be captured here as in that case, source
+            // and object are the same, so it will never enter the following
+            // branch
+
+            use crate::vm::slot::Slot;
+            debug_assert!(
+                slot.load().unwrap() == object,
+                "slot: {:?}, slot->object: {:?}, object: {:?}",
+                slot,
+                slot.load().unwrap(),
+                object
+            );
+            if !crate::util::metadata::public_bit::is_public(source) {
+                mutator.remember_set.push(slot);
+            }
+
+            return ThreadlocalTracedObjectType::Scanned(object);
+        }
+        self.thread_local_trace_object::<KIND>(mutator, source, object, worker, copy)
     }
 }
 
@@ -2183,8 +2197,9 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
                     }
                 }
                 // // Since every global gc is a defrag gc, defrag_threshold will never be None
-                false
-                // block.is_block_dirty()
+                // false
+                // public GC can do nothing about private objects, so only defrag mixed blocks
+                block.is_block_mixed()
             };
 
             #[cfg(not(feature = "thread_local_gc"))]

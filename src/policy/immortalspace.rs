@@ -141,7 +141,6 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmortalSp
 
 #[cfg(feature = "thread_local_gc")]
 impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for ImmortalSpace<VM> {
-    #[cfg(not(feature = "debug_publish_object"))]
     fn thread_local_trace_object<const KIND: super::gc_work::TraceKind>(
         &self,
         _mutator: &mut crate::Mutator<VM>,
@@ -153,20 +152,26 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
         self.thread_local_trace_object(_mutator, _source, object)
     }
 
-    #[cfg(feature = "debug_publish_object")]
-    fn thread_local_trace_object<const KIND: super::gc_work::TraceKind>(
+    fn thread_local_may_move_objects<const KIND: super::gc_work::TraceKind>() -> bool {
+        false
+    }
+
+    fn thread_local_update_remset<const KIND: super::gc_work::TraceKind>(
         &self,
-        _mutator: &mut crate::Mutator<VM>,
-        _source: ObjectReference,
+        mutator: &mut crate::Mutator<VM>,
+        source: ObjectReference,
+        slot: <VM as VMBinding>::VMSlot,
         object: ObjectReference,
         _worker: Option<*mut GCWorker<VM>>,
         _copy: Option<CopySemantics>,
     ) -> ThreadlocalTracedObjectType {
-        self.thread_local_trace_object(object)
-    }
-
-    fn thread_local_may_move_objects<const KIND: super::gc_work::TraceKind>() -> bool {
-        false
+        if crate::util::metadata::public_bit::is_public(object) {
+            if !crate::util::metadata::public_bit::is_public(source) {
+                mutator.remember_set.push(slot);
+            }
+            return ThreadlocalTracedObjectType::Scanned(object);
+        }
+        self.thread_local_trace_object(mutator, source, object)
     }
 }
 
@@ -264,7 +269,7 @@ impl<VM: VMBinding> ImmortalSpace<VM> {
     pub fn thread_local_trace_object(
         &self,
         _mutator: &mut crate::Mutator<VM>,
-        source: ObjectReference,
+        _source: ObjectReference,
         object: ObjectReference,
     ) -> ThreadlocalTracedObjectType {
         #[cfg(feature = "vo_bit")]
@@ -274,9 +279,6 @@ impl<VM: VMBinding> ImmortalSpace<VM> {
             object
         );
         if crate::util::metadata::public_bit::is_public(object) {
-            if !crate::util::metadata::public_bit::is_public(source) {
-                _mutator.remember_set.push(object);
-            }
             return ThreadlocalTracedObjectType::Scanned(object);
         }
         if self.mark_state.test_and_mark::<VM>(object) {

@@ -1,3 +1,5 @@
+use itertools::Itertools;
+
 use super::global::Immix;
 use crate::policy::gc_work::TraceKind;
 use crate::policy::gc_work::TRACE_KIND_TRANSITIVE_PIN;
@@ -20,7 +22,7 @@ impl<VM: VMBinding, const KIND: TraceKind> crate::scheduler::GCWorkContext
     type PinningProcessEdges = PlanProcessEdges<VM, Immix<VM>, TRACE_KIND_TRANSITIVE_PIN>;
 }
 
-pub(super) struct CreateProcessModBufWork<VM, P>
+pub(super) struct CreateProcessRemsetWork<VM, P>
 where
     VM: VMBinding,
     P: crate::Plan<VM = VM> + crate::plan::PlanTraceObject<VM>,
@@ -28,7 +30,7 @@ where
     _p: PhantomData<(VM, P)>,
 }
 
-impl<VM, P> CreateProcessModBufWork<VM, P>
+impl<VM, P> CreateProcessRemsetWork<VM, P>
 where
     VM: VMBinding,
     P: crate::Plan<VM = VM> + crate::plan::PlanTraceObject<VM>,
@@ -38,14 +40,14 @@ where
     }
 }
 
-unsafe impl<VM, P> Send for CreateProcessModBufWork<VM, P>
+unsafe impl<VM, P> Send for CreateProcessRemsetWork<VM, P>
 where
     VM: VMBinding,
     P: crate::Plan<VM = VM> + crate::plan::PlanTraceObject<VM>,
 {
 }
 
-impl<VM, P> crate::scheduler::GCWork<VM> for CreateProcessModBufWork<VM, P>
+impl<VM, P> crate::scheduler::GCWork<VM> for CreateProcessRemsetWork<VM, P>
 where
     VM: VMBinding,
     P: crate::Plan<VM = VM> + crate::plan::PlanTraceObject<VM>,
@@ -55,13 +57,38 @@ where
         worker: &mut crate::scheduler::GCWorker<VM>,
         _mmtk: &'static crate::MMTK<VM>,
     ) {
-        use crate::plan::immix::concurrent_gc_work::ProcessModBufSATB;
+        use crate::plan::immix::concurrent_gc_work::ProcessRemset;
         use crate::scheduler::WorkBucketStage;
         use crate::vm::ActivePlan;
 
         for mutator in <VM as VMBinding>::VMActivePlan::mutators() {
             worker.scheduler().work_buckets[WorkBucketStage::Closure].add(
-                ProcessModBufSATB::<VM, P>::new(*mutator.remember_set.clone()),
+                ProcessRemset::<VM, P>::new(
+                    mutator.remember_set.iter().copied().collect_vec(),
+                    _mmtk,
+                ),
+            );
+        }
+    }
+}
+
+pub(super) struct CreateUpdateRemsetWork;
+
+impl<VM: VMBinding> crate::scheduler::GCWork<VM> for CreateUpdateRemsetWork {
+    fn do_work(
+        &mut self,
+        worker: &mut crate::scheduler::GCWorker<VM>,
+        _mmtk: &'static crate::MMTK<VM>,
+    ) {
+        use crate::scheduler::thread_local_gc_work::ExecuteThreadlocalCollectionWork;
+        use crate::scheduler::WorkBucketStage;
+        use crate::vm::ActivePlan;
+
+        for mutator in <VM as VMBinding>::VMActivePlan::mutators() {
+            worker.scheduler().work_buckets[WorkBucketStage::Local].add(
+                ExecuteThreadlocalCollectionWork {
+                    mutator_tls: mutator.mutator_tls,
+                },
             );
         }
     }

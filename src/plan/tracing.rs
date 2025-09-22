@@ -4,12 +4,9 @@
 use crate::scheduler::gc_work::{ProcessEdgesWork, SlotOf};
 use crate::scheduler::{GCWorker, WorkBucketStage, EDGES_WORK_BUFFER_SIZE};
 use crate::util::ObjectReference;
-#[cfg(feature = "public_bit")]
-use crate::util::VMMutatorThread;
 #[cfg(feature = "debug_thread_local_gc_copying")]
 use crate::util::VMMutatorThread;
 use crate::vm::slot::Slot;
-use crate::vm::ActivePlan;
 #[cfg(feature = "public_bit")]
 use crate::vm::Scanning;
 use crate::vm::SlotVisitor;
@@ -206,6 +203,7 @@ pub struct PublishObjectClosure<VM: crate::vm::VMBinding> {
     slot_buffer: std::collections::VecDeque<VM::VMSlot>,
     #[cfg(feature = "debug_publish_object")]
     mutator_id: u32,
+    #[cfg(feature = "debug_thread_local_gc_copying")]
     tls: VMMutatorThread,
 }
 
@@ -214,13 +212,14 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
     pub fn new(
         mmtk: &'static MMTK<VM>,
         #[cfg(feature = "debug_publish_object")] mutator_id: u32,
-        tls: VMMutatorThread,
+        #[cfg(feature = "debug_thread_local_gc_copying")] tls: VMMutatorThread,
     ) -> Self {
         PublishObjectClosure {
             _mmtk: mmtk,
             slot_buffer: std::collections::VecDeque::new(),
             #[cfg(feature = "debug_publish_object")]
             mutator_id,
+            #[cfg(feature = "debug_thread_local_gc_copying")]
             tls,
         }
     }
@@ -234,7 +233,7 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
         };
         #[cfg(feature = "debug_thread_local_gc_copying")]
         let mut number_of_bytes_published = 0;
-        let mut local_remember_set = Vec::new();
+        // let mut local_remember_set = Vec::new();
         while !self.slot_buffer.is_empty() {
             let slot = self.slot_buffer.pop_front().unwrap();
             let object = slot.load();
@@ -243,7 +242,7 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
             }
             let object = object.unwrap();
             if !crate::util::metadata::public_bit::is_public(object) {
-                local_remember_set.push(object);
+                // local_remember_set.push(object);
                 // set public bit on the object
                 #[cfg(feature = "debug_publish_object")]
                 crate::util::metadata::public_bit::set_public_bit::<VM>(
@@ -276,11 +275,11 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
             }
         }
         // Move all objects published by the current
-        if VM::VMActivePlan::is_mutator(self.tls.0) {
-            VM::VMActivePlan::mutator(self.tls)
-                .remember_set
-                .append(&mut local_remember_set);
-        }
+        // if VM::VMActivePlan::is_mutator(self.tls.0) {
+        //     VM::VMActivePlan::mutator(self.tls)
+        //         .remember_set
+        //         .append(&mut local_remember_set);
+        // }
         #[cfg(feature = "debug_thread_local_gc_copying")]
         {
             use crate::util::{GLOBAL_GC_STATISTICS, TOTAL_PU8LISHED_BYTES};

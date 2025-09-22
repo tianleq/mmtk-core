@@ -24,6 +24,7 @@ impl<VM: VMBinding> GCWork<VM> for ExecuteThreadlocalCollectionWork {
             mmtk,
             mutator_tls: self.mutator_tls,
             start_time: std::time::Instant::now(),
+            update_remset: true,
         }
         .execute();
     }
@@ -33,6 +34,7 @@ pub struct ExecuteThreadlocalCollection<VM: VMBinding> {
     pub mmtk: &'static MMTK<VM>,
     pub mutator_tls: VMMutatorThread,
     pub start_time: std::time::Instant,
+    pub update_remset: bool,
 }
 
 impl<VM: VMBinding> ExecuteThreadlocalCollection<VM> {
@@ -46,10 +48,16 @@ impl<VM: VMBinding> ExecuteThreadlocalCollection<VM> {
             .gc_trigger
             .policy
             .on_thread_local_gc_start(self.mmtk, mutator);
+        if self.update_remset {
+            self.mmtk
+                .get_plan()
+                .do_thread_local_update_remset(self.mutator_tls, self.mmtk);
+        } else {
+            self.mmtk
+                .get_plan()
+                .do_thread_local_collection(self.mutator_tls, self.mmtk);
+        }
 
-        self.mmtk
-            .get_plan()
-            .do_thread_local_collection(self.mutator_tls, self.mmtk);
         let elapsed = self.start_time.elapsed();
         mutator.thread_local_gc_status = THREAD_LOCAL_GC_INACTIVE;
         info!(
@@ -161,7 +169,7 @@ impl EndOfThreadLocalGC {
 }
 
 /// Scan a specific mutator
-pub struct ScanMutator<VM, Closure>
+pub struct ScanMutator<VM, Closure, const KIND: TraceKind>
 where
     VM: VMBinding,
     Closure: ThreadlocalObjectGraphTraversalClosure<VM>,
@@ -172,7 +180,7 @@ where
     phantom: PhantomData<Closure>,
 }
 
-impl<VM, Closure> ScanMutator<VM, Closure>
+impl<VM, Closure, const KIND: TraceKind> ScanMutator<VM, Closure, KIND>
 where
     VM: VMBinding,
     Closure: ThreadlocalObjectGraphTraversalClosure<VM>,
@@ -192,15 +200,17 @@ where
 
     pub fn execute(&mut self) {
         trace!("scan_mutator start");
-        // self.mmtk.state.prepare_for_stack_scanning();
-        let object_graph_traversal =
-            ThreadlocalObjectGraphTraversal::<VM, Closure>::new(self.mmtk, self.tls, self.worker);
+        let object_graph_traversal = ThreadlocalObjectGraphTraversal::<VM, Closure, KIND>::new(
+            self.mmtk,
+            self.tls,
+            self.worker,
+        );
         VM::VMCollection::scan_mutator(self.tls, object_graph_traversal);
         trace!("scan_mutator end");
     }
 }
 
-pub struct ThreadlocalObjectGraphTraversal<VM, Closure>
+pub struct ThreadlocalObjectGraphTraversal<VM, Closure, const KIND: TraceKind>
 where
     VM: VMBinding,
     Closure: ThreadlocalObjectGraphTraversalClosure<VM>,
@@ -211,25 +221,7 @@ where
     phantom: PhantomData<Closure>,
 }
 
-impl<VM, Closure> ObjectGraphTraversal<VM::VMSlot> for ThreadlocalObjectGraphTraversal<VM, Closure>
-where
-    VM: VMBinding,
-    Closure: ThreadlocalObjectGraphTraversalClosure<VM>,
-{
-    fn traverse_from_roots(&mut self, root_slots: Vec<VM::VMSlot>) {
-        Closure::new(self.mmtk, self.tls, Some(root_slots), self.worker).do_closure();
-    }
-
-    fn report_roots(&mut self, _root_slots: Vec<VM::VMSlot>) {
-        unreachable!();
-    }
-
-    fn traverse(&mut self) {
-        unreachable!();
-    }
-}
-
-impl<VM, Closure> ThreadlocalObjectGraphTraversal<VM, Closure>
+impl<VM, Closure, const KIND: TraceKind> ThreadlocalObjectGraphTraversal<VM, Closure, KIND>
 where
     VM: VMBinding,
     Closure: ThreadlocalObjectGraphTraversalClosure<VM>,
@@ -245,6 +237,25 @@ where
             worker,
             phantom: PhantomData,
         }
+    }
+}
+impl<VM, Closure, const KIND: TraceKind> ObjectGraphTraversal<VM::VMSlot>
+    for ThreadlocalObjectGraphTraversal<VM, Closure, KIND>
+where
+    VM: VMBinding,
+    Closure: ThreadlocalObjectGraphTraversalClosure<VM>,
+{
+    fn traverse_from_roots(&mut self, root_slots: Vec<VM::VMSlot>) {
+        let root_slots = Some(root_slots);
+        Closure::new(self.mmtk, self.tls, root_slots, self.worker).do_closure();
+    }
+
+    fn report_roots(&mut self, _root_slots: Vec<VM::VMSlot>) {
+        unreachable!();
+    }
+
+    fn traverse(&mut self) {
+        unreachable!();
     }
 }
 
@@ -264,6 +275,7 @@ pub struct PlanThreadlocalObjectGraphTraversalClosure<
     VM: VMBinding,
     P: Plan<VM = VM> + PlanThreadlocalTraceObject<VM>,
     const KIND: TraceKind,
+    const UPDATE_REMSET: bool,
 > {
     plan: &'static P,
     tls: VMMutatorThread,
@@ -272,8 +284,9 @@ pub struct PlanThreadlocalObjectGraphTraversalClosure<
     worker: Option<*mut GCWorker<VM>>,
 }
 
-impl<VM, P, const KIND: TraceKind> ThreadlocalObjectGraphTraversalClosure<VM>
-    for PlanThreadlocalObjectGraphTraversalClosure<VM, P, KIND>
+impl<VM, P, const KIND: TraceKind, const UPDATE_REMSET: bool>
+    ThreadlocalObjectGraphTraversalClosure<VM>
+    for PlanThreadlocalObjectGraphTraversalClosure<VM, P, KIND, UPDATE_REMSET>
 where
     VM: VMBinding,
     P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>,
@@ -281,14 +294,14 @@ where
     fn new(
         mmtk: &'static MMTK<VM>,
         tls: VMMutatorThread,
-        _root_slots: Option<Vec<VM::VMSlot>>,
+        root_slots: Option<Vec<VM::VMSlot>>,
         worker: Option<*mut GCWorker<VM>>,
     ) -> Self {
         let mut slot_buffer = Vec::with_capacity(4096);
         let mutator = VM::VMActivePlan::mutator(tls);
 
         let mut source_buffer = Vec::new();
-        if let Some(root_slots) = _root_slots {
+        if let Some(root_slots) = root_slots {
             source_buffer = Vec::with_capacity(root_slots.capacity());
             for slot in &root_slots {
                 let root = slot.load();
@@ -296,8 +309,9 @@ where
                 // push public objects to the remember set
                 // This is not needed in concurrent GC (SATB barrier should catch such objects)
                 if let Some(root) = root {
+                    // push stack slot containing public objects to the remset
                     if crate::util::metadata::public_bit::is_public(root) {
-                        mutator.remember_set.push(root);
+                        mutator.remember_set.push(*slot);
                     }
                 }
             }
@@ -336,33 +350,66 @@ where
                 continue;
             };
             let source = _source.unwrap();
-            let new_object = match self.plan.thread_local_trace_object::<KIND>(
-                mutator,
-                source,
-                object,
-                self.worker,
-            ) {
-                Scanned(new_object) => {
-                    #[cfg(feature = "debug_publish_object")]
-                    if crate::util::metadata::public_bit::is_public(object) {
-                        assert!(
-                            crate::util::metadata::public_bit::is_public(new_object),
-                            "public bit is corrupted. public obj: {} | private new_obj: {} ",
-                            object,
-                            new_object
-                        );
+            let new_object = if UPDATE_REMSET {
+                match self.plan.thread_local_update_remset::<KIND>(
+                    mutator,
+                    source,
+                    slot,
+                    object,
+                    self.worker,
+                ) {
+                    Scanned(new_object) => {
+                        #[cfg(feature = "debug_publish_object")]
+                        if crate::util::metadata::public_bit::is_public(object) {
+                            assert!(
+                                crate::util::metadata::public_bit::is_public(new_object),
+                                "public bit is corrupted. public obj: {} | private new_obj: {} ",
+                                object,
+                                new_object
+                            );
+                        }
+                        new_object
                     }
-                    new_object
+                    ToBeScanned(new_object) => {
+                        VM::VMScanning::scan_object(
+                            VMWorkerThread(VMThread::UNINITIALIZED),
+                            new_object,
+                            self,
+                        );
+                        self.plan
+                            .thread_local_post_scan_object::<KIND>(mutator, new_object);
+                        new_object
+                    }
                 }
-                ToBeScanned(new_object) => {
-                    VM::VMScanning::scan_object(
-                        VMWorkerThread(VMThread::UNINITIALIZED),
-                        new_object,
-                        self,
-                    );
-                    self.plan
-                        .thread_local_post_scan_object::<KIND>(mutator, new_object);
-                    new_object
+            } else {
+                match self.plan.thread_local_trace_object::<KIND>(
+                    mutator,
+                    source,
+                    object,
+                    self.worker,
+                ) {
+                    Scanned(new_object) => {
+                        #[cfg(feature = "debug_publish_object")]
+                        if crate::util::metadata::public_bit::is_public(object) {
+                            assert!(
+                                crate::util::metadata::public_bit::is_public(new_object),
+                                "public bit is corrupted. public obj: {} | private new_obj: {} ",
+                                object,
+                                new_object
+                            );
+                        }
+                        new_object
+                    }
+                    ToBeScanned(new_object) => {
+                        VM::VMScanning::scan_object(
+                            VMWorkerThread(VMThread::UNINITIALIZED),
+                            new_object,
+                            self,
+                        );
+                        self.plan
+                            .thread_local_post_scan_object::<KIND>(mutator, new_object);
+                        new_object
+                    }
                 }
             };
 
@@ -448,17 +495,12 @@ where
     }
 }
 
-impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind>
-    SlotVisitor<VM::VMSlot> for PlanThreadlocalObjectGraphTraversalClosure<VM, P, KIND>
+impl<VM, P, const KIND: TraceKind, const UPDATE_REMSET: bool> SlotVisitor<VM::VMSlot>
+    for PlanThreadlocalObjectGraphTraversalClosure<VM, P, KIND, UPDATE_REMSET>
+where
+    VM: VMBinding,
+    P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>,
 {
-    // #[cfg(not(feature = "debug_publish_object"))]
-    // fn visit_slot(&mut self, slot: VM::VMSlot) {
-    //     if slot.load().is_some() {
-    //         self.slot_buffer.push(slot);
-    //     }
-    // }
-
-    // #[cfg(feature = "debug_publish_object")]
     fn visit_slot(&mut self, object: ObjectReference, slot: VM::VMSlot) {
         if slot.load().is_some() {
             self.source_buffer.push(Some(object));
@@ -467,8 +509,11 @@ impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIN
     }
 }
 
-impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind> Drop
-    for PlanThreadlocalObjectGraphTraversalClosure<VM, P, KIND>
+impl<VM, P, const KIND: TraceKind, const UPDATE_REMSET: bool> Drop
+    for PlanThreadlocalObjectGraphTraversalClosure<VM, P, KIND, UPDATE_REMSET>
+where
+    VM: VMBinding,
+    P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>,
 {
     #[inline(always)]
     fn drop(&mut self) {

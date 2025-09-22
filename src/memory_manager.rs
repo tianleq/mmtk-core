@@ -1000,15 +1000,6 @@ fn _mmtk_set_public_bit<VM: VMBinding>(
     object: ObjectReference,
 ) {
     mmtk_set_public_bit(_tls, _mmtk, object);
-    debug_assert!(
-        !VM::VMActivePlan::is_mutator(_tls.0)
-            || VM::VMActivePlan::mutator(_tls)
-                .remember_set
-                .contains(&object),
-        "object: {:?} should be in the mutator: {:?} 's remember set",
-        object,
-        _tls
-    )
 }
 
 #[cfg(all(feature = "public_bit", not(feature = "debug_thread_local_gc_copying")))]
@@ -1042,14 +1033,10 @@ pub fn mmtk_publish_object<VM: VMBinding>(
         let mut closure: crate::plan::PublishObjectClosure<VM> =
             crate::plan::PublishObjectClosure::<VM>::new(
                 _mmtk,
-                _tls,
                 #[cfg(feature = "debug_publish_object")]
                 u32::MAX,
             );
-        if VM::VMActivePlan::is_mutator(_tls.0) {
-            let mutator = VM::VMActivePlan::mutator(_tls);
-            mutator.remember_set.push(object);
-        }
+
         _mmtk_set_public_bit(_tls, _mmtk, object);
         // Publish all the descendants
         VM::VMScanning::scan_object(
@@ -1075,14 +1062,10 @@ pub fn mmtk_publish_runtime_object<VM: VMBinding>(
         let mut closure: crate::plan::PublishObjectClosure<VM> =
             crate::plan::PublishObjectClosure::<VM>::new(
                 _mmtk,
-                _tls,
                 #[cfg(feature = "debug_publish_object")]
                 u32::MAX,
             );
-        if VM::VMActivePlan::is_mutator(_tls.0) {
-            let mutator = VM::VMActivePlan::mutator(_tls);
-            mutator.remember_set.push(object);
-        }
+
         #[cfg(feature = "debug_publish_object")]
         crate::util::metadata::public_bit::set_public_bit::<VM>(object, None);
         #[cfg(not(feature = "debug_publish_object"))]

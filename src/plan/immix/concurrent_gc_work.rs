@@ -1,7 +1,6 @@
 use crate::plan::{PlanTraceObject, VectorQueue};
 use crate::policy::gc_work::TRACE_KIND_PUBLIC;
-// use crate::policy::space::Space;
-// use crate::scheduler::gc_work::{ScanObjects, SlotOf};
+use crate::util::metadata::public_bit::is_public;
 use crate::util::ObjectReference;
 use crate::vm::slot::Slot;
 
@@ -12,11 +11,6 @@ use crate::{
     vm::*,
     MMTK,
 };
-// use atomic::Ordering;
-// use std::ops::{Deref, DerefMut};
-// use crate::scheduler::{ProcessEdgesWork, gc_work::ProcessEdgesBase}
-// use crate::policy::gc_work::PolicyTraceObject
-// use super::Immix;
 
 pub struct ConcurrentTraceObjects<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> {
     plan: &'static P,
@@ -52,18 +46,13 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ConcurrentTraceObjec
             let objects = self.next_objects.take();
             let worker = self.worker();
             let w = Self::new(objects, worker.mmtk);
-            // worker.add_work(WorkBucketStage::Unconstrained, w);
             worker.add_work(WorkBucketStage::Closure, w);
         }
     }
 
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
-        let new_object =
-            self.plan
-                .trace_object::<Self, { TRACE_KIND_PUBLIC }>(self, object, self.worker());
-        // No copying should happen.
-        debug_assert_eq!(object, new_object);
-        object
+        self.plan
+            .trace_object::<Self, { TRACE_KIND_PUBLIC }>(self, object, self.worker())
     }
 
     fn trace_objects(&mut self, objects: &[ObjectReference]) {
@@ -82,6 +71,7 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ConcurrentTraceObjec
                 self.flush();
             }
         });
+        self.plan.post_scan_object(object);
     }
 }
 
@@ -136,39 +126,152 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> GCWork<VM>
     }
 }
 
-pub struct ProcessModBufSATB<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> {
-    nodes: Option<Vec<ObjectReference>>,
-    _p: std::marker::PhantomData<(VM, P)>,
+// pub struct ProcessModBufSATB<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> {
+//     nodes: Option<Vec<ObjectReference>>,
+//     _p: std::marker::PhantomData<(VM, P)>,
+// }
+
+// unsafe impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> Send
+//     for ProcessModBufSATB<VM, P>
+// {
+// }
+
+// impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessModBufSATB<VM, P> {
+//     pub fn new(nodes: Vec<ObjectReference>) -> Self {
+//         #[cfg(debug_assertions)]
+//         {
+//             use crate::util::metadata::public_bit::is_public;
+
+//             assert!(nodes.iter().all(|o| is_public(*o)));
+//         }
+//         Self {
+//             nodes: Some(nodes),
+//             _p: std::marker::PhantomData,
+//         }
+//     }
+// }
+
+// impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> GCWork<VM>
+//     for ProcessModBufSATB<VM, P>
+// {
+//     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+//         let mut w = if let Some(nodes) = self.nodes.take() {
+//             if nodes.is_empty() {
+//                 return;
+//             }
+//             #[cfg(debug_assertions)]
+//             {
+//                 use crate::util::metadata::public_bit::is_public;
+
+//                 debug_assert!(nodes.iter().all(|object| is_public(*object)));
+//             }
+//             ConcurrentTraceObjects::<VM, P>::new(nodes, mmtk)
+//         } else {
+//             return;
+//         };
+//         GCWork::do_work(&mut w, worker, mmtk);
+//     }
+// }
+
+pub struct ProcessRemset<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> {
+    plan: &'static P,
+    slots: Option<Vec<VM::VMSlot>>,
+    // recursively generated objects
+    next_slots: VectorQueue<VM::VMSlot>,
+    worker: *mut GCWorker<VM>,
 }
 
-unsafe impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> Send
-    for ProcessModBufSATB<VM, P>
-{
-}
+unsafe impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> Send for ProcessRemset<VM, P> {}
 
-impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessModBufSATB<VM, P> {
-    pub fn new(nodes: Vec<ObjectReference>) -> Self {
+impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessRemset<VM, P> {
+    const BUFFER_SIZE: usize = 8192;
+
+    pub fn new(slots: Vec<VM::VMSlot>, mmtk: &'static MMTK<VM>) -> Self {
+        let plan = mmtk.get_plan().downcast_ref::<P>().unwrap();
+        // crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
         Self {
-            nodes: Some(nodes),
-            _p: std::marker::PhantomData,
+            plan,
+            slots: Some(slots),
+            next_slots: VectorQueue::default(),
+            worker: std::ptr::null_mut(),
+        }
+    }
+
+    pub fn worker(&self) -> &'static mut GCWorker<VM> {
+        debug_assert_ne!(self.worker, std::ptr::null_mut());
+        unsafe { &mut *self.worker }
+    }
+
+    #[cold]
+    fn flush(&mut self) {
+        if !self.next_slots.is_empty() {
+            let slots = self.next_slots.take();
+            let worker = self.worker();
+            let w = Self::new(slots, worker.mmtk);
+            worker.add_work(WorkBucketStage::Closure, w);
+        }
+    }
+
+    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+        self.plan
+            .trace_object::<Self, { TRACE_KIND_PUBLIC }>(self, object, self.worker())
+    }
+
+    fn scan_and_enqueue(&mut self, object: ObjectReference) {
+        object.iterate_fields::<VM, _>(|s| {
+            if s.load().is_none() {
+                return;
+            }
+            self.next_slots.push(s);
+            if self.next_slots.len() > Self::BUFFER_SIZE {
+                self.flush();
+            }
+        });
+        self.plan.post_scan_object(object);
+    }
+
+    fn process_slots(&mut self, slots: &[VM::VMSlot]) {
+        for slot in slots.iter() {
+            if let Some(object) = slot.load() {
+                debug_assert!(
+                    is_public(object),
+                    "remset contians private object, slot: {:?}, object: {:?}",
+                    slot,
+                    object
+                );
+                let new_object = self.trace_object(object);
+                slot.store(new_object);
+            }
         }
     }
 }
 
-impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> GCWork<VM>
-    for ProcessModBufSATB<VM, P>
-{
-    fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
-        let mut w = if let Some(nodes) = self.nodes.take() {
-            if nodes.is_empty() {
-                return;
-            }
+impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> GCWork<VM> for ProcessRemset<VM, P> {
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+        self.worker = worker;
+        // trace objects
+        if let Some(slots) = self.slots.take() {
+            self.process_slots(&slots)
+        }
 
-            ConcurrentTraceObjects::<VM, P>::new(nodes, mmtk)
-        } else {
-            return;
-        };
-        GCWork::do_work(&mut w, worker, mmtk);
+        let mut next_slots = vec![];
+        while !self.next_slots.is_empty() {
+            next_slots.clear();
+            self.next_slots.swap(&mut next_slots);
+            self.process_slots(&next_slots);
+        }
+        self.flush();
+    }
+}
+
+impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ObjectQueue for ProcessRemset<VM, P> {
+    fn enqueue(&mut self, object: ObjectReference) {
+        debug_assert!(
+            object.to_raw_address().is_mapped(),
+            "Invalid obj {:?}: address is not mapped",
+            object
+        );
+        self.scan_and_enqueue(object);
     }
 }
 

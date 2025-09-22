@@ -237,6 +237,12 @@ impl Block {
             == Self::DIRTY_BIT
     }
 
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub fn is_block_mixed(&self) -> bool {
+        Self::METADATA_TABLE.load_atomic::<u8>(self.start(), Ordering::SeqCst)
+            == (Self::DIRTY_BIT | Self::PUBLIC_BIT)
+    }
+
     // dirty the block
     #[cfg(feature = "thread_local_gc_copying")]
     pub fn taint(&self) {
@@ -638,19 +644,26 @@ impl Block {
         line_mark_state: u8,
         #[cfg(feature = "debug_thread_local_gc_copying")] gc_stats: &mut crate::util::GCStatistics,
     ) {
+        let mut marked = false;
         for line in self.lines() {
-            // We need to clear the line mark state at least twice in every 128 GC
-            // otherwise, the line mark state of the last GC will stick around
-            if line_mark_state > Line::MAX_MARK_STATE - 2 {
-                line.mark(0);
-            }
             if line.is_marked(line_mark_state) {
                 debug_assert!(
                     line.is_line_published(),
                     "line: {:?} should be public",
                     line
                 );
+                marked = true
+            } else {
+                // We need to clear the line mark state at least twice in every 128 GC
+                // otherwise, the line mark state of the last GC will stick around
+                if line_mark_state > Line::MAX_MARK_STATE - 2 {
+                    line.mark(0);
+                }
             }
+        }
+        // no lines marked, meaning that the block has no live public objects
+        if !marked {
+            self.reset_publication();
         }
         // conservatively treat dirty block as fully occupied
         self.set_state(BlockState::Unmarked);
@@ -721,7 +734,7 @@ impl Block {
                 self.sweep_dirty_block(space, mark_histogram, line_mark_state);
                 return false;
             }
-
+            debug_assert!(self.is_block_published());
             for line in self.lines() {
                 if line.is_marked(line_mark_state) {
                     marked_lines += 1;
@@ -779,7 +792,11 @@ impl Block {
                 }
                 // total_hole_size = std::cmp::max(total_hole_size, hole_size);
             }
-            assert!(!private_line_marked, "block: {:?} is corrupted", self);
+            assert!(
+                !private_line_marked,
+                "block: {:?} is corrupted, line mark state: {}",
+                self, line_mark_state
+            );
             if marked_lines == 0 {
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_region_swept::<VM, _>(self, false);

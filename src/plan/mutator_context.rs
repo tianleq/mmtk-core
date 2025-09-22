@@ -245,7 +245,7 @@ pub struct Mutator<VM: VMBinding> {
     #[cfg(feature = "thread_local_gc_copying")]
     pub(crate) local_allocation_size: usize,
     #[cfg(feature = "thread_local_gc_copying")]
-    pub(crate) remember_set: Box<Vec<ObjectReference>>,
+    pub(crate) remember_set: Box<Vec<VM::VMSlot>>,
 }
 
 impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {

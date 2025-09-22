@@ -93,7 +93,7 @@ pub fn immix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, tls: VMWo
         .unwrap();
         los_allocator.release();
         // // Force a local gc in the next polling
-        // mutator.local_allocation_size = u32::MAX as usize;
+        mutator.local_allocation_size = u32::MAX as usize;
         mutator.thread_local_gc_status = THREAD_LOCAL_GC_PENDING;
     }
     common_release_func(mutator, tls);

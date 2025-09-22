@@ -31,11 +31,17 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
         }
     }
 
-    fn trace_public_object(&mut self, _src: ObjectReference, value: ObjectReference) {
+    fn trace_public_object(
+        &mut self,
+        _src: ObjectReference,
+        _slot: VM::VMSlot,
+        value: ObjectReference,
+    ) {
         let mut closure = PublishObjectClosure::<VM>::new(
             self.mmtk,
             #[cfg(feature = "debug_publish_object")]
             self.mutator_id,
+            #[cfg(feature = "debug_thread_local_gc_copying")]
             self.tls,
         );
         #[cfg(feature = "debug_publish_object")]
@@ -48,11 +54,11 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
             #[cfg(feature = "debug_thread_local_gc_copying")]
             self.tls,
         );
-        // Assumption here is objects published by Non-Java thread are globally reachable
-        // So only keep track of objects published by Java thread
-        if VM::VMActivePlan::is_mutator(self.tls.0) {
-            VM::VMActivePlan::mutator(self.tls).remember_set.push(value);
-        }
+        // // Assumption here is objects published by Non-Java thread are globally reachable
+        // // So only keep track of objects published by Java thread
+        // if VM::VMActivePlan::is_mutator(self.tls.0) {
+        //     VM::VMActivePlan::mutator(self.tls).remember_set.push(_slot);
+        // }
         VM::VMScanning::scan_object(VMWorkerThread(VMThread::UNINITIALIZED), value, &mut closure);
         closure.do_closure();
 
@@ -84,7 +90,7 @@ impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM>
         _slot: VM::VMSlot,
         target: Option<ObjectReference>,
     ) {
-        self.trace_public_object(src, target.unwrap())
+        self.trace_public_object(src, _slot, target.unwrap())
     }
 
     fn flush(&mut self) {}
@@ -113,7 +119,7 @@ impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM>
                 use crate::util::metadata::public_bit::is_public;
 
                 if !is_public(obj) {
-                    self.trace_public_object(_dst_base, obj)
+                    self.trace_public_object(_dst_base, slot, obj)
                 }
             }
         }

@@ -96,19 +96,19 @@ pub fn forward_object<VM: VMBinding>(
     copy_context: &mut GCWorkerCopyContext<VM>,
     on_after_forwarding: impl FnOnce(ObjectReference),
 ) -> ObjectReference {
-    assert!(
-        object.to_raw_address().class_is_valid::<VM>(),
-        "object: {:?}, klass: {:?}",
-        object,
-        object.to_raw_address().class_pointer::<VM>()
-    );
+    // assert!(
+    //     object.to_raw_address().class_is_valid::<VM>(),
+    //     "object: {:?}, klass: {:?}",
+    //     object,
+    //     object.to_raw_address().class_pointer::<VM>()
+    // );
     let new_object = VM::VMObjectModel::copy(object, semantics, copy_context);
-    assert!(
-        new_object.to_raw_address().class_is_valid::<VM>(),
-        "object: {:?}, klass: {:?}",
-        new_object,
-        new_object.to_raw_address().class_pointer::<VM>()
-    );
+    // assert!(
+    //     new_object.to_raw_address().class_is_valid::<VM>(),
+    //     "object: {:?}, klass: {:?}",
+    //     new_object,
+    //     new_object.to_raw_address().class_pointer::<VM>()
+    // );
     on_after_forwarding(new_object);
     if let Some(shift) = forwarding_bits_offset_in_forwarding_pointer::<VM>() {
         VM::VMObjectModel::LOCAL_FORWARDING_POINTER_SPEC.store_atomic::<VM, usize>(

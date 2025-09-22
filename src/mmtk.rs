@@ -493,6 +493,7 @@ impl<VM: VMBinding> MMTK<VM> {
                 mmtk,
                 mutator_tls: tls,
                 start_time: std::time::Instant::now(),
+                update_remset: false,
             }
             .execute();
         } else {

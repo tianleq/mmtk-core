@@ -72,7 +72,7 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
     }
 
     fn prepare(&mut self, tls: VMWorkerThread) {
-        self.common.prepare(tls, true);
+        self.common.prepare(tls, true, crate::plan::Pause::Full);
 
         self.hi
             .store(!self.hi.load(Ordering::SeqCst), Ordering::SeqCst); // flip the semi-spaces
@@ -90,7 +90,7 @@ impl<VM: VMBinding> Plan for SemiSpace<VM> {
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
-        self.common.release(tls, true);
+        self.common.release(tls, true, crate::plan::Pause::Full);
         // release the collected region
         self.fromspace().release();
     }

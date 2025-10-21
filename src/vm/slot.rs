@@ -86,6 +86,18 @@ pub trait Slot: Copy + Send + Debug + PartialEq + Eq + Hash {
     fn prefetch_store(&self) {
         // no-op by default
     }
+
+    fn to_address(&self) -> Address {
+        unimplemented!()
+    }
+
+    fn raw_address(&self) -> Address {
+        unimplemented!()
+    }
+
+    fn from_address(_: Address) -> Self {
+        unimplemented!()
+    }
 }
 
 /// A simple slot implementation that represents a word-sized slot which holds the raw address of

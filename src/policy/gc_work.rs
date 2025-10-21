@@ -54,16 +54,7 @@ pub trait PolicyThreadlocalTraceObject<VM: VMBinding> {
         &self,
         mutator: &mut Mutator<VM>,
         source: ObjectReference,
-        object: ObjectReference,
-        worker: Option<*mut GCWorker<VM>>,
-        copy: Option<CopySemantics>,
-    ) -> ThreadlocalTracedObjectType;
-
-    fn thread_local_update_remset<const KIND: TraceKind>(
-        &self,
-        mutator: &mut Mutator<VM>,
-        source: ObjectReference,
-        slot: VM::VMSlot,
+        slot: Option<VM::VMSlot>,
         object: ObjectReference,
         worker: Option<*mut GCWorker<VM>>,
         copy: Option<CopySemantics>,

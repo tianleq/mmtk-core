@@ -145,6 +145,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
         &self,
         _mutator: &mut crate::Mutator<VM>,
         _source: ObjectReference,
+        _slot: Option<VM::VMSlot>,
         object: ObjectReference,
         _worker: Option<*mut GCWorker<VM>>,
         _copy: Option<CopySemantics>,
@@ -154,24 +155,6 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
 
     fn thread_local_may_move_objects<const KIND: super::gc_work::TraceKind>() -> bool {
         false
-    }
-
-    fn thread_local_update_remset<const KIND: super::gc_work::TraceKind>(
-        &self,
-        mutator: &mut crate::Mutator<VM>,
-        source: ObjectReference,
-        slot: <VM as VMBinding>::VMSlot,
-        object: ObjectReference,
-        _worker: Option<*mut GCWorker<VM>>,
-        _copy: Option<CopySemantics>,
-    ) -> ThreadlocalTracedObjectType {
-        if crate::util::metadata::public_bit::is_public(object) {
-            if !crate::util::metadata::public_bit::is_public(source) {
-                mutator.remember_set.push(slot);
-            }
-            return ThreadlocalTracedObjectType::Scanned(object);
-        }
-        self.thread_local_trace_object(mutator, source, object)
     }
 }
 

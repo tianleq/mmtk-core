@@ -29,6 +29,8 @@ pub use global::Plan;
 pub(crate) use global::PlanTraceObject;
 #[cfg(feature = "thread_local_gc")]
 pub(crate) use global::{PlanThreadlocalTraceObject, ThreadlocalTracedObjectType};
+#[cfg(feature = "thread_local_gc")]
+pub(crate) use immix::gc_work::CollectMutatorRoots;
 
 mod mutator_context;
 pub use mutator_context::Mutator;
@@ -72,3 +74,6 @@ pub use nogc::NOGC_CONSTRAINTS;
 pub use pageprotect::PP_CONSTRAINTS;
 pub use semispace::SS_CONSTRAINTS;
 pub use sticky::immix::STICKY_IMMIX_CONSTRAINTS;
+
+pub(crate) use immix::Pause;
+pub use immix::GLOBAL_REMSET;

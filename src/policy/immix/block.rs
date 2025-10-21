@@ -637,14 +637,15 @@ impl Block {
         }
     }
 
-    fn sweep_dirty_block<VM: VMBinding>(
+    pub fn sweep_dirty_block<VM: VMBinding>(
         &self,
         _space: &ImmixSpace<VM>,
         _mark_histogram: &mut Histogram,
-        line_mark_state: u8,
+        line_mark_state: Option<u8>,
         #[cfg(feature = "debug_thread_local_gc_copying")] gc_stats: &mut crate::util::GCStatistics,
-    ) {
+    ) -> bool {
         let mut marked = false;
+        let line_mark_state = line_mark_state.unwrap();
         for line in self.lines() {
             if line.is_marked(line_mark_state) {
                 debug_assert!(
@@ -667,6 +668,8 @@ impl Block {
         }
         // conservatively treat dirty block as fully occupied
         self.set_state(BlockState::Unmarked);
+
+        false
     }
 
     /// Sweep this block.
@@ -730,11 +733,6 @@ impl Block {
             #[cfg(feature = "thread_local_gc_copying")]
             let mut private_line_marked = false;
 
-            if self.is_block_dirty() {
-                self.sweep_dirty_block(space, mark_histogram, line_mark_state);
-                return false;
-            }
-            debug_assert!(self.is_block_published());
             for line in self.lines() {
                 if line.is_marked(line_mark_state) {
                     marked_lines += 1;

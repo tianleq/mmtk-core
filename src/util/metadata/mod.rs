@@ -231,5 +231,7 @@ pub(crate) mod pin_bit;
 
 #[cfg(feature = "public_bit")]
 pub(crate) mod public_bit;
+// #[cfg(feature = "thread_local_gc")]
+// pub(crate) mod slot_log_bit;
 
 pub use global::*;

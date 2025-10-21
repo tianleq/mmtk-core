@@ -173,20 +173,29 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> GCWork<VM>
 //     }
 // }
 
-pub struct ProcessRemset<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> {
+pub struct ProcessSlotRemset<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> {
     plan: &'static P,
     slots: Option<Vec<VM::VMSlot>>,
     // recursively generated objects
     next_slots: VectorQueue<VM::VMSlot>,
     worker: *mut GCWorker<VM>,
+    #[cfg(debug_assertions)]
+    mutator_id: u32,
 }
 
-unsafe impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> Send for ProcessRemset<VM, P> {}
+unsafe impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> Send
+    for ProcessSlotRemset<VM, P>
+{
+}
 
-impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessRemset<VM, P> {
+impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessSlotRemset<VM, P> {
     const BUFFER_SIZE: usize = 8192;
 
-    pub fn new(slots: Vec<VM::VMSlot>, mmtk: &'static MMTK<VM>) -> Self {
+    pub fn new(
+        slots: Vec<VM::VMSlot>,
+        #[cfg(debug_assertions)] mutator_id: u32,
+        mmtk: &'static MMTK<VM>,
+    ) -> Self {
         let plan = mmtk.get_plan().downcast_ref::<P>().unwrap();
         // crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
         Self {
@@ -194,6 +203,7 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessRemset<VM, P>
             slots: Some(slots),
             next_slots: VectorQueue::default(),
             worker: std::ptr::null_mut(),
+            mutator_id,
         }
     }
 
@@ -207,7 +217,12 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessRemset<VM, P>
         if !self.next_slots.is_empty() {
             let slots = self.next_slots.take();
             let worker = self.worker();
-            let w = Self::new(slots, worker.mmtk);
+            let w = Self::new(
+                slots,
+                #[cfg(debug_assertions)]
+                self.mutator_id,
+                worker.mmtk,
+            );
             worker.add_work(WorkBucketStage::Closure, w);
         }
     }
@@ -233,20 +248,27 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessRemset<VM, P>
     fn process_slots(&mut self, slots: &[VM::VMSlot]) {
         for slot in slots.iter() {
             if let Some(object) = slot.load() {
-                debug_assert!(
-                    is_public(object),
-                    "remset contians private object, slot: {:?}, object: {:?}",
-                    slot,
-                    object
-                );
-                let new_object = self.trace_object(object);
-                slot.store(new_object);
+                // debug_assert!(
+                //     is_public(object),
+                //     "remset contians private object, slot: {:?}, object: {:?}",
+                //     slot,
+                //     object
+                // );
+
+                // slots may contain private objects as public object might be overwritten by
+                // some other private objects
+                if is_public(object) {
+                    let new_object = self.trace_object(object);
+                    slot.store(new_object);
+                }
             }
         }
     }
 }
 
-impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> GCWork<VM> for ProcessRemset<VM, P> {
+impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> GCWork<VM>
+    for ProcessSlotRemset<VM, P>
+{
     fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         self.worker = worker;
         // trace objects
@@ -264,7 +286,138 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> GCWork<VM> for Proce
     }
 }
 
-impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ObjectQueue for ProcessRemset<VM, P> {
+impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ObjectQueue
+    for ProcessSlotRemset<VM, P>
+{
+    fn enqueue(&mut self, object: ObjectReference) {
+        debug_assert!(
+            object.to_raw_address().is_mapped(),
+            "Invalid obj {:?}: address is not mapped",
+            object
+        );
+        self.scan_and_enqueue(object);
+    }
+}
+
+pub struct ProcessObjectRemset<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> {
+    plan: &'static P,
+    objects: Option<Vec<ObjectReference>>,
+    // recursively generated objects
+    next_objects: VectorQueue<ObjectReference>,
+    worker: *mut GCWorker<VM>,
+    #[cfg(debug_assertions)]
+    mutator_id: u32,
+}
+
+unsafe impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> Send
+    for ProcessObjectRemset<VM, P>
+{
+}
+
+impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessObjectRemset<VM, P> {
+    const BUFFER_SIZE: usize = 8192;
+
+    pub fn new(
+        objects: Vec<ObjectReference>,
+        #[cfg(debug_assertions)] mutator_id: u32,
+        mmtk: &'static MMTK<VM>,
+    ) -> Self {
+        let plan = mmtk.get_plan().downcast_ref::<P>().unwrap();
+        // crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
+        Self {
+            plan,
+            objects: Some(objects),
+            next_objects: VectorQueue::default(),
+            worker: std::ptr::null_mut(),
+            mutator_id,
+        }
+    }
+
+    pub fn worker(&self) -> &'static mut GCWorker<VM> {
+        debug_assert_ne!(self.worker, std::ptr::null_mut());
+        unsafe { &mut *self.worker }
+    }
+
+    #[cold]
+    fn flush(&mut self) {
+        if !self.next_objects.is_empty() {
+            let objects = self.next_objects.take();
+            let worker = self.worker();
+            let w = Self::new(
+                objects,
+                #[cfg(debug_assertions)]
+                self.mutator_id,
+                worker.mmtk,
+            );
+            worker.add_work(WorkBucketStage::Closure, w);
+        }
+    }
+
+    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+        self.plan
+            .trace_object::<Self, { TRACE_KIND_PUBLIC }>(self, object, self.worker())
+    }
+
+    fn scan_and_enqueue(&mut self, object: ObjectReference) {
+        object.iterate_fields::<VM, _>(|s| {
+            if let Some(val) = s.load() {
+                // #[cfg(debug_assertions)]
+                // {
+                //     if !is_public(val) {
+                //         VM::VMObjectModel::dump_object(val);
+                //         object.iterate_fields::<VM, _>(|s| {
+                //             if let Some(val) = s.load() {
+                //                 println!(
+                //                     "slot: {:?}, val: {:?}, public: {}",
+                //                     s,
+                //                     val,
+                //                     is_public(val)
+                //                 );
+                //             }
+                //         });
+                //         panic!("src: {:?}, slot: {:?}, val: {:?}", object, s, val);
+                //     }
+                // }
+
+                self.next_objects.push(val);
+                if self.next_objects.len() > Self::BUFFER_SIZE {
+                    self.flush();
+                }
+            }
+        });
+        self.plan.post_scan_object(object);
+    }
+
+    fn process_objects(&mut self, objects: &[ObjectReference]) {
+        for object in objects.iter() {
+            self.trace_object(*object);
+        }
+    }
+}
+
+impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> GCWork<VM>
+    for ProcessObjectRemset<VM, P>
+{
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+        self.worker = worker;
+        // trace objects
+        if let Some(objects) = self.objects.take() {
+            self.process_objects(&objects)
+        }
+
+        let mut next_objects = vec![];
+        while !self.next_objects.is_empty() {
+            next_objects.clear();
+            self.next_objects.swap(&mut next_objects);
+            self.process_objects(&next_objects);
+        }
+        self.flush();
+    }
+}
+
+impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ObjectQueue
+    for ProcessObjectRemset<VM, P>
+{
     fn enqueue(&mut self, object: ObjectReference) {
         debug_assert!(
             object.to_raw_address().is_mapped(),

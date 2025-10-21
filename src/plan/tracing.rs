@@ -4,6 +4,8 @@
 use crate::scheduler::gc_work::{ProcessEdgesWork, SlotOf};
 use crate::scheduler::{GCWorker, WorkBucketStage, EDGES_WORK_BUFFER_SIZE};
 use crate::util::ObjectReference;
+#[cfg(feature = "public_bit")]
+use crate::util::VMMutatorThread;
 #[cfg(feature = "debug_thread_local_gc_copying")]
 use crate::util::VMMutatorThread;
 use crate::vm::slot::Slot;
@@ -224,7 +226,7 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
         }
     }
 
-    pub fn do_closure(&mut self) {
+    pub fn do_closure(&mut self, tls: Option<VMMutatorThread>) {
         #[cfg(feature = "debug_thread_local_gc_copying")]
         let mut mutator = if VM::VMActivePlan::is_mutator(self.tls.0) {
             Some(VM::VMActivePlan::mutator(self.tls))
@@ -236,11 +238,11 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
         // let mut local_remember_set = Vec::new();
         while !self.slot_buffer.is_empty() {
             let slot = self.slot_buffer.pop_front().unwrap();
-            let object = slot.load();
-            if object.is_none() {
+
+            let Some(object) = slot.load() else {
                 continue;
-            }
-            let object = object.unwrap();
+            };
+
             if !crate::util::metadata::public_bit::is_public(object) {
                 // local_remember_set.push(object);
                 // set public bit on the object
@@ -257,6 +259,18 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
                     #[cfg(feature = "debug_thread_local_gc_copying")]
                     self.tls,
                 );
+                // println!("slot: {:?}, val: {:?}", slot, object);
+                // All newly published objects need to pushed into the remset
+                if let Some(tls) = tls {
+                    use crate::vm::ActivePlan;
+
+                    VM::VMActivePlan::mutator(tls).object_remset.push(object);
+
+                    // pin the object so that even if this object is still pointed by
+                    // some other private object, that private object will never contain
+                    // a stale pointer
+                    crate::memory_manager::pin_object(object);
+                }
                 VM::VMScanning::scan_object(
                     crate::util::VMWorkerThread(crate::util::VMThread::UNINITIALIZED),
                     object,

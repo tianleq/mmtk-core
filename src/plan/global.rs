@@ -4,7 +4,7 @@ use super::PlanConstraints;
 use crate::global_state::GlobalState;
 use crate::mmtk::MMTK;
 use crate::plan::tracing::ObjectQueue;
-use crate::plan::Mutator;
+use crate::plan::{Mutator, Pause};
 use crate::policy::immortalspace::ImmortalSpace;
 use crate::policy::largeobjectspace::LargeObjectSpace;
 use crate::policy::space::{PlanCreateSpaceArgs, Space};
@@ -211,6 +211,7 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
         if let Some(gen) = self.generational() {
             gen.force_full_heap_collection();
         }
+        println!("emergency collection triggered");
     }
 
     /// Ask the plan if they would trigger a GC. If MMTk is in charge of triggering GCs, this method is called
@@ -258,14 +259,6 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
         _tls: VMMutatorThread,
         _mmtk: &'static MMTK<Self::VM>,
         _worker: &mut GCWorker<Self::VM>,
-    ) {
-    }
-
-    #[cfg(feature = "thread_local_gc")]
-    fn do_thread_local_update_remset(
-        &'static self,
-        _tls: VMMutatorThread,
-        _mmtk: &'static MMTK<Self::VM>,
     ) {
     }
 
@@ -678,6 +671,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for BasePlan<VM> {
         &self,
         _mutator: &mut Mutator<VM>,
         _source: ObjectReference,
+        _slot: Option<VM::VMSlot>,
         object: ObjectReference,
         _worker: Option<*mut GCWorker<VM>>,
     ) -> ThreadlocalTracedObjectType {
@@ -741,64 +735,6 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for BasePlan<VM> {
     fn thread_local_may_move_objects<const KIND: TraceKind>() -> bool {
         false
     }
-
-    fn thread_local_update_remset<const KIND: TraceKind>(
-        &self,
-        _mutator: &mut Mutator<VM>,
-        _source: ObjectReference,
-        _slot: <VM as VMBinding>::VMSlot,
-        object: ObjectReference,
-        _worker: Option<*mut GCWorker<VM>>,
-    ) -> ThreadlocalTracedObjectType {
-        #[cfg(feature = "code_space")]
-        if self.code_space.in_space(object) {
-            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
-                &self.code_space,
-                _mutator,
-                _source,
-                object,
-                _worker,
-                None,
-            );
-        }
-
-        #[cfg(feature = "code_space")]
-        if self.code_lo_space.in_space(object) {
-            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
-                &self.code_lo_space,
-                _mutator,
-                _source,
-                object,
-                _worker,
-                None,
-            );
-        }
-
-        #[cfg(feature = "ro_space")]
-        if self.ro_space.in_space(object) {
-            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
-                &self.ro_space,
-                _mutator,
-                object,
-                _worker,
-                None,
-            );
-        }
-
-        #[cfg(feature = "vm_space")]
-        if self.vm_space.in_space(object) {
-            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
-                &self.vm_space,
-                _mutator,
-                _source,
-                object,
-                _worker,
-                None,
-            );
-        }
-
-        ThreadlocalTracedObjectType::Scanned(object)
-    }
 }
 
 cfg_if::cfg_if! {
@@ -856,26 +792,18 @@ impl<VM: VMBinding> CommonPlan<VM> {
             + self.base.get_used_pages()
     }
 
-    pub fn prepare(&mut self, tls: VMWorkerThread, full_heap: bool) {
+    pub fn prepare(&mut self, tls: VMWorkerThread, full_heap: bool, _pause: Pause) {
         self.immortal.prepare();
         self.los.prepare(full_heap);
         self.prepare_nonmoving_space(full_heap);
         self.base.prepare(tls, full_heap)
     }
 
-    pub fn release(&mut self, tls: VMWorkerThread, full_heap: bool) {
+    pub fn release(&mut self, tls: VMWorkerThread, full_heap: bool, _pause: Pause) {
         self.immortal.release();
         self.los.release(full_heap);
         self.release_nonmoving_space(full_heap);
         self.base.release(tls, full_heap);
-    }
-
-    pub fn prepare_public_collection(&mut self, tls: VMWorkerThread, full_heap: bool) {
-        self.prepare(tls, full_heap);
-    }
-
-    pub fn release_public_collection(&mut self, tls: VMWorkerThread, full_heap: bool) {
-        self.release(tls, full_heap);
     }
 
     pub fn end_of_gc(&mut self, tls: VMWorkerThread) {
@@ -997,6 +925,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
         &self,
         mutator: &mut Mutator<VM>,
         source: ObjectReference,
+        slot: Option<VM::VMSlot>,
         object: ObjectReference,
         worker: Option<*mut GCWorker<VM>>,
     ) -> ThreadlocalTracedObjectType {
@@ -1007,6 +936,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
                 &self.immortal,
                 mutator,
                 source,
+                slot,
                 object,
                 worker,
                 None,
@@ -1017,6 +947,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
                 &self.los,
                 mutator,
                 source,
+                slot,
                 object,
                 worker,
                 None,
@@ -1029,6 +960,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
                         &self.nonmoving,
                         mutator,
                         source,
+                        slot,
                         object,
                         worker,
                         None,
@@ -1058,7 +990,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
             }
         }
         <BasePlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
-            &self.base, mutator, source, object, worker,
+            &self.base, mutator, source, slot, object, worker,
         )
     }
 
@@ -1079,80 +1011,6 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
             || <LargeObjectSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_may_move_objects::<KIND>()
             || <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_may_move_objects::<KIND>()
             || <BasePlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_may_move_objects::<KIND>()
-    }
-
-    fn thread_local_update_remset<const KIND: TraceKind>(
-        &self,
-        mutator: &mut Mutator<VM>,
-        source: ObjectReference,
-        slot: <VM as VMBinding>::VMSlot,
-        object: ObjectReference,
-        worker: Option<*mut GCWorker<VM>>,
-    ) -> ThreadlocalTracedObjectType {
-        if self.immortal.in_space(object) {
-            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_update_remset::<
-                KIND,
-            >(
-                &self.immortal,
-                mutator,
-                source,
-                slot,
-                object,
-                worker,
-                None,
-            );
-        }
-        if self.los.in_space(object) {
-            return <LargeObjectSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_update_remset::<KIND>(
-                &self.los,
-                mutator,
-                source,
-                slot,
-                object,
-                worker,
-                None,
-            );
-        }
-        if self.nonmoving.in_space(object) {
-            cfg_if::cfg_if! {
-                if #[cfg(feature = "immortal_as_nonmoving")] {
-                    return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
-                        &self.nonmoving,
-                        mutator,
-                        source,
-                        object,
-                        worker,
-                        None,
-                    );
-                } else if #[cfg(feature = "marksweep_as_nonmoving")] {
-                    use crate::policy::marksweepspace::native_ms::MarkSweepSpace;
-                    return <MarkSweepSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_update_remset::<KIND>(
-                        &self.nonmoving,
-                        mutator,
-                        source,
-                        slot,
-                        object,
-                        worker,
-                        None,
-                    );
-                } else {
-                    use crate::policy::immix::ImmixSpace;
-                    // Immix requires extra args.
-                    return <ImmixSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_update_remset::<KIND>(
-                        &self.nonmoving,
-                        mutator,
-                        source,
-                        slot,
-                        object,
-                        worker,
-                        None,
-                    );
-                }
-            }
-        }
-        <BasePlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_update_remset::<KIND>(
-            &self.base, mutator, source, slot, object, worker,
-        )
     }
 }
 #[cfg(feature = "thread_local_gc")]
@@ -1239,15 +1097,7 @@ pub trait PlanThreadlocalTraceObject<VM: VMBinding> {
         &self,
         mutator: &mut Mutator<VM>,
         source: ObjectReference,
-        object: ObjectReference,
-        worker: Option<*mut GCWorker<VM>>,
-    ) -> ThreadlocalTracedObjectType;
-
-    fn thread_local_update_remset<const KIND: TraceKind>(
-        &self,
-        mutator: &mut Mutator<VM>,
-        source: ObjectReference,
-        slot: VM::VMSlot,
+        slot: Option<VM::VMSlot>,
         object: ObjectReference,
         worker: Option<*mut GCWorker<VM>>,
     ) -> ThreadlocalTracedObjectType;

@@ -65,7 +65,8 @@ impl<VM: VMBinding> CommonGenPlan<VM> {
         if full_heap {
             self.full_heap_gc_count.lock().unwrap().inc();
         }
-        self.common.prepare(tls, full_heap);
+        self.common
+            .prepare(tls, full_heap, crate::plan::Pause::Full);
         self.nursery.prepare(true);
         self.nursery
             .set_copy_for_sft_trace(Some(CopySemantics::PromoteToMature));
@@ -74,7 +75,8 @@ impl<VM: VMBinding> CommonGenPlan<VM> {
     /// Release Gen. This should be called by a single thread in GC release work.
     pub fn release(&mut self, tls: VMWorkerThread) {
         let full_heap = !self.is_current_gc_nursery();
-        self.common.release(tls, full_heap);
+        self.common
+            .release(tls, full_heap, crate::plan::Pause::Full);
         self.nursery.release();
     }
 

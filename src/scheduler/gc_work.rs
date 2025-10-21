@@ -240,26 +240,30 @@ impl<VM: VMBinding> GCWork<VM> for DefragMutator<VM> {
     }
 }
 
+pub enum ScanStackSemantic {
+    Normal,
+    RootsOnly,
+}
 /// Stop all mutators
 ///
 /// TODO: Smaller work granularity
 // #[derive(Default)]
 pub struct StopMutators<C: GCWorkContext> {
-    scan_stack: bool,
+    semantic: ScanStackSemantic,
     _p: PhantomData<C>,
 }
 
 impl<C: GCWorkContext> StopMutators<C> {
     pub fn new() -> Self {
         Self {
-            scan_stack: true,
+            semantic: ScanStackSemantic::Normal,
             _p: PhantomData,
         }
     }
 
-    pub fn new_with_args(scan: bool) -> Self {
+    pub fn new_with_args(semantic: ScanStackSemantic) -> Self {
         Self {
-            scan_stack: scan,
+            semantic,
             _p: PhantomData,
         }
     }
@@ -280,21 +284,28 @@ impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
             #[cfg(feature = "thread_local_gc_copying")]
             {
                 // A public GC does not need to scan stack roots
-                if self.scan_stack {
-                    if mmtk
-                        .get_plan()
-                        .defrag_mutator_required(mmtk, mutator.mutator_tls)
-                    {
-                        #[cfg(debug_assertions)]
-                        info!("mutator: {} needs defragmentation", mutator.mutator_id);
+                match self.semantic {
+                    ScanStackSemantic::Normal => {
+                        if mmtk
+                            .get_plan()
+                            .defrag_mutator_required(mmtk, mutator.mutator_tls)
+                        {
+                            #[cfg(debug_assertions)]
+                            info!("mutator: {} needs defragmentation", mutator.mutator_id);
 
-                        // DefragMutator will evacuate public object as well, so no need to create ScanMutatorRoots packet
-                        mmtk.scheduler.work_buckets[WorkBucketStage::DefragMutator]
-                            .add(DefragMutator::<C::VM>::new(mutator.mutator_tls));
-                        panic!("should not reach here");
-                    } else {
-                        mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
-                            .add(ScanMutatorRoots::<C>(mutator));
+                            // DefragMutator will evacuate public object as well, so no need to create ScanMutatorRoots packet
+                            mmtk.scheduler.work_buckets[WorkBucketStage::DefragMutator]
+                                .add(DefragMutator::<C::VM>::new(mutator.mutator_tls));
+                            panic!("should not reach here");
+                        } else {
+                            mmtk.scheduler.work_buckets[WorkBucketStage::Prepare]
+                                .add(ScanMutatorRoots::<C>(mutator));
+                        }
+                    }
+                    ScanStackSemantic::RootsOnly => {
+                        use crate::plan::CollectMutatorRoots;
+                        mmtk.scheduler.work_buckets[WorkBucketStage::Local]
+                            .add(CollectMutatorRoots::<C>(mutator));
                     }
                 }
             }

@@ -3,7 +3,7 @@ use super::line::*;
 use super::{block::*, defrag::Defrag};
 #[cfg(feature = "thread_local_gc")]
 use crate::plan::ThreadlocalTracedObjectType;
-use crate::plan::VectorObjectQueue;
+use crate::plan::{Pause, VectorObjectQueue};
 use crate::policy::gc_work::{
     TraceKind, DEFAULT_TRACE, TRACE_KIND_PUBLIC, TRACE_KIND_TRANSITIVE_PIN, TRACE_KIND_UPDATE,
     TRACE_KIND_VERIFY,
@@ -281,7 +281,6 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
             #[cfg(debug_assertions)]
             {
                 let public = is_public(object);
-
                 if public {
                     debug_assert!(self.is_marked(object), "public object:{:?} missing", object,);
                     debug_assert!(
@@ -691,7 +690,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Release for the immix space.
-    pub fn release(&mut self, major_gc: bool) {
+    pub fn release(&mut self, major_gc: bool, pause: Pause) {
         if major_gc {
             // Update line_unavail_state for hole searching after this GC.
             if !super::BLOCK_ONLY {
@@ -707,7 +706,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             self.sparse_reusable_blocks.reset();
         }
         // Sweep chunks and blocks
-        let work_packets = self.generate_sweep_tasks();
+        let work_packets = self.generate_sweep_tasks(pause);
         self.scheduler().work_buckets[WorkBucketStage::Release].bulk_add(work_packets);
 
         self.lines_consumed.store(0, Ordering::Relaxed);
@@ -775,7 +774,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     }
 
     /// Generate chunk sweep tasks
-    fn generate_sweep_tasks(&self) -> Vec<Box<dyn GCWork<VM>>> {
+    fn generate_sweep_tasks(&self, pause: Pause) -> Vec<Box<dyn GCWork<VM>>> {
         self.defrag.mark_histograms.lock().clear();
         // # Safety: ImmixSpace reference is always valid within this collection cycle.
         let space = unsafe { &*(self as *const Self) };
@@ -790,6 +789,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 space,
                 chunk,
                 epilogue: epilogue.clone(),
+                pause,
             })
         });
         epilogue.counter.store(tasks.len(), Ordering::SeqCst);
@@ -1976,11 +1976,18 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
         &self,
         mutator: &mut Mutator<VM>,
         source: ObjectReference,
+        slot: Option<VM::VMSlot>,
         object: ObjectReference,
         _worker: Option<*mut GCWorker<VM>>,
         _copy: Option<CopySemantics>,
     ) -> ThreadlocalTracedObjectType {
-        if crate::util::metadata::public_bit::is_public(object) {
+        // Update remset
+        if is_public(object) {
+            if !is_public(source) {
+                // found a private --> public (root slot will not enter this branch since source == object when it is a root)
+                // slot will never be None here
+                mutator.slot_remset.push(slot.unwrap());
+            }
             return ThreadlocalTracedObjectType::Scanned(object);
         }
         if KIND == TRACE_KIND_THREAD_LOCAL_FAST {
@@ -2066,40 +2073,6 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
         return true;
         #[cfg(feature = "thread_local_gc_ibm_style")]
         return false;
-    }
-
-    fn thread_local_update_remset<const KIND: TraceKind>(
-        &self,
-        mutator: &mut Mutator<VM>,
-        source: ObjectReference,
-        slot: <VM as VMBinding>::VMSlot,
-        object: ObjectReference,
-        worker: Option<*mut GCWorker<VM>>,
-        copy: Option<CopySemantics>,
-    ) -> ThreadlocalTracedObjectType {
-        // public block is now defrag source, so simply leave those public
-        // objects in place
-        if crate::util::metadata::public_bit::is_public(object) {
-            // found private --> public, store public object to the remember set
-            // stack slot will not be captured here as in that case, source
-            // and object are the same, so it will never enter the following
-            // branch
-
-            use crate::vm::slot::Slot;
-            debug_assert!(
-                slot.load().unwrap() == object,
-                "slot: {:?}, slot->object: {:?}, object: {:?}",
-                slot,
-                slot.load().unwrap(),
-                object
-            );
-            if !crate::util::metadata::public_bit::is_public(source) {
-                mutator.remember_set.push(slot);
-            }
-
-            return ThreadlocalTracedObjectType::Scanned(object);
-        }
-        self.thread_local_trace_object::<KIND>(mutator, source, object, worker, copy)
     }
 }
 
@@ -2233,6 +2206,7 @@ struct SweepChunk<VM: VMBinding> {
     chunk: Chunk,
     /// A destructor invoked when all `SweepChunk` packets are finished.
     epilogue: Arc<FlushPageResource<VM>>,
+    pause: Pause,
 }
 
 impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
@@ -2257,6 +2231,7 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
         let is_defrag_gc = self.space.defrag.in_defrag();
         // number of allocated blocks.
         let mut allocated_blocks = 0;
+
         // Iterate over all allocated blocks in this chunk.
         for block in self
             .chunk
@@ -2286,10 +2261,26 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
                     }
                 }
             }
-
-            if !block.sweep(self.space, &mut histogram, line_mark_state) {
-                // Block is live. Increment the allocated block count.
-                allocated_blocks += 1;
+            match self.pause {
+                Pause::Full => {
+                    if !block.sweep(self.space, &mut histogram, line_mark_state) {
+                        // Block is live. Increment the allocated block count.
+                        allocated_blocks += 1;
+                    }
+                }
+                Pause::InitialMark => todo!(),
+                Pause::FinalMark => todo!(),
+                Pause::Public => {
+                    // In a public GC, dirty blocks are treated differently, as
+                    // private objects are conservatively treated as alive
+                    if block.is_block_dirty() {
+                        block.sweep_dirty_block(self.space, &mut histogram, line_mark_state);
+                        allocated_blocks += 1;
+                    } else if !block.sweep(self.space, &mut histogram, line_mark_state) {
+                        // Block is live. Increment the allocated block count.
+                        allocated_blocks += 1;
+                    }
+                }
             }
         }
         probe!(mmtk, sweep_chunk, allocated_blocks);

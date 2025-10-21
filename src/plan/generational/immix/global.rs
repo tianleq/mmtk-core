@@ -140,7 +140,8 @@ impl<VM: VMBinding> Plan for GenImmix<VM> {
         let full_heap = !self.gen.is_current_gc_nursery();
         self.gen.release(tls);
         if full_heap {
-            self.immix_space.release(full_heap);
+            self.immix_space
+                .release(full_heap, crate::plan::Pause::Full);
         }
         self.last_gc_was_full_heap
             .store(full_heap, Ordering::Relaxed);

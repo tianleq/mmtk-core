@@ -45,8 +45,12 @@ impl<VM: VMBinding> GCWork<VM> for UpdateReferences<VM> {
         mmtk.state.prepare_for_stack_scanning();
         // Prepare common and base spaces for the 2nd round of transitive closure
         let plan_mut = unsafe { &mut *(self.plan as *mut MarkCompact<VM>) };
-        plan_mut.common.release(worker.tls, true);
-        plan_mut.common.prepare(worker.tls, true);
+        plan_mut
+            .common
+            .release(worker.tls, true, crate::plan::Pause::Full);
+        plan_mut
+            .common
+            .prepare(worker.tls, true, crate::plan::Pause::Full);
         #[cfg(feature = "extreme_assertions")]
         mmtk.slot_logger.reset();
 

@@ -48,12 +48,12 @@ impl<VM: VMBinding> Plan for PageProtect<VM> {
     }
 
     fn prepare(&mut self, tls: VMWorkerThread) {
-        self.common.prepare(tls, true);
+        self.common.prepare(tls, true, crate::plan::Pause::Full);
         self.space.prepare(true);
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
-        self.common.release(tls, true);
+        self.common.release(tls, true, crate::plan::Pause::Full);
         self.space.release(true);
     }
 

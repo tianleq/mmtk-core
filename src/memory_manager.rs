@@ -1021,7 +1021,7 @@ pub fn mmtk_set_public_bit<VM: VMBinding>(
 
 #[cfg(all(feature = "public_bit", not(feature = "debug_thread_local_gc_copying")))]
 pub fn mmtk_publish_object<VM: VMBinding>(
-    _tls: VMMutatorThread,
+    tls: VMMutatorThread,
     _mmtk: &'static MMTK<VM>,
     _object: Option<ObjectReference>,
 ) {
@@ -1030,6 +1030,15 @@ pub fn mmtk_publish_object<VM: VMBinding>(
             return;
         }
 
+        // Newly published objects need to be pinned and pushed to the remset
+        let mutator_tls = if VM::VMActivePlan::is_mutator(tls.0) {
+            VM::VMActivePlan::mutator(tls).object_remset.push(object);
+            pin_object(object);
+            Some(tls)
+        } else {
+            None
+        };
+
         let mut closure: crate::plan::PublishObjectClosure<VM> =
             crate::plan::PublishObjectClosure::<VM>::new(
                 _mmtk,
@@ -1037,14 +1046,14 @@ pub fn mmtk_publish_object<VM: VMBinding>(
                 u32::MAX,
             );
 
-        _mmtk_set_public_bit(_tls, _mmtk, object);
+        _mmtk_set_public_bit(tls, _mmtk, object);
         // Publish all the descendants
         VM::VMScanning::scan_object(
             VMWorkerThread(VMThread::UNINITIALIZED),
             object,
             &mut closure,
         );
-        closure.do_closure();
+        closure.do_closure(mutator_tls);
     }
 }
 
@@ -1065,7 +1074,8 @@ pub fn mmtk_publish_runtime_object<VM: VMBinding>(
                 #[cfg(feature = "debug_publish_object")]
                 u32::MAX,
             );
-
+        // Nothing needs to be pushed into the remset because all objects here
+        // are known staticly to be public
         #[cfg(feature = "debug_publish_object")]
         crate::util::metadata::public_bit::set_public_bit::<VM>(object, None);
         #[cfg(not(feature = "debug_publish_object"))]
@@ -1078,7 +1088,7 @@ pub fn mmtk_publish_runtime_object<VM: VMBinding>(
             object,
             &mut closure,
         );
-        closure.do_closure();
+        closure.do_closure(None);
     }
 }
 

@@ -128,7 +128,9 @@ impl<VM: VMBinding> Plan for StickyImmix<VM> {
 
     fn release(&mut self, tls: crate::util::VMWorkerThread) {
         if self.is_current_gc_nursery() {
-            self.immix.immix_space.release(false);
+            self.immix
+                .immix_space
+                .release(false, crate::plan::Pause::Full);
             self.immix.common.los.release(false);
         } else {
             self.immix.release(tls);

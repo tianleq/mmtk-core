@@ -1,5 +1,6 @@
 #[cfg(not(feature = "debug_publish_object"))]
 use crate::util::metadata::public_bit::set_public_bit;
+use crate::vm::slot::Slot;
 use crate::{plan::barriers::BarrierSemantics, util::VMMutatorThread};
 use crate::{
     plan::PublishObjectClosure,
@@ -31,6 +32,18 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
         }
     }
 
+    fn update_remset(&self, slot: VM::VMSlot) {
+        // Assumption here is objects published by Non-Java thread are globally reachable
+        // So only keep track of objects published by Java thread
+        if VM::VMActivePlan::is_mutator(self.tls.0) {
+            VM::VMActivePlan::mutator(self.tls).slot_remset.push(slot);
+        } else {
+            // This should not be necessary, non-java thread should be part of VM specific roots
+            // so all such public objects should be correctly forwarded if necessary
+            panic!("should not reach here, non-java thread: {:?}", self.tls);
+        }
+    }
+
     fn trace_public_object(
         &mut self,
         _src: ObjectReference,
@@ -54,13 +67,35 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
             #[cfg(feature = "debug_thread_local_gc_copying")]
             self.tls,
         );
-        // // Assumption here is objects published by Non-Java thread are globally reachable
-        // // So only keep track of objects published by Java thread
-        // if VM::VMActivePlan::is_mutator(self.tls.0) {
-        //     VM::VMActivePlan::mutator(self.tls).remember_set.push(_slot);
-        // }
+
+        // Assumption here is objects published by Non-Java thread are globally reachable
+        // So only keep track of objects published by Java thread
+        let tls = if VM::VMActivePlan::is_mutator(self.tls.0) {
+            VM::VMActivePlan::mutator(self.tls)
+                .object_remset
+                .push(value);
+
+            // pin the object so that even if this object is still pointed by
+            // some other private object, that private object will never contain
+            // a stale pointer
+            crate::memory_manager::pin_object(value);
+            Some(self.tls)
+        } else {
+            panic!("should not reach here, non-java thread: {:?}", self.tls);
+            None
+        };
+
+        let mut children = vec![];
+        let mut slots = vec![];
+        value.iterate_fields::<VM, _>(|slot| {
+            if let Some(child) = slot.load() {
+                slots.push(slot);
+                children.push(child);
+            }
+        });
+
         VM::VMScanning::scan_object(VMWorkerThread(VMThread::UNINITIALIZED), value, &mut closure);
-        closure.do_closure();
+        closure.do_closure(tls);
 
         #[cfg(feature = "debug_thread_local_gc_copying")]
         {
@@ -86,11 +121,12 @@ impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM>
 
     fn object_reference_write_slow(
         &mut self,
-        src: ObjectReference,
+        _src: ObjectReference,
         _slot: VM::VMSlot,
-        target: Option<ObjectReference>,
+        _target: Option<ObjectReference>,
     ) {
-        self.trace_public_object(src, _slot, target.unwrap())
+        // self.trace_public_object(src, _slot, target.unwrap())
+        panic!("should not reach here");
     }
 
     fn flush(&mut self) {}
@@ -99,28 +135,49 @@ impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM>
 
     fn object_array_copy_slow(
         &mut self,
-        _src_base: ObjectReference,
-        _dst_base: ObjectReference,
+        src_base: ObjectReference,
+        dst_base: ObjectReference,
         src: <Self::VM as VMBinding>::VMMemorySlice,
-        _dst: <Self::VM as VMBinding>::VMMemorySlice,
+        dst: <Self::VM as VMBinding>::VMMemorySlice,
     ) {
         // publish all objects in the src slice
 
+        use crate::util::metadata::public_bit::is_public;
         use crate::vm::slot::MemorySlice;
         use crate::vm::slot::Slot;
-        for slot in src.iter_slots() {
-            // info!("array_copy_slow:: slot: {:?}", slot);
 
-            let object = slot.load();
-            // although src array is private, it may contain
-            // public objects, so need to rule out those public
-            // objects
-            if let Some(obj) = object {
-                use crate::util::metadata::public_bit::is_public;
-
-                if !is_public(obj) {
-                    self.trace_public_object(_dst_base, slot, obj)
+        if is_public(dst_base) {
+            if !is_public(src_base) {
+                for slot in src.iter_slots() {
+                    let object = slot.load();
+                    // although src array is private, it may contain
+                    // public objects, so need to rule out those public
+                    // objects
+                    if let Some(obj) = object {
+                        if !is_public(obj) {
+                            self.trace_public_object(dst_base, slot, obj)
+                        }
+                    }
                 }
+            }
+        } else {
+            debug_assert_eq!(src.bytes(), dst.bytes());
+            // now we know dst_base is private, but src might still contain public objects,
+            // so for any slot that is about to be containing a public objects, it needs to
+            // be put into the remset
+            let mut slots = dst.iter_slots();
+            for s in src.iter_slots() {
+                let slot = slots.next().unwrap();
+                if let Some(object) = s.load() {
+                    if is_public(object) {
+                        self.update_remset(slot);
+                    }
+                }
+            }
+            #[cfg(debug_assertions)]
+            {
+                use crate::plan::immix::GLOBAL_REMSET;
+                GLOBAL_REMSET.lock().unwrap().insert(dst_base);
             }
         }
     }
@@ -128,5 +185,79 @@ impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM>
     #[cfg(all(feature = "debug_publish_object", debug_assertions))]
     fn get_object_owner(&self, _object: ObjectReference) -> u32 {
         self.mmtk.get_plan().get_object_owner(_object).unwrap()
+    }
+
+    /// Slow-path call for object field write operations.
+    fn object_reference_write_s1(
+        &mut self,
+        src: ObjectReference,
+        slot: <Self::VM as VMBinding>::VMSlot,
+        target: Option<ObjectReference>,
+    ) {
+        use crate::util::metadata::public_bit::is_public;
+        // slot might not be valid but it is not used
+
+        let val = target.unwrap();
+        debug_assert!(is_public(src), "source: {} should be public", src);
+        debug_assert!(!is_public(val), "target: {} should be private", val);
+        // object publication semantic
+        self.trace_public_object(src, slot, val)
+    }
+
+    /// Slow-path call for object field write operations.
+    fn object_reference_write_s2(
+        &mut self,
+        src: ObjectReference,
+        slot: <Self::VM as VMBinding>::VMSlot,
+        target: Option<ObjectReference>,
+    ) {
+        // private --> public remset semantic
+
+        use crate::{
+            util::{constants::BYTES_IN_ADDRESS, metadata::public_bit::is_public},
+            vm::slot::Slot,
+        };
+        debug_assert!(!is_public(src), "source: {} should be private", src);
+        debug_assert!(
+            is_public(target.unwrap()),
+            "target: {} should be public",
+            target.unwrap()
+        );
+        debug_assert!(
+            slot.to_address().is_aligned_to(BYTES_IN_ADDRESS),
+            "invalid slot: {:?}",
+            slot
+        );
+        self.update_remset(slot);
+        #[cfg(debug_assertions)]
+        {
+            use crate::plan::immix::GLOBAL_REMSET;
+            GLOBAL_REMSET.lock().unwrap().insert(src);
+        }
+    }
+
+    fn object_reference_write_s3(
+        &mut self,
+        src: ObjectReference,
+        _slot: <Self::VM as VMBinding>::VMSlot,
+        target: Option<ObjectReference>,
+    ) {
+        // private --> public remset semantic
+
+        use crate::util::metadata::public_bit::is_public;
+        debug_assert!(!is_public(src), "source: {} should be private", src);
+        debug_assert!(
+            is_public(target.unwrap()),
+            "target: {} should be public",
+            target.unwrap()
+        );
+        src.iterate_fields::<VM, _>(|slot| {
+            self.update_remset(slot);
+        });
+        #[cfg(debug_assertions)]
+        {
+            use crate::plan::immix::GLOBAL_REMSET;
+            GLOBAL_REMSET.lock().unwrap().insert(src);
+        }
     }
 }

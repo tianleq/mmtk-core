@@ -67,12 +67,12 @@ impl<VM: VMBinding> Plan for Compressor<VM> {
     }
 
     fn prepare(&mut self, tls: VMWorkerThread) {
-        self.common.prepare(tls, true);
+        self.common.prepare(tls, true, crate::plan::Pause::Full);
         self.compressor_space.prepare();
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
-        self.common.release(tls, true);
+        self.common.release(tls, true, crate::plan::Pause::Full);
         self.compressor_space.release();
     }
 

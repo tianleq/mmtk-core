@@ -5,6 +5,7 @@ use crate::plan::VectorObjectQueue;
 use crate::policy::gc_work::TRACE_KIND_PUBLIC;
 use crate::policy::gc_work::TRACE_KIND_UPDATE;
 use crate::policy::gc_work::TRACE_KIND_VERIFY;
+use crate::policy::gc_work::TRACE_KIND_VERIFY_PUBLIC;
 use crate::policy::sft::GCWorkerMutRef;
 use crate::policy::sft::SFT;
 use crate::policy::space::{CommonSpace, Space};
@@ -226,7 +227,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LargeObjec
         _copy: Option<CopySemantics>,
         _worker: &mut GCWorker<VM>,
     ) -> ObjectReference {
-        if KIND == TRACE_KIND_VERIFY {
+        if KIND == TRACE_KIND_VERIFY_PUBLIC {
             #[cfg(debug_assertions)]
             {
                 if is_public(object) {
@@ -235,7 +236,30 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LargeObjec
                         "public los object: {:?} is missing",
                         object
                     );
+                } else {
+                    assert!(
+                        !self.is_marked(object),
+                        "private los object: {:?} should not be marked",
+                        object
+                    );
                 }
+
+                let mut objects = self.common.objects.lock().unwrap();
+                if !objects.contains(&object) {
+                    queue.enqueue(object);
+                    objects.insert(object);
+                }
+            }
+
+            object
+        } else if KIND == TRACE_KIND_VERIFY {
+            #[cfg(debug_assertions)]
+            {
+                assert!(
+                    self.is_marked(object),
+                    "los object: {:?} is missing",
+                    object
+                );
 
                 let mut objects = self.common.objects.lock().unwrap();
                 if !objects.contains(&object) {

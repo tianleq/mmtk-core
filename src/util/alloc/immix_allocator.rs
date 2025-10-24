@@ -289,7 +289,6 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         assert!(block.is_block_dirty(), "block: {:?} should be dirty", block);
                         #[cfg(not(feature = "sparse_immix_block"))]
                         self.local_reusable_blocks.push_dense_block(block);
-                        panic!("block: {:?}, should not reach here", block);
                     }
                 } else {
                     // always add non-reusable block back

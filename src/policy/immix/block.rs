@@ -741,10 +741,13 @@ impl Block {
                     // a line is public iff it is marked and line level public bit is set
                     let is_line_published = line.is_line_published();
 
-                    if is_line_published {
+                    if !is_block_public && is_line_published {
                         is_block_public = true;
                     } else {
-                        private_line_marked = true;
+                        #[cfg(feature = "thread_local_gc_copying")]
+                        {
+                            private_line_marked = true;
+                        }
                     }
                 } else {
                     if prev_line_is_marked {
@@ -790,11 +793,7 @@ impl Block {
                 }
                 // total_hole_size = std::cmp::max(total_hole_size, hole_size);
             }
-            assert!(
-                !private_line_marked,
-                "block: {:?} is corrupted, line mark state: {}",
-                self, line_mark_state
-            );
+
             if marked_lines == 0 {
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_region_swept::<VM, _>(self, false);
@@ -839,14 +838,15 @@ impl Block {
                     debug_assert!(private_line_marked, "block: {:?} corrupted", self);
                     debug_assert!(self.is_block_dirty(), "block: {:?} shoudl be dirty", self);
                     self.reset_publication();
-                    // In a public GC, dirty block is dealt with differently and should never reach here
-                    panic!("should not reach here, block: {:?}", self);
                 } else {
                     debug_assert!(self.is_block_published());
+                    // If no private lines marked, then no live private objects exist
+                    // so this block can go to the global pool
+                    // if !private_line_marked {
+                    //     self.reset_dirty();
+                    // }
                 }
-                // if !private_line_marked {
-                //     self.reset_dirty();
-                // }
+
                 // There are some marked lines. Keep the block live.
                 if marked_lines != Block::LINES {
                     // There are holes. Mark the block as reusable.
@@ -874,11 +874,6 @@ impl Block {
                                 #[cfg(debug_assertions)]
                                 {
                                     self.set_owner(Self::ANONYMOUS_OWNER);
-                                    assert!(
-                                        !private_line_marked,
-                                        "block: {:?} should be dirty",
-                                        self
-                                    );
                                 }
 
                                 if self.is_public_only_block() {

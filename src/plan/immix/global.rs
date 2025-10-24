@@ -21,8 +21,6 @@ use crate::policy::gc_work::TRACE_KIND_PUBLIC;
 #[cfg(feature = "thread_local_gc")]
 use crate::policy::immix::block::Block;
 use crate::policy::immix::ImmixSpaceArgs;
-use crate::policy::immix::TRACE_KIND_DEFRAG;
-use crate::policy::immix::TRACE_KIND_FAST;
 #[cfg(not(feature = "thread_local_gc"))]
 use crate::policy::immix::{TRACE_KIND_DEFRAG, TRACE_KIND_FAST};
 use crate::policy::space::Space;
@@ -135,22 +133,28 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
-        if self.full_heap_gc_pending.load(Ordering::Acquire) {
-            self.current_pause
-                .store(Some(Pause::Full), Ordering::SeqCst);
-            Self::schedule_immix_full_heap_collection::<
-                Immix<VM>,
-                ImmixGCWorkContext<VM, TRACE_KIND_FAST>,
-                ImmixGCWorkContext<VM, TRACE_KIND_DEFRAG>,
-            >(self, &self.immix_space, scheduler);
-        } else {
-            self.current_pause
-                .store(Some(Pause::Public), Ordering::SeqCst);
-            Self::schedule_immix_public_collection::<
-                Immix<VM>,
-                ImmixGCWorkContext<VM, TRACE_KIND_PUBLIC>,
-            >(self, &self.immix_space, scheduler);
-        }
+        // if self.full_heap_gc_pending.load(Ordering::Acquire) {
+        //     self.current_pause
+        //         .store(Some(Pause::Full), Ordering::SeqCst);
+        //     Self::schedule_immix_full_heap_collection::<
+        //         Immix<VM>,
+        //         ImmixGCWorkContext<VM, TRACE_KIND_FAST>,
+        //         ImmixGCWorkContext<VM, TRACE_KIND_DEFRAG>,
+        //     >(self, &self.immix_space, scheduler);
+        // } else {
+        //     self.current_pause
+        //         .store(Some(Pause::Public), Ordering::SeqCst);
+        //     Self::schedule_immix_public_collection::<
+        //         Immix<VM>,
+        //         ImmixGCWorkContext<VM, TRACE_KIND_PUBLIC>,
+        //     >(self, &self.immix_space, scheduler);
+        // }
+        self.current_pause
+            .store(Some(Pause::Public), Ordering::SeqCst);
+        Self::schedule_immix_public_collection::<
+            Immix<VM>,
+            ImmixGCWorkContext<VM, TRACE_KIND_PUBLIC>,
+        >(self, &self.immix_space, scheduler);
     }
 
     #[cfg(feature = "thread_local_gc")]
@@ -312,7 +316,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
 
     fn get_collection_reserved_pages(&self) -> usize {
         let defrag_headroom = self.immix_space.defrag_headroom_pages();
-        let mut reserved = defrag_headroom << 2;
+        let mut reserved = defrag_headroom;
         #[cfg(feature = "thread_local_gc_copying")]
         {
             let options = self.options();
@@ -540,8 +544,11 @@ impl<VM: VMBinding> Immix<VM> {
             {
                 use crate::scheduler::single_thread_gc_work::STTrace;
                 // The following is for debug purpose
-                scheduler.work_buckets[WorkBucketStage::SecondRoots]
-                    .add(STTrace::<VM, Self>::new());
+                scheduler.work_buckets[WorkBucketStage::SecondRoots].add(STTrace::<
+                    VM,
+                    Self,
+                    { crate::policy::gc_work::TRACE_KIND_VERIFY_PUBLIC },
+                >::new());
             }
         }
 
@@ -576,6 +583,17 @@ impl<VM: VMBinding> Immix<VM> {
             scheduler.schedule_common_work::<DefragContext>(plan);
         } else {
             scheduler.schedule_common_work::<FastContext>(plan);
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            use crate::scheduler::single_thread_gc_work::STTrace;
+            // The following is for debug purpose
+            scheduler.work_buckets[WorkBucketStage::SecondRoots].add(STTrace::<
+                VM,
+                Self,
+                { crate::policy::gc_work::TRACE_KIND_VERIFY },
+            >::new());
         }
     }
 

@@ -6,7 +6,7 @@ use crate::plan::ThreadlocalTracedObjectType;
 use crate::plan::{Pause, VectorObjectQueue};
 use crate::policy::gc_work::{
     TraceKind, DEFAULT_TRACE, TRACE_KIND_PUBLIC, TRACE_KIND_TRANSITIVE_PIN, TRACE_KIND_UPDATE,
-    TRACE_KIND_VERIFY,
+    TRACE_KIND_VERIFY, TRACE_KIND_VERIFY_PUBLIC,
 };
 use crate::policy::sft::GCWorkerMutRef;
 use crate::policy::sft::SFT;
@@ -277,7 +277,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
             }
         } else if KIND == TRACE_KIND_FAST {
             self.trace_object_without_moving(queue, object)
-        } else if KIND == TRACE_KIND_VERIFY {
+        } else if KIND == TRACE_KIND_VERIFY_PUBLIC {
             #[cfg(debug_assertions)]
             {
                 let public = is_public(object);
@@ -312,6 +312,27 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
                         object
                     );
                 }
+                let mut objects = self.common.objects.lock().unwrap();
+                if !objects.contains(&object) {
+                    queue.enqueue(object);
+                    objects.insert(object);
+                }
+            }
+
+            object
+        } else if KIND == TRACE_KIND_VERIFY {
+            #[cfg(debug_assertions)]
+            {
+                debug_assert!(self.is_marked(object), "object:{:?} missing", object,);
+                debug_assert!(
+                    Line::is_object_marked::<VM>(
+                        self.line_mark_state.load(Ordering::Relaxed),
+                        object
+                    ),
+                    "object: {:?} has unmarked lines, line mark state: {}",
+                    object,
+                    self.line_mark_state.load(Ordering::Relaxed)
+                );
                 let mut objects = self.common.objects.lock().unwrap();
                 if !objects.contains(&object) {
                     queue.enqueue(object);
@@ -381,7 +402,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
             false
         } else if KIND == TRACE_KIND_PUBLIC {
             true
-        } else if KIND == TRACE_KIND_VERIFY {
+        } else if KIND == TRACE_KIND_VERIFY_PUBLIC || KIND == TRACE_KIND_VERIFY {
             false
         } else {
             unreachable!()

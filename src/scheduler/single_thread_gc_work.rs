@@ -1,6 +1,6 @@
 use crate::plan::Mutator;
 use crate::plan::{Plan, PlanTraceObject};
-use crate::policy::gc_work::{TraceKind, TRACE_KIND_VERIFY};
+use crate::policy::gc_work::TraceKind;
 use crate::scheduler::*;
 use crate::util::ObjectReference;
 use crate::vm::slot::Slot;
@@ -10,7 +10,7 @@ use crate::MMTK;
 
 use std::marker::PhantomData;
 
-pub struct STTrace<VM, P>
+pub struct STTrace<VM, P, const KIND: TraceKind>
 where
     VM: VMBinding,
     P: Plan<VM = VM> + PlanTraceObject<VM> + Send,
@@ -18,7 +18,7 @@ where
     phantom: PhantomData<(VM, P)>,
 }
 
-impl<VM, P> STTrace<VM, P>
+impl<VM, P, const KIND: TraceKind> STTrace<VM, P, KIND>
 where
     VM: VMBinding,
     P: Plan<VM = VM> + PlanTraceObject<VM> + Send,
@@ -86,29 +86,20 @@ where
 // /// Resume mutators and end GC.
 // Final,
 
-impl<VM, P> GCWork<VM> for STTrace<VM, P>
+impl<VM, P, const KIND: TraceKind> GCWork<VM> for STTrace<VM, P, KIND>
 where
     VM: VMBinding,
     P: Plan<VM = VM> + PlanTraceObject<VM> + Send,
 {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         // STPrepare::<VM, P>::new(mmtk).execute(worker, mmtk);
-        let mut closure =
-            STObjectGraphTraversalClosure::<VM, P, TRACE_KIND_VERIFY>::new(mmtk, worker);
+        let mut closure = STObjectGraphTraversalClosure::<VM, P, KIND>::new(mmtk, worker);
         // STStopMutators::<VM, P, DEFAULT_TRACE>::new().execute(&mut closure, worker, mmtk);
         for mutator in <VM as VMBinding>::VMActivePlan::mutators() {
-            STScanMutatorRoots::<VM, P, TRACE_KIND_VERIFY>::new(mutator).execute(
-                &mut closure,
-                worker,
-                mmtk,
-            );
+            STScanMutatorRoots::<VM, P, KIND>::new(mutator).execute(&mut closure, worker, mmtk);
         }
 
-        STScanVMSpecificRoots::<VM, P, TRACE_KIND_VERIFY>::new().execute(
-            &mut closure,
-            worker,
-            mmtk,
-        );
+        STScanVMSpecificRoots::<VM, P, KIND>::new().execute(&mut closure, worker, mmtk);
         (&mut closure).traverse();
         // STRelease::<VM, P>::new(mmtk).execute(worker, mmtk);
         // We implicitly resume mutators in Scheduler::on_gc_finished so we don't have a separate

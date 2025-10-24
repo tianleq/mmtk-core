@@ -203,6 +203,7 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessSlotRemset<VM
             slots: Some(slots),
             next_slots: VectorQueue::default(),
             worker: std::ptr::null_mut(),
+            #[cfg(debug_assertions)]
             mutator_id,
         }
     }
@@ -329,6 +330,7 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessObjectRemset<
             objects: Some(objects),
             next_objects: VectorQueue::default(),
             worker: std::ptr::null_mut(),
+            #[cfg(debug_assertions)]
             mutator_id,
         }
     }
@@ -361,24 +363,6 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessObjectRemset<
     fn scan_and_enqueue(&mut self, object: ObjectReference) {
         object.iterate_fields::<VM, _>(|s| {
             if let Some(val) = s.load() {
-                // #[cfg(debug_assertions)]
-                // {
-                //     if !is_public(val) {
-                //         VM::VMObjectModel::dump_object(val);
-                //         object.iterate_fields::<VM, _>(|s| {
-                //             if let Some(val) = s.load() {
-                //                 println!(
-                //                     "slot: {:?}, val: {:?}, public: {}",
-                //                     s,
-                //                     val,
-                //                     is_public(val)
-                //                 );
-                //             }
-                //         });
-                //         panic!("src: {:?}, slot: {:?}, val: {:?}", object, s, val);
-                //     }
-                // }
-
                 self.next_objects.push(val);
                 if self.next_objects.len() > Self::BUFFER_SIZE {
                     self.flush();
@@ -400,7 +384,6 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> GCWork<VM>
 {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         self.worker = worker;
-        // trace objects
         if let Some(objects) = self.objects.take() {
             self.process_objects(&objects)
         }

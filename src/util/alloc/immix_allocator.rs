@@ -871,12 +871,20 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
             #[cfg(debug_assertions)]
             {
+                let block: Block = Block::from_unaligned_address(rtn);
                 debug_assert!(
-                    self.mutator_id == Block::from_unaligned_address(rtn).owner(),
+                    self.mutator_id == block.owner(),
                     "mutator_id: {} != block owner: {}",
                     self.mutator_id,
                     Block::from_unaligned_address(rtn).owner()
                 );
+                if !is_mutator {
+                    debug_assert!(
+                        !block.is_defrag_source(),
+                        "new object: {:?} is in defrag source",
+                        rtn
+                    );
+                }
                 // if it is mutator, then the dirty bit must be set
                 debug_assert!(!is_mutator || Block::from_unaligned_address(rtn).is_block_dirty());
             }

@@ -249,15 +249,8 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessSlotRemset<VM
     fn process_slots(&mut self, slots: &[VM::VMSlot]) {
         for slot in slots.iter() {
             if let Some(object) = slot.load() {
-                // debug_assert!(
-                //     is_public(object),
-                //     "remset contians private object, slot: {:?}, object: {:?}",
-                //     slot,
-                //     object
-                // );
-
                 // slots may contain private objects as public object might be overwritten by
-                // some other private objects
+                // some other private object, so need to exclude those private ones
                 if is_public(object) {
                     let new_object = self.trace_object(object);
                     slot.store(new_object);
@@ -303,8 +296,8 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ObjectQueue
 pub struct ProcessObjectRemset<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> {
     plan: &'static P,
     objects: Option<Vec<ObjectReference>>,
-    // recursively generated objects
-    next_objects: VectorQueue<ObjectReference>,
+    // recursively generated slots
+    next_slots: VectorQueue<VM::VMSlot>,
     worker: *mut GCWorker<VM>,
     #[cfg(debug_assertions)]
     mutator_id: u32,
@@ -328,7 +321,7 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessObjectRemset<
         Self {
             plan,
             objects: Some(objects),
-            next_objects: VectorQueue::default(),
+            next_slots: VectorQueue::default(),
             worker: std::ptr::null_mut(),
             #[cfg(debug_assertions)]
             mutator_id,
@@ -342,11 +335,11 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessObjectRemset<
 
     #[cold]
     fn flush(&mut self) {
-        if !self.next_objects.is_empty() {
-            let objects = self.next_objects.take();
+        if !self.next_slots.is_empty() {
+            let slots = self.next_slots.take();
             let worker = self.worker();
-            let w = Self::new(
-                objects,
+            let w = ProcessSlotRemset::<VM, P>::new(
+                slots,
                 #[cfg(debug_assertions)]
                 self.mutator_id,
                 worker.mmtk,
@@ -362,11 +355,12 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessObjectRemset<
 
     fn scan_and_enqueue(&mut self, object: ObjectReference) {
         object.iterate_fields::<VM, _>(|s| {
-            if let Some(val) = s.load() {
-                self.next_objects.push(val);
-                if self.next_objects.len() > Self::BUFFER_SIZE {
-                    self.flush();
-                }
+            if s.load().is_none() {
+                return;
+            }
+            self.next_slots.push(s);
+            if self.next_slots.len() > Self::BUFFER_SIZE {
+                self.flush();
             }
         });
         self.plan.post_scan_object(object);
@@ -374,7 +368,8 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessObjectRemset<
 
     fn process_objects(&mut self, objects: &[ObjectReference]) {
         for object in objects.iter() {
-            self.trace_object(*object);
+            let new_object = self.trace_object(*object);
+            debug_assert_eq!(*object, new_object);
         }
     }
 }
@@ -387,13 +382,9 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> GCWork<VM>
         if let Some(objects) = self.objects.take() {
             self.process_objects(&objects)
         }
-
-        let mut next_objects = vec![];
-        while !self.next_objects.is_empty() {
-            next_objects.clear();
-            self.next_objects.swap(&mut next_objects);
-            self.process_objects(&next_objects);
-        }
+        // All pinned objects have been processed, the remaining
+        // part is to create ProcessSlotRemset work packet to
+        // process recursively generated slots
         self.flush();
     }
 }

@@ -292,11 +292,6 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 self.immix_space.release(true, pause);
             }
         }
-        #[cfg(debug_assertions)]
-        {
-            use crate::plan::immix::GLOBAL_REMSET;
-            GLOBAL_REMSET.lock().unwrap().clear();
-        }
     }
 
     fn end_of_gc(&mut self, tls: VMWorkerThread) {
@@ -308,6 +303,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         let full_pending = self.get_reserved_pages() >= (self.get_total_pages() * 90 / 100);
         self.full_heap_gc_pending
             .store(full_pending, Ordering::Release);
+        println!("end of global GC");
     }
 
     fn current_gc_may_move_object(&self) -> bool {

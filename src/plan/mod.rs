@@ -76,4 +76,3 @@ pub use semispace::SS_CONSTRAINTS;
 pub use sticky::immix::STICKY_IMMIX_CONSTRAINTS;
 
 pub(crate) use immix::Pause;
-pub use immix::GLOBAL_REMSET;

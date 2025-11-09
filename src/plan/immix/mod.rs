@@ -29,8 +29,3 @@ impl Default for Pause {
         Self::Full
     }
 }
-
-lazy_static! {
-    pub static ref GLOBAL_REMSET: std::sync::Mutex<std::collections::HashSet<crate::util::ObjectReference>> =
-        std::sync::Mutex::new(std::collections::HashSet::new());
-}

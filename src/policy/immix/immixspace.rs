@@ -282,7 +282,11 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
             {
                 let public = is_public(object);
                 if public {
-                    debug_assert!(self.is_marked(object), "public object:{:?} missing", object,);
+                    debug_assert!(
+                        self.is_marked(object),
+                        "public object: {:?} missing",
+                        object,
+                    );
                     debug_assert!(
                         Line::is_object_marked::<VM>(
                             self.line_mark_state.load(Ordering::Relaxed),
@@ -1092,9 +1096,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     // new_object != object
                     debug_assert!(
                         !Block::containing(new_object).is_defrag_source(),
-                        "Block {:?} containing forwarded object {} should not be a defragmentation source",
+                        "Block {:?} containing forwarded object {}|{} should not be a defragmentation source",
                         Block::containing(new_object),
                         new_object,
+                        object
                     );
                 }
             }
@@ -1146,19 +1151,23 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                     // The following assertion holds iff global reusable block is not defrag source
                     // if anything changes when determining defrag source, it needs to be revisited
                     #[cfg(debug_assertions)]
-                    debug_assert!(
-                        block.is_block_dirty()
-                            || block.owner() == Block::ANONYMOUS_OWNER
-                            || self
-                                .mutator_in_defrag
-                                .lock()
-                                .unwrap()
-                                .contains(&block.owner()),
-                        "object: {:?} | block: {:?} is not dirty but it is defrag source",
-                        object,
-                        block
-                    );
-                    debug_assert!(block.is_block_published());
+                    {
+                        debug_assert!(
+                            block.is_block_dirty()
+                                || block.owner() == Block::ANONYMOUS_OWNER
+                                || self
+                                    .mutator_in_defrag
+                                    .lock()
+                                    .unwrap()
+                                    .contains(&block.owner()),
+                            "object: {:?} | block: {:?} is not dirty but it is defrag source",
+                            object,
+                            block
+                        );
+                        debug_assert!(block.is_block_published());
+                        // println!("public object: {:?} left in-place", object);
+                    }
+
                     #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
                     self.left_in_place.lock().unwrap().insert(block);
                 }
@@ -1193,6 +1202,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                         crate::util::metadata::public_bit::set_public_bit(_new_object);
                     },
                 );
+                // println!("forward object: {} --> {}", object, new_object);
                 new_object
             };
             debug_assert_eq!(

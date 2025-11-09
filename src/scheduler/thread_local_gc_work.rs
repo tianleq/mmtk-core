@@ -3,6 +3,7 @@ use scheduler::GCWorker;
 use crate::plan::PlanThreadlocalTraceObject;
 use crate::plan::ThreadlocalTracedObjectType::*;
 use crate::policy::gc_work::TraceKind;
+use crate::util::metadata::public_bit::is_public;
 use crate::util::*;
 use crate::vm::slot::Slot;
 use crate::vm::*;
@@ -24,6 +25,7 @@ impl<VM: VMBinding> ExecuteThreadlocalCollection<VM> {
         let mutator = VM::VMActivePlan::mutator(self.mutator_tls);
         mutator.thread_local_gc_status = THREAD_LOCAL_GC_ACTIVE;
         info!("Start of Thread local GC {:?}", mutator.mutator_id,);
+        println!("Start of Thread local GC");
 
         // A hook of local gc, no-op at the moment
         self.mmtk
@@ -253,7 +255,7 @@ where
     VM: VMBinding,
 {
     tls: VMMutatorThread,
-    phantom: PhantomData<VM>,
+    _p: PhantomData<VM>,
 }
 
 impl<VM> ThreadStackWalker<VM>
@@ -263,7 +265,7 @@ where
     pub fn new(tls: VMMutatorThread) -> Self {
         Self {
             tls,
-            phantom: PhantomData,
+            _p: PhantomData,
         }
     }
 }
@@ -277,8 +279,26 @@ where
     }
 
     fn report_roots(&mut self, root_slots: Vec<VM::VMSlot>) {
+        // for slots containing null/private objects, there is no need to collect them
+        // #[cfg(debug_assertions)]
+        // {
+        //     root_slots
+        //         .iter()
+        //         .copied()
+        //         .filter(|slot| slot.load().is_some_and(is_public))
+        //         .for_each(|slot| println!("stack slot: {:?}, object: {:?}", slot, slot.load()));
+        // }
+
+        // cannot store stack roots into the slot remset as the remset is carried over to the next local GC
+        // but stack slots will become invalid shortly after the GC. Instead, push those stack slots into a
+        // dedicated buffer
         let mutator = VM::VMActivePlan::mutator(self.tls);
-        mutator.slot_remset.extend(root_slots.iter());
+        mutator.stack_slots.extend(
+            root_slots
+                .iter()
+                .copied()
+                .filter(|slot| slot.load().is_some_and(is_public)),
+        );
     }
 
     fn traverse(&mut self) {

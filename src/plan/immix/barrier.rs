@@ -1,6 +1,5 @@
 #[cfg(not(feature = "debug_publish_object"))]
 use crate::util::metadata::public_bit::set_public_bit;
-use crate::vm::slot::Slot;
 use crate::{plan::barriers::BarrierSemantics, util::VMMutatorThread};
 use crate::{
     plan::PublishObjectClosure,
@@ -85,14 +84,14 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
             None
         };
 
-        let mut children = vec![];
-        let mut slots = vec![];
-        value.iterate_fields::<VM, _>(|slot| {
-            if let Some(child) = slot.load() {
-                slots.push(slot);
-                children.push(child);
-            }
-        });
+        // let mut children = vec![];
+        // let mut slots = vec![];
+        // value.iterate_fields::<VM, _>(|slot| {
+        //     if let Some(child) = slot.load() {
+        //         slots.push(slot);
+        //         children.push(child);
+        //     }
+        // });
 
         VM::VMScanning::scan_object(VMWorkerThread(VMThread::UNINITIALIZED), value, &mut closure);
         closure.do_closure(tls);
@@ -174,11 +173,6 @@ impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM>
                     }
                 }
             }
-            #[cfg(debug_assertions)]
-            {
-                use crate::plan::immix::GLOBAL_REMSET;
-                GLOBAL_REMSET.lock().unwrap().insert(dst_base);
-            }
         }
     }
 
@@ -229,11 +223,6 @@ impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM>
             slot
         );
         self.update_remset(slot);
-        #[cfg(debug_assertions)]
-        {
-            use crate::plan::immix::GLOBAL_REMSET;
-            GLOBAL_REMSET.lock().unwrap().insert(src);
-        }
     }
 
     fn object_reference_write_s3(
@@ -254,10 +243,5 @@ impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM>
         src.iterate_fields::<VM, _>(|slot| {
             self.update_remset(slot);
         });
-        #[cfg(debug_assertions)]
-        {
-            use crate::plan::immix::GLOBAL_REMSET;
-            GLOBAL_REMSET.lock().unwrap().insert(src);
-        }
     }
 }

@@ -209,7 +209,9 @@ impl<VM: VMBinding> MutatorBuilder<VM> {
             #[cfg(feature = "thread_local_gc_copying")]
             slot_remset: Box::new(Vec::new()),
             #[cfg(feature = "thread_local_gc_copying")]
-            object_remset: Box::new(Vec::new())
+            object_remset: Box::new(Vec::new()),
+            #[cfg(feature = "thread_local_gc_copying")]
+            stack_slots: Box::new(Vec::new()),
         }
     }
 }
@@ -250,6 +252,8 @@ pub struct Mutator<VM: VMBinding> {
     pub(crate) slot_remset: Box<Vec<VM::VMSlot>>,
     #[cfg(feature = "thread_local_gc_copying")]
     pub(crate) object_remset: Box<Vec<ObjectReference>>,
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub(crate) stack_slots: Box<Vec<VM::VMSlot>>,
 }
 
 impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {

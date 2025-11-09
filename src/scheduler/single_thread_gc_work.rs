@@ -257,21 +257,32 @@ where
 
     fn process_slot(&mut self, _source: Option<ObjectReference>, slot: VM::VMSlot) {
         let Some(object) = slot.load() else { return };
-        // #[cfg(debug_assertions)]
-        // {
-        //     use crate::util::metadata::public_bit::is_public;
-        //     let global_remset = crate::plan::GLOBAL_REMSET.lock().unwrap();
+        #[cfg(debug_assertions)]
+        {
+            use crate::util::metadata::public_bit::is_public;
 
-        //     let source = _source.unwrap();
-        //     if is_public(object) && !is_public(source) {
-        //         println!(
-        //             "private source: {:?} --> object: {:?} | exists: {}",
-        //             source,
-        //             object,
-        //             global_remset.contains(&source)
-        //         );
-        //     }
-        // }
+            let source = _source.unwrap();
+            if !is_public(source) && is_public(object) {
+                use crate::memory_manager;
+
+                println!(
+                    "private source: {:?}, slot: {:?} --> object: {:?}, pinned: {}",
+                    source,
+                    slot,
+                    object,
+                    memory_manager::is_pinned(object)
+                );
+            }
+            // let description = if is_public(source) {
+            //     "public"
+            // } else {
+            //     "private"
+            // };
+            // println!(
+            //     "{} source: {:?}, slot: {:?} --> object: {:?}",
+            //     description, source, slot, object,
+            // );
+        }
 
         let new_object = self
             .plan

@@ -39,7 +39,7 @@ const SHIFT: usize = 32;
 pub struct LargeObjectSpace<VM: VMBinding> {
     common: CommonSpace<VM>,
     pr: FreeListPageResource<VM>,
-    mark_state: u8,
+    pub mark_state: u8,
     in_nursery_gc: bool,
     treadmill: TreadMill<VM>,
     #[cfg(feature = "thread_local_gc_copying_stats")]
@@ -237,11 +237,14 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LargeObjec
                         object
                     );
                 } else {
-                    assert!(
-                        !self.is_marked(object),
-                        "private los object: {:?} should not be marked",
-                        object
-                    );
+                    // mark state is flipped when GC occurs, so 0 can mean marked
+                    // while private objects' mark bit remains 0
+
+                    // assert!(
+                    //     !self.is_marked(object),
+                    //     "private los object: {:?} should not be marked",
+                    //     object,
+                    // );
                 }
 
                 let mut objects = self.common.objects.lock().unwrap();
@@ -473,7 +476,6 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             // clearing nursery bit/moving objects out of logical nursery
             if self.test_and_mark(object, self.mark_state) {
                 trace!("LOS object {} is being marked now", object);
-
                 // When enabling thread_local_gc, local/private objects are not in the global treadmill
                 // So only copy public objects
                 if crate::util::metadata::public_bit::is_public(object) {

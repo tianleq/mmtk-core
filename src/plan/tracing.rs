@@ -227,6 +227,9 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
     }
 
     pub fn do_closure(&mut self, tls: Option<VMMutatorThread>) {
+        use crate::util::metadata::public_bit::is_public;
+        use crate::util::metadata::public_bit::set_public_bit;
+
         #[cfg(feature = "debug_thread_local_gc_copying")]
         let mut mutator = if VM::VMActivePlan::is_mutator(self.tls.0) {
             Some(VM::VMActivePlan::mutator(self.tls))
@@ -243,16 +246,14 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
                 continue;
             };
 
-            if !crate::util::metadata::public_bit::is_public(object) {
-                // local_remember_set.push(object);
+            if !is_public(object) {
                 // set public bit on the object
-                #[cfg(feature = "debug_publish_object")]
-                crate::util::metadata::public_bit::set_public_bit::<VM>(
-                    object,
-                    Some(self.mutator_id),
-                );
+
                 #[cfg(not(feature = "debug_publish_object"))]
-                crate::util::metadata::public_bit::set_public_bit(object);
+                #[cfg(feature = "debug_publish_object")]
+                set_public_bit::<VM>(object, Some(self.mutator_id));
+                #[cfg(not(feature = "debug_publish_object"))]
+                set_public_bit(object);
                 #[cfg(feature = "thread_local_gc")]
                 self._mmtk.get_plan().publish_object(
                     object,

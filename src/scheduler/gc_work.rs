@@ -241,8 +241,9 @@ impl<VM: VMBinding> GCWork<VM> for DefragMutator<VM> {
 }
 
 pub enum ScanStackSemantic {
-    Normal,
+    Default,
     RootsOnly,
+    Skip,
 }
 /// Stop all mutators
 ///
@@ -256,7 +257,7 @@ pub struct StopMutators<C: GCWorkContext> {
 impl<C: GCWorkContext> StopMutators<C> {
     pub fn new() -> Self {
         Self {
-            semantic: ScanStackSemantic::Normal,
+            semantic: ScanStackSemantic::Default,
             _p: PhantomData,
         }
     }
@@ -285,7 +286,7 @@ impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
             {
                 // A public GC does not need to scan stack roots
                 match self.semantic {
-                    ScanStackSemantic::Normal => {
+                    ScanStackSemantic::Default => {
                         if mmtk
                             .get_plan()
                             .defrag_mutator_required(mmtk, mutator.mutator_tls)
@@ -304,8 +305,9 @@ impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
                     ScanStackSemantic::RootsOnly => {
                         use crate::plan::CollectMutatorRoots;
                         mmtk.scheduler.work_buckets[WorkBucketStage::Local]
-                            .add(CollectMutatorRoots::<C>(mutator));
+                            .add(CollectMutatorRoots::<C::VM>::new(mutator));
                     }
+                    ScanStackSemantic::Skip => {}
                 }
             }
         });

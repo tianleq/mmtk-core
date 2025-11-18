@@ -259,29 +259,55 @@ where
         let Some(object) = slot.load() else { return };
         #[cfg(debug_assertions)]
         {
-            use crate::util::metadata::public_bit::is_public;
+            use crate::{memory_manager, util::metadata::public_bit::is_public};
 
             let source = _source.unwrap();
             if !is_public(source) && is_public(object) {
-                use crate::memory_manager;
+                use crate::policy::GLOBAL_OBJECT_REMSET;
+                if !memory_manager::is_pinned(object)
+                    && !GLOBAL_OBJECT_REMSET.lock().unwrap().contains(&source)
+                {
+                    use crate::vm::ObjectModel;
+                    println!("--------souce--------");
+                    VM::VMObjectModel::dump_object(source);
+                    println!("--------souce--------");
+                    println!("--------target--------");
+                    VM::VMObjectModel::dump_object(object);
+                    println!("--------target--------");
+                    panic!("source: {:?} is missing, target: {:?}", source, object);
+                }
 
-                println!(
-                    "private source: {:?}, slot: {:?} --> object: {:?}, pinned: {}",
-                    source,
-                    slot,
-                    object,
-                    memory_manager::is_pinned(object)
-                );
+                // println!(
+                //     "private source: {:?}, owner:{}, slot: {:?} --> object: {:?}, pinned: {}, left: {}, source tracked: {}, source in prev: {}, runtime: {}",
+                //     source,
+                //     self.plan.get_object_owner(source),
+                //     slot,
+                //     object,
+                //     memory_manager::is_pinned(object),
+                //     DEBUG_PUBLIC_OBJECT_LEFT_IN_PLACE
+                //         .lock()
+                //         .unwrap()
+                //         .contains(&object),
+                //     GLOBAL_OBJECT_REMSET.lock().unwrap().contains(&source),
+                //     PRIVATE_OBJECTS_IN_PREV_GC.lock().unwrap().contains(&source),
+                //     RUNTIME_OBJECT.lock().unwrap().contains(&object)
+                // );
             }
-            // let description = if is_public(source) {
-            //     "public"
-            // } else {
-            //     "private"
-            // };
-            // println!(
-            //     "{} source: {:?}, slot: {:?} --> object: {:?}",
-            //     description, source, slot, object,
-            // );
+            // if is_public(object) {
+            //     let description = if is_public(source) {
+            //         "public"
+            //     } else {
+            //         "private"
+            //     };
+            //     println!(
+            //         "{} source: {:?}, slot: {:?} --> object: {:?}, pinned: {}",
+            //         description,
+            //         source,
+            //         slot,
+            //         object,
+            //         memory_manager::is_pinned(object)
+            //     );
+            // }
         }
 
         let new_object = self

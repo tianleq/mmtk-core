@@ -404,9 +404,9 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
         0
     }
 
-    #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
-    fn get_object_owner(&self, _object: ObjectReference) -> Option<u32> {
-        Option::None
+    #[cfg(all(feature = "thread_local_gc", debug_assertions))]
+    fn get_object_owner(&self, _object: ObjectReference) -> u32 {
+        0
     }
 
     #[cfg(feature = "debug_publish_object")]

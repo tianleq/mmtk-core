@@ -275,6 +275,15 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 self.defrag_mutator.store(0, Ordering::Release);
             }
         }
+        #[cfg(debug_assertions)]
+        {
+            use crate::policy::{PRIVATE_OBJECTS_IN_CURRENT_GC, PRIVATE_OBJECTS_IN_PREV_GC};
+
+            PRIVATE_OBJECTS_IN_PREV_GC
+                .lock()
+                .unwrap()
+                .extend(PRIVATE_OBJECTS_IN_CURRENT_GC.lock().unwrap().drain());
+        }
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
@@ -304,6 +313,17 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         self.full_heap_gc_pending
             .store(full_pending, Ordering::Release);
         println!("end of global GC");
+        #[cfg(debug_assertions)]
+        {
+            use crate::policy::{
+                immix::{DEBUG_PUBLIC_OBJECT_FORWARDING, DEBUG_PUBLIC_OBJECT_LEFT_IN_PLACE},
+                PRIVATE_OBJECTS_IN_PREV_GC,
+            };
+
+            DEBUG_PUBLIC_OBJECT_FORWARDING.lock().unwrap().clear();
+            DEBUG_PUBLIC_OBJECT_LEFT_IN_PLACE.lock().unwrap().clear();
+            PRIVATE_OBJECTS_IN_PREV_GC.lock().unwrap().clear();
+        }
     }
 
     fn current_gc_may_move_object(&self) -> bool {
@@ -381,15 +401,13 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         self.immix_space.reusable_blocks.len()
     }
 
-    #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
-    fn get_object_owner(&self, _object: ObjectReference) -> Option<u32> {
-        if self.immix_space.in_space(_object) {
-            return Some(self.immix_space.get_object_owner(_object));
+    #[cfg(all(feature = "thread_local_gc", debug_assertions))]
+    fn get_object_owner(&self, object: ObjectReference) -> u32 {
+        if self.immix_space.in_space(object) {
+            self.immix_space.get_object_owner(object)
+        } else {
+            self.common.get_los().get_object_owner(object)
         }
-        if self.common.get_los().in_space(_object) {
-            return Some(self.common.get_los().get_object_owner(_object));
-        }
-        None
     }
 
     #[cfg(feature = "debug_publish_object")]

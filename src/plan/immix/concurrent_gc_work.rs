@@ -249,6 +249,19 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessSlotRemset<VM
     fn process_slots(&mut self, slots: &[VM::VMSlot]) {
         for slot in slots.iter() {
             if let Some(object) = slot.load() {
+                // #[cfg(debug_assertions)]
+                // {
+                //     let description = if is_public(object) {
+                //         "public"
+                //     } else {
+                //         "private"
+                //     };
+                //     println!(
+                //         "ProcessSlotRemset | slot: {:?}, {} object: {:?}",
+                //         slot, description, object
+                //     );
+                // }
+
                 // slots may contain private objects as public object might be overwritten by
                 // some other private object, so need to exclude those private ones
                 if is_public(object) {

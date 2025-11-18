@@ -226,9 +226,10 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
         }
     }
 
-    pub fn do_closure(&mut self, tls: Option<VMMutatorThread>) {
+    pub fn do_closure(&mut self, tls: VMMutatorThread) {
         use crate::util::metadata::public_bit::is_public;
         use crate::util::metadata::public_bit::set_public_bit;
+        use crate::vm::ActivePlan;
 
         #[cfg(feature = "debug_thread_local_gc_copying")]
         let mut mutator = if VM::VMActivePlan::is_mutator(self.tls.0) {
@@ -260,18 +261,15 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
                     #[cfg(feature = "debug_thread_local_gc_copying")]
                     self.tls,
                 );
-                // println!("slot: {:?}, val: {:?}", slot, object);
+
                 // All newly published objects need to pushed into the remset
-                if let Some(tls) = tls {
-                    use crate::vm::ActivePlan;
+                // also pin those objects so that even if the object is still pointed by
+                // some other private object, that private object will never contain
+                // a stale pointer
+                VM::VMActivePlan::mutator(tls).object_remset.push(object);
 
-                    VM::VMActivePlan::mutator(tls).object_remset.push(object);
+                crate::memory_manager::pin_object(object);
 
-                    // pin the object so that even if this object is still pointed by
-                    // some other private object, that private object will never contain
-                    // a stale pointer
-                    crate::memory_manager::pin_object(object);
-                }
                 VM::VMScanning::scan_object(
                     crate::util::VMWorkerThread(crate::util::VMThread::UNINITIALIZED),
                     object,

@@ -280,12 +280,21 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
         } else if KIND == TRACE_KIND_VERIFY_PUBLIC {
             #[cfg(debug_assertions)]
             {
+                use crate::policy::immix::DEBUG_PUBLIC_OBJECT_FORWARDING;
+
                 let public = is_public(object);
                 if public {
+                    use crate::policy::RUNTIME_OBJECT;
+
                     debug_assert!(
                         self.is_marked(object),
-                        "public object: {:?} missing",
+                        "public object: {:?} missing, dangling: {}, runtime: {}",
                         object,
+                        DEBUG_PUBLIC_OBJECT_FORWARDING
+                            .lock()
+                            .unwrap()
+                            .contains(&object),
+                        RUNTIME_OBJECT.lock().unwrap().contains(&object)
                     );
                     debug_assert!(
                         Line::is_object_marked::<VM>(
@@ -302,6 +311,8 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
                         object
                     );
                 } else {
+                    use crate::policy::PRIVATE_OBJECTS_IN_CURRENT_GC;
+
                     debug_assert!(
                         !self.is_marked(object),
                         "private object:{:?} should not be marked",
@@ -315,6 +326,8 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
                         "private object: {:?} is marked",
                         object
                     );
+                    // keep track of private object visited during verify trace
+                    PRIVATE_OBJECTS_IN_CURRENT_GC.lock().unwrap().insert(object);
                 }
                 let mut objects = self.common.objects.lock().unwrap();
                 if !objects.contains(&object) {
@@ -361,6 +374,13 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
                     false,
                 )
             } else {
+                #[cfg(debug_assertions)]
+                {
+                    super::DEBUG_PUBLIC_OBJECT_LEFT_IN_PLACE
+                        .lock()
+                        .unwrap()
+                        .insert(object);
+                }
                 self.trace_object_without_moving(queue, object)
             }
         } else if KIND == TRACE_KIND_UPDATE {
@@ -981,7 +1001,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             } else {
                 block.set_state(BlockState::Marked);
             }
-            // println!("mark object: {:?}", object);
             // Visit node
             queue.enqueue(object);
             self.unlog_object_if_needed(object);
@@ -1170,6 +1189,13 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
                     #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
                     self.left_in_place.lock().unwrap().insert(block);
+                    #[cfg(debug_assertions)]
+                    {
+                        super::DEBUG_PUBLIC_OBJECT_LEFT_IN_PLACE
+                            .lock()
+                            .unwrap()
+                            .insert(object);
+                    }
                 }
 
                 #[cfg(feature = "vo_bit")]
@@ -1202,7 +1228,16 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                         crate::util::metadata::public_bit::set_public_bit(_new_object);
                     },
                 );
-                // println!("forward object: {} --> {}", object, new_object);
+                #[cfg(debug_assertions)]
+                {
+                    use crate::policy::immix::DEBUG_PUBLIC_OBJECT_FORWARDING;
+                    // println!("forward object: {} --> {}", object, new_object);
+                    DEBUG_PUBLIC_OBJECT_FORWARDING
+                        .lock()
+                        .unwrap()
+                        .insert(object);
+                }
+
                 new_object
             };
             debug_assert_eq!(
@@ -1962,16 +1997,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         );
     }
 
-    #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
+    #[cfg(all(feature = "thread_local_gc", debug_assertions))]
     pub fn get_object_owner(&self, object: ObjectReference) -> u32 {
-        #[cfg(feature = "debug_publish_object")]
-        {
-            let metadata: usize =
-                crate::util::object_extra_header_metadata::get_extra_header_metadata::<VM, usize>(
-                    object,
-                ) & crate::util::object_extra_header_metadata::BOTTOM_HALF_MASK;
-            return u32::try_from(metadata).unwrap();
-        }
         #[cfg(not(feature = "debug_publish_object"))]
         Block::containing(object).owner()
     }

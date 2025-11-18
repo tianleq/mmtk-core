@@ -117,6 +117,7 @@ pub fn immix_mutator_thread_local_prepare<VM: VMBinding>(mutator: &mut Mutator<V
     .downcast_mut::<LargeObjectAllocator<VM>>()
     .unwrap();
     los_allocator.thread_local_prepare();
+
     // clear the remember set, it will be rebuilt during local GC
     mutator.slot_remset.clear();
     // clear the object remset as it is not needed once a local GC rebuild slot remset

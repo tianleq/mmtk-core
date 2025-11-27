@@ -169,11 +169,14 @@ impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM>
                     }
                 }
             }
-            if update {
-                use crate::policy::GLOBAL_OBJECT_REMSET;
+            // #[cfg(debug_assertions)]
+            // {
+            //     if update {
+            //         use crate::policy::GLOBAL_OBJECT_REMSET;
 
-                GLOBAL_OBJECT_REMSET.lock().unwrap().insert(dst_base);
-            }
+            //         GLOBAL_OBJECT_REMSET.lock().unwrap().insert(dst_base);
+            //     }
+            // }
         }
     }
 
@@ -223,12 +226,12 @@ impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM>
             "invalid slot: {:?}",
             slot
         );
-        #[cfg(debug_assertions)]
-        {
-            use crate::policy::GLOBAL_OBJECT_REMSET;
+        // #[cfg(debug_assertions)]
+        // {
+        //     use crate::policy::GLOBAL_OBJECT_REMSET;
 
-            GLOBAL_OBJECT_REMSET.lock().unwrap().insert(src);
-        }
+        //     GLOBAL_OBJECT_REMSET.lock().unwrap().insert(src);
+        // }
         self.update_remset(slot);
     }
 
@@ -247,13 +250,19 @@ impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM>
             "target: {} should be public",
             target.unwrap()
         );
-        #[cfg(debug_assertions)]
-        {
-            use crate::policy::GLOBAL_OBJECT_REMSET;
+        // #[cfg(debug_assertions)]
+        // {
+        //     use crate::policy::GLOBAL_OBJECT_REMSET;
 
-            GLOBAL_OBJECT_REMSET.lock().unwrap().insert(src);
-        }
+        //     GLOBAL_OBJECT_REMSET.lock().unwrap().insert(src);
+        // }
         src.iterate_fields::<VM, _>(|slot| {
+            self.update_remset(slot);
+        });
+    }
+
+    fn object_reference_clone_pre(&mut self, obj: ObjectReference) {
+        obj.iterate_fields::<VM, _>(|slot| {
             self.update_remset(slot);
         });
     }

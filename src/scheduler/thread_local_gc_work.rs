@@ -25,7 +25,6 @@ impl<VM: VMBinding> ExecuteThreadlocalCollection<VM> {
         let mutator = VM::VMActivePlan::mutator(self.mutator_tls);
         mutator.thread_local_gc_status = THREAD_LOCAL_GC_ACTIVE;
         info!("Start of Thread local GC {:?}", mutator.mutator_id,);
-        println!("Start of Thread local GC");
 
         // A hook of local gc, no-op at the moment
         self.mmtk

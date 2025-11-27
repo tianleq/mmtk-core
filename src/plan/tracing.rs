@@ -262,13 +262,14 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
                     self.tls,
                 );
 
-                // All newly published objects need to pushed into the remset
-                // also pin those objects so that even if the object is still pointed by
-                // some other private object, that private object will never contain
-                // a stale pointer
-                VM::VMActivePlan::mutator(tls).object_remset.push(object);
-
-                crate::memory_manager::pin_object(object);
+                if VM::VMActivePlan::is_mutator(tls.0) {
+                    // All newly published objects need to pushed into the remset
+                    // also pin those objects so that even if the object is still pointed by
+                    // some other private object, that private object will never contain
+                    // a stale pointer
+                    VM::VMActivePlan::mutator(tls).object_remset.push(object);
+                    crate::memory_manager::pin_object(object);
+                }
 
                 VM::VMScanning::scan_object(
                     crate::util::VMWorkerThread(crate::util::VMThread::UNINITIALIZED),
@@ -287,12 +288,7 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
                 }
             }
         }
-        // Move all objects published by the current
-        // if VM::VMActivePlan::is_mutator(self.tls.0) {
-        //     VM::VMActivePlan::mutator(self.tls)
-        //         .remember_set
-        //         .append(&mut local_remember_set);
-        // }
+
         #[cfg(feature = "debug_thread_local_gc_copying")]
         {
             use crate::util::{GLOBAL_GC_STATISTICS, TOTAL_PU8LISHED_BYTES};

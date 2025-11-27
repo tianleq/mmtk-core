@@ -275,15 +275,15 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 self.defrag_mutator.store(0, Ordering::Release);
             }
         }
-        #[cfg(debug_assertions)]
-        {
-            use crate::policy::{PRIVATE_OBJECTS_IN_CURRENT_GC, PRIVATE_OBJECTS_IN_PREV_GC};
+        // #[cfg(debug_assertions)]
+        // {
+        //     use crate::policy::{PRIVATE_OBJECTS_IN_CURRENT_GC, PRIVATE_OBJECTS_IN_PREV_GC};
 
-            PRIVATE_OBJECTS_IN_PREV_GC
-                .lock()
-                .unwrap()
-                .extend(PRIVATE_OBJECTS_IN_CURRENT_GC.lock().unwrap().drain());
-        }
+        //     PRIVATE_OBJECTS_IN_PREV_GC
+        //         .lock()
+        //         .unwrap()
+        //         .extend(PRIVATE_OBJECTS_IN_CURRENT_GC.lock().unwrap().drain());
+        // }
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
@@ -312,18 +312,31 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         let full_pending = self.get_reserved_pages() >= (self.get_total_pages() * 90 / 100);
         self.full_heap_gc_pending
             .store(full_pending, Ordering::Release);
-        println!("end of global GC");
         #[cfg(debug_assertions)]
         {
-            use crate::policy::{
-                immix::{DEBUG_PUBLIC_OBJECT_FORWARDING, DEBUG_PUBLIC_OBJECT_LEFT_IN_PLACE},
-                PRIVATE_OBJECTS_IN_PREV_GC,
-            };
+            use crate::policy::{GLOBAL_OBJECTS, GLOBAL_OBJECTS_CONSERVATIVE};
 
-            DEBUG_PUBLIC_OBJECT_FORWARDING.lock().unwrap().clear();
-            DEBUG_PUBLIC_OBJECT_LEFT_IN_PLACE.lock().unwrap().clear();
-            PRIVATE_OBJECTS_IN_PREV_GC.lock().unwrap().clear();
+            let conservative = GLOBAL_OBJECTS_CONSERVATIVE.lock().unwrap();
+            let precise = GLOBAL_OBJECTS.lock().unwrap();
+
+            println!(
+                "{} vs {} at the end of global GC",
+                conservative.len(),
+                precise.len()
+            );
         }
+
+        // #[cfg(debug_assertions)]
+        // {
+        //     use crate::policy::{
+        //         immix::{DEBUG_PUBLIC_OBJECT_FORWARDING, DEBUG_PUBLIC_OBJECT_LEFT_IN_PLACE},
+        //         PRIVATE_OBJECTS_IN_PREV_GC,
+        //     };
+
+        //     DEBUG_PUBLIC_OBJECT_FORWARDING.lock().unwrap().clear();
+        //     DEBUG_PUBLIC_OBJECT_LEFT_IN_PLACE.lock().unwrap().clear();
+        //     PRIVATE_OBJECTS_IN_PREV_GC.lock().unwrap().clear();
+        // }
     }
 
     fn current_gc_may_move_object(&self) -> bool {

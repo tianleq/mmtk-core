@@ -284,17 +284,16 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
 
                 let public = is_public(object);
                 if public {
-                    use crate::policy::RUNTIME_OBJECT;
+                    use crate::policy::GLOBAL_OBJECTS;
 
                     debug_assert!(
                         self.is_marked(object),
-                        "public object: {:?} missing, dangling: {}, runtime: {}",
+                        "public object: {:?} missing, dangling: {}",
                         object,
                         DEBUG_PUBLIC_OBJECT_FORWARDING
                             .lock()
                             .unwrap()
                             .contains(&object),
-                        RUNTIME_OBJECT.lock().unwrap().contains(&object)
                     );
                     debug_assert!(
                         Line::is_object_marked::<VM>(
@@ -310,8 +309,9 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
                         "found from space object: {:?}",
                         object
                     );
+                    GLOBAL_OBJECTS.lock().unwrap().insert(object);
                 } else {
-                    use crate::policy::PRIVATE_OBJECTS_IN_CURRENT_GC;
+                    // use crate::policy::PRIVATE_OBJECTS_IN_CURRENT_GC;
 
                     debug_assert!(
                         !self.is_marked(object),
@@ -326,8 +326,8 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
                         "private object: {:?} is marked",
                         object
                     );
-                    // keep track of private object visited during verify trace
-                    PRIVATE_OBJECTS_IN_CURRENT_GC.lock().unwrap().insert(object);
+                    // // keep track of private object visited during verify trace
+                    // PRIVATE_OBJECTS_IN_CURRENT_GC.lock().unwrap().insert(object);
                 }
                 let mut objects = self.common.objects.lock().unwrap();
                 if !objects.contains(&object) {
@@ -362,7 +362,12 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
             if !is_public(object) {
                 return object;
             }
+            #[cfg(debug_assertions)]
+            {
+                use crate::policy::GLOBAL_OBJECTS_CONSERVATIVE;
 
+                GLOBAL_OBJECTS_CONSERVATIVE.lock().unwrap().insert(object);
+            }
             // self.trace_object_without_moving(queue, object)
             if Block::containing(object).is_defrag_source() {
                 self.trace_object_with_opportunistic_copy(

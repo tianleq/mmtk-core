@@ -1016,12 +1016,6 @@ pub fn mmtk_set_public_bit<VM: VMBinding>(
     // this will only be directly called during class oop allocation,
     // and since class oop is a globally reachable object, no need to
     // store that in a remember set
-    #[cfg(debug_assertions)]
-    {
-        use crate::policy::RUNTIME_OBJECT;
-
-        RUNTIME_OBJECT.lock().unwrap().insert(object);
-    }
     _mmtk_set_public_bit(tls, mmtk, object);
 }
 
@@ -1035,20 +1029,11 @@ pub fn mmtk_publish_object<VM: VMBinding>(
         if crate::util::metadata::public_bit::is_public(object) {
             return;
         }
-        #[cfg(debug_assertions)]
-        if tls.0 == VMThread::UNINITIALIZED {
-            use crate::vm::ObjectModel;
-
-            VM::VMObjectModel::dump_object(object);
-            panic!(
-                "object: {:?}, owner: {}",
-                object,
-                _mmtk.get_plan().get_object_owner(object)
-            );
+        if VM::VMActivePlan::is_mutator(tls.0) {
+            // Newly published objects need to be pinned and pushed to the remset
+            VM::VMActivePlan::mutator(tls).object_remset.push(object);
+            pin_object(object);
         }
-        // Newly published objects need to be pinned and pushed to the remset
-        VM::VMActivePlan::mutator(tls).object_remset.push(object);
-        pin_object(object);
 
         let mut closure: crate::plan::PublishObjectClosure<VM> =
             crate::plan::PublishObjectClosure::<VM>::new(

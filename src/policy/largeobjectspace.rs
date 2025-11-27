@@ -276,6 +276,11 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LargeObjec
             if !is_public(object) {
                 return object;
             }
+            #[cfg(debug_assertions)]
+            {
+                use crate::policy::GLOBAL_OBJECTS_CONSERVATIVE;
+                GLOBAL_OBJECTS_CONSERVATIVE.lock().unwrap().insert(object);
+            }
             self.trace_object(queue, object)
         } else if KIND == TRACE_KIND_UPDATE {
             debug_assert!(is_public(object));

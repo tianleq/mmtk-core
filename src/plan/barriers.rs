@@ -530,6 +530,10 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
             }
         }
     }
+
+    fn object_reference_clone_pre(&mut self, _obj: ObjectReference) {
+        self.semantics.object_reference_clone_pre(_obj);
+    }
 }
 
 pub struct SATBBarrier<S: BarrierSemantics> {

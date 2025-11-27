@@ -45,12 +45,17 @@ use crate::util::ObjectReference;
 
 #[cfg(debug_assertions)]
 lazy_static! {
-    pub(crate) static ref GLOBAL_OBJECT_REMSET: std::sync::Mutex<std::collections::HashSet<ObjectReference>> =
+    // pub(crate) static ref GLOBAL_OBJECT_REMSET: std::sync::Mutex<std::collections::HashSet<ObjectReference>> =
+    //     std::sync::Mutex::new(std::collections::HashSet::new());
+    // pub(crate) static ref PRIVATE_OBJECTS_IN_PREV_GC: std::sync::Mutex<std::collections::HashSet<ObjectReference>> =
+    //     std::sync::Mutex::new(std::collections::HashSet::new());
+    // pub(crate) static ref PRIVATE_OBJECTS_IN_CURRENT_GC: std::sync::Mutex<std::collections::HashSet<ObjectReference>> =
+    //     std::sync::Mutex::new(std::collections::HashSet::new());
+    // pub(crate) static ref RUNTIME_OBJECT: std::sync::Mutex<std::collections::HashSet<ObjectReference>> =
+    //     std::sync::Mutex::new(std::collections::HashSet::new());
+    pub(crate) static ref GLOBAL_OBJECTS_CONSERVATIVE: std::sync::Mutex<std::collections::HashSet<ObjectReference>> =
         std::sync::Mutex::new(std::collections::HashSet::new());
-    pub(crate) static ref PRIVATE_OBJECTS_IN_PREV_GC: std::sync::Mutex<std::collections::HashSet<ObjectReference>> =
-        std::sync::Mutex::new(std::collections::HashSet::new());
-    pub(crate) static ref PRIVATE_OBJECTS_IN_CURRENT_GC: std::sync::Mutex<std::collections::HashSet<ObjectReference>> =
-        std::sync::Mutex::new(std::collections::HashSet::new());
-    pub(crate) static ref RUNTIME_OBJECT: std::sync::Mutex<std::collections::HashSet<ObjectReference>> =
+
+    pub(crate) static ref GLOBAL_OBJECTS: std::sync::Mutex<std::collections::HashSet<ObjectReference>> =
         std::sync::Mutex::new(std::collections::HashSet::new());
 }

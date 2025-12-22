@@ -4,6 +4,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
 
+#[cfg(debug_assertions)]
+use crate::util::ObjectReference;
+
 /// This stores some global states for an MMTK instance.
 /// Some MMTK components like plans and allocators may keep an reference to the struct, and can access it.
 // This used to be a part of the `BasePlan`. In that case, any component that accesses
@@ -49,6 +52,8 @@ pub struct GlobalState {
     pub(crate) malloc_bytes: AtomicUsize,
     /// This stores the live bytes and the used bytes (by pages) for each space in last GC. This counter is only updated in the GC release phase.
     pub(crate) live_bytes_in_last_gc: AtomicRefCell<HashMap<&'static str, LiveBytesStats>>,
+    #[cfg(debug_assertions)]
+    pub(crate) objects: std::sync::Mutex<std::collections::HashSet<ObjectReference>>,
 }
 
 impl GlobalState {
@@ -206,6 +211,8 @@ impl Default for GlobalState {
             #[cfg(feature = "malloc_counted_size")]
             malloc_bytes: AtomicUsize::new(0),
             live_bytes_in_last_gc: AtomicRefCell::new(HashMap::new()),
+            #[cfg(debug_assertions)]
+            objects: std::sync::Mutex::new(std::collections::HashSet::new()),
         }
     }
 }

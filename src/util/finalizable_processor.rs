@@ -190,7 +190,13 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for Finalization<E> {
             finalizable_processor.ready_for_finalize.len()
         );
         #[cfg(not(feature = "debug_publish_object"))]
-        let mut w = E::new(vec![], false, mmtk, WorkBucketStage::FinalRefClosure);
+        let mut w = E::new(
+            vec![],
+            vec![],
+            false,
+            mmtk,
+            WorkBucketStage::FinalRefClosure,
+        );
         #[cfg(feature = "debug_publish_object")]
         let mut w = E::new(
             vec![],
@@ -241,7 +247,13 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for ForwardFinalization<E> {
         trace!("Forward finalization");
         let mut finalizable_processor = mmtk.finalizable_processor.lock().unwrap();
         #[cfg(not(feature = "debug_publish_object"))]
-        let mut w = E::new(vec![], false, mmtk, WorkBucketStage::FinalizableForwarding);
+        let mut w = E::new(
+            vec![],
+            vec![],
+            false,
+            mmtk,
+            WorkBucketStage::FinalizableForwarding,
+        );
         #[cfg(feature = "debug_publish_object")]
         let mut w = E::new(
             vec![],

@@ -259,9 +259,7 @@ where
         let Some(object) = slot.load() else { return };
         #[cfg(debug_assertions)]
         {
-            // use crate::util::metadata::public_bit::is_public;
 
-            // let source = _source.unwrap();
             // if !is_public(source) && is_public(object) {
             // use crate::policy::GLOBAL_OBJECT_REMSET;
             // use crate::util::memory_manager;
@@ -311,9 +309,9 @@ where
             // }
         }
 
-        let new_object = self
-            .plan
-            .trace_object::<_, KIND>(self, object, self.worker());
+        let new_object =
+            self.plan
+                .trace_object::<_, KIND>(self, _source.unwrap(), object, self.worker());
         debug_assert_eq!(new_object, object);
         // if P::may_move_objects::<KIND>() && new_object != object {
         //     // info!("Moving object from {:?} to {:?}", object, new_object);
@@ -346,6 +344,15 @@ where
     P: Plan<VM = VM> + PlanTraceObject<VM>,
 {
     fn report_roots(&mut self, root_slots: Vec<VM::VMSlot>) {
+        #[cfg(debug_assertions)]
+        {
+            use crate::policy::{GLOBAL_ROOTS_COUNTER, STACK_ROOTS_SANITY};
+            GLOBAL_ROOTS_COUNTER.fetch_add(root_slots.len(), std::sync::atomic::Ordering::SeqCst);
+            STACK_ROOTS_SANITY
+                .lock()
+                .unwrap()
+                .extend(root_slots.iter().copied().map(|s| s.to_address()));
+        }
         self.sources
             .extend(root_slots.iter().map(|slot| slot.load()));
         self.slots.extend(root_slots);

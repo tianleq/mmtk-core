@@ -8,6 +8,9 @@ use crate::scheduler::gc_work::PlanProcessEdges;
 use crate::scheduler::thread_local_gc_work::ThreadStackWalker;
 use crate::scheduler::GCWork;
 use crate::scheduler::GCWorker;
+use crate::util::metadata::public_bit::is_public;
+use crate::util::Address;
+use crate::util::ObjectReference;
 use crate::Mutator;
 use crate::MMTK;
 use std::marker::PhantomData;
@@ -63,22 +66,61 @@ where
     ) {
         use crate::plan::immix::concurrent_gc_work::ProcessSlotRemset;
         use crate::scheduler::WorkBucketStage;
+        use crate::vm::slot::Slot;
         use crate::vm::ActivePlan;
 
         for mutator in <VM as VMBinding>::VMActivePlan::mutators() {
-            worker.scheduler().work_buckets[WorkBucketStage::Closure].add(
-                ProcessSlotRemset::<VM, P>::new(
-                    mutator.slot_remset.iter().unique().copied().collect_vec(),
-                    #[cfg(debug_assertions)]
-                    mutator.mutator_id,
-                    _mmtk,
-                ),
-            );
+            // #[cfg(debug_assertions)]
+            // {
+            //     // use crate::policy::REMSET_OBJECTS;
+
+            //     // REMSET_OBJECTS
+            //     //     .lock()
+            //     //     .unwrap()
+            //     //     .extend(mutator.slot_remset.iter().unique().copied());
+            //     mutator
+            //         .slot_remset
+            //         .iter()
+            //         .for_each(|o| debug_assert!(!is_public(*o)));
+            // }
+
+            worker.scheduler().work_buckets[WorkBucketStage::Closure].add(ProcessObjectRemset::<
+                VM,
+                P,
+            >::new(
+                mutator
+                    .slot_remset
+                    .iter()
+                    .unique()
+                    .copied()
+                    .filter(|o| !is_public(*o))
+                    .collect_vec(),
+                #[cfg(debug_assertions)]
+                mutator.mutator_id,
+                _mmtk,
+            ));
+
+            let stack_slots = mutator
+                .stack_slots
+                .drain(..)
+                .filter(|s| s.load().is_some_and(is_public))
+                .collect_vec();
+            let objects = stack_slots
+                .iter()
+                .map(|_| {
+                    ObjectReference::from_raw_address(unsafe {
+                        Address::from_usize(0xFFFFFFFFFFFFFFF0)
+                    })
+                    .unwrap()
+                })
+                .collect_vec();
 
             // stack slots do not carry over
             worker.scheduler().work_buckets[WorkBucketStage::Closure].add(
                 ProcessSlotRemset::<VM, P>::new(
-                    mutator.stack_slots.drain(..).collect_vec(),
+                    // mutator.stack_slots.drain(..).collect_vec(),
+                    objects,
+                    stack_slots,
                     #[cfg(debug_assertions)]
                     mutator.mutator_id,
                     _mmtk,
@@ -88,6 +130,7 @@ where
             #[cfg(debug_assertions)]
             {
                 use crate::util::metadata::public_bit::is_public;
+                // debug_assert!(mutator.object_remset.is_empty());
                 debug_assert!(mutator
                     .object_remset
                     .iter()

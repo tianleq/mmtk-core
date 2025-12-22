@@ -221,7 +221,7 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
     /// # Arguments
     /// * `space_full`: the allocation to a specific space failed, must recover pages within 'space'.
     /// * `space`: an option to indicate if there is a space that has failed in an allocation.
-fn collection_required(&self, space_full: bool, space: Option<SpaceStats<Self::VM>>) -> bool;
+    fn collection_required(&self, space_full: bool, space: Option<SpaceStats<Self::VM>>) -> bool;
 
     #[cfg(feature = "thread_local_gc")]
     /// Ask the plan if they would trigger a GC. If MMTk is in charge of triggering GCs, this method is called
@@ -1066,6 +1066,7 @@ pub trait PlanTraceObject<VM: VMBinding> {
     fn trace_object<Q: ObjectQueue, const KIND: TraceKind>(
         &self,
         queue: &mut Q,
+        source: ObjectReference,
         object: ObjectReference,
         worker: &mut GCWorker<VM>,
     ) -> ObjectReference;

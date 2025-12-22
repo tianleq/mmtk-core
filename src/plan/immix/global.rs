@@ -314,16 +314,102 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             .store(full_pending, Ordering::Release);
         #[cfg(debug_assertions)]
         {
-            use crate::policy::{GLOBAL_OBJECTS, GLOBAL_OBJECTS_CONSERVATIVE};
+            use crate::policy::{
+                GLOBAL_OBJECTS, GLOBAL_OBJECTS_CONSERVATIVE, GLOBAL_ROOTS_COUNTER,
+                GLOBAL_ROOTS_COUNTER_CONSERVATIVE, PAGES_FREED_IN_LOCAL_GC, PRIVATE_OBJECTS,
+            };
 
-            let conservative = GLOBAL_OBJECTS_CONSERVATIVE.lock().unwrap();
-            let precise = GLOBAL_OBJECTS.lock().unwrap();
+            let mut conservative = GLOBAL_OBJECTS_CONSERVATIVE.lock().unwrap();
+            let mut precise = GLOBAL_OBJECTS.lock().unwrap();
+            let mut private = PRIVATE_OBJECTS.lock().unwrap();
+            // let mut remset = REMSET_OBJECTS.lock().unwrap();
+            // let stack_slots = STACK_ROOTS.lock().unwrap();
+            // let mut stack_slots_sanity = STACK_ROOTS_SANITY.lock().unwrap();
 
             println!(
-                "{} vs {} at the end of global GC",
+                "{} vs {} at the end of global GC, {} pages freed in local GC, {} vs {}",
                 conservative.len(),
-                precise.len()
+                precise.len(),
+                PAGES_FREED_IN_LOCAL_GC.load(Ordering::Acquire),
+                GLOBAL_ROOTS_COUNTER_CONSERVATIVE.load(Ordering::Acquire),
+                GLOBAL_ROOTS_COUNTER.load(Ordering::Acquire)
             );
+            // for s in stack_slots.difference(&stack_slots_sanity) {
+            //     println!("local GC stack slot: {:?}", s);
+            // }
+            // for s in stack_slots_sanity.difference(&stack_slots) {
+            //     println!("sanity GC stack slots: {:?}", s);
+            // }
+
+            // for o in remset.difference(&private) {
+            //     println!("private object: {:?} is kept alive", o);
+            // }
+            // if conservative.len() - precise.len() > 10000 {
+            //     use std::fs::OpenOptions;
+
+            //     let mut file = OpenOptions::new()
+            //         .write(true)
+            //         .create(true)
+            //         .truncate(true)
+            //         .open("/home/tianleq/objects-graph.txt")
+            //         .unwrap();
+            //     for v in conservative.iter() {
+            //         use std::io::Write;
+
+            //         file.write_all(format!("{} --> {}\n", v.1, v.0).as_bytes())
+            //             .unwrap();
+            //     }
+            //     {
+            //         let mut file = OpenOptions::new()
+            //             .write(true)
+            //             .create(true)
+            //             .truncate(true)
+            //             .open("/home/tianleq/extra-objects.txt")
+            //             .unwrap();
+            //         let mut extra = OpenOptions::new()
+            //             .write(true)
+            //             .create(true)
+            //             .truncate(true)
+            //             .open("/home/tianleq/unknown.txt")
+            //             .unwrap();
+            //         for v in conservative.iter() {
+            //             use std::io::Write;
+
+            //             use crate::util::metadata::public_bit::is_public;
+            //             if precise.contains_key(v.0) {
+            //                 continue;
+            //             }
+            //             file.write_all(format!("{} --> {}\n", v.1, v.0).as_bytes())
+            //                 .unwrap();
+            //             if !is_public(*v.1) {
+            //                 extra
+            //                     .write_all(format!("{} --> {}\n", v.1, v.0).as_bytes())
+            //                     .unwrap();
+            //             }
+            //         }
+            //     }
+            //     panic!("retention rate too high");
+            // }
+            conservative.clear();
+            precise.clear();
+            private.clear();
+            // remset.clear();
+            GLOBAL_ROOTS_COUNTER.store(0, Ordering::Release);
+            GLOBAL_ROOTS_COUNTER_CONSERVATIVE.store(0, Ordering::Release);
+            // stack_slots_sanity.clear();
+            self.common()
+                .base
+                .global_state
+                .objects
+                .lock()
+                .unwrap()
+                .clear();
+            // {
+            //     use std::collections::HashSet;
+
+            //     let mut objects = self.immix_space.common().objects.lock().unwrap();
+            //     *objects = HashSet::new();
+            // }
         }
 
         // #[cfg(debug_assertions)]
@@ -555,10 +641,24 @@ impl<VM: VMBinding> Immix<VM> {
         use crate::plan::immix::gc_work::CreateProcessRemsetWork;
 
         // Stop mutators
+        #[cfg(debug_assertions)]
+        {
+            // use crate::scheduler::thread_local_gc_work::ScheduleExecuteThreadlocalCollectionWork;
+            debug_assert!(plan.base().global_state.objects.lock().unwrap().is_empty());
+            scheduler.work_buckets[WorkBucketStage::Unconstrained].add(
+                StopMutators::<Context>::new_with_args(ScanStackSemantic::RootsOnly),
+            );
+            // mutators have not reahced safepoint yet, so one cannot iterate through mutators here
+            // Instead, craete a work packet in Local bucket and do it there. All mutators are guaranteed
+            // to be safe at that point.
+            // scheduler.work_buckets[WorkBucketStage::Local]
+            //     .set_sentinel(Box::new(ScheduleExecuteThreadlocalCollectionWork));
+        }
+
+        #[cfg(not(debug_assertions))]
         scheduler.work_buckets[WorkBucketStage::Unconstrained].add(
             StopMutators::<Context>::new_with_args(ScanStackSemantic::RootsOnly),
         );
-
         // Prepare global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Prepare].add(Prepare::<Context>::new(plan));
         // Scan thread-local remember set

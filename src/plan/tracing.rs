@@ -1,6 +1,9 @@
 //! This module contains code useful for tracing,
 //! i.e. visiting the reachable objects by traversing all or part of an object graph.
 
+#[cfg(not(feature = "debug_publish_object"))]
+use itertools::Itertools;
+
 use crate::scheduler::gc_work::{ProcessEdgesWork, SlotOf};
 use crate::scheduler::{GCWorker, WorkBucketStage, EDGES_WORK_BUFFER_SIZE};
 use crate::util::ObjectReference;
@@ -125,14 +128,19 @@ impl<'a, E: ProcessEdgesWork> ObjectsClosure<'a, E> {
 
     fn flush(&mut self) {
         let buf = self.buffer.take();
-        #[cfg(feature = "debug_publish_object")]
         let sources = self.sources.take();
 
         if !buf.is_empty() {
             #[cfg(not(feature = "debug_publish_object"))]
             self.worker.add_work(
                 self.bucket,
-                E::new(buf, false, self.worker.mmtk, self.bucket),
+                E::new(
+                    sources.iter().map(|source| Some(*source)).collect_vec(),
+                    buf,
+                    false,
+                    self.worker.mmtk,
+                    self.bucket,
+                ),
             );
             #[cfg(feature = "debug_publish_object")]
             {

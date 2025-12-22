@@ -1,3 +1,5 @@
+use itertools::Itertools;
+
 use crate::plan::{PlanTraceObject, VectorQueue};
 use crate::policy::gc_work::TRACE_KIND_PUBLIC;
 use crate::util::metadata::public_bit::is_public;
@@ -52,7 +54,7 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ConcurrentTraceObjec
 
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
         self.plan
-            .trace_object::<Self, { TRACE_KIND_PUBLIC }>(self, object, self.worker())
+            .trace_object::<Self, { TRACE_KIND_PUBLIC }>(self, object, object, self.worker())
     }
 
     fn trace_objects(&mut self, objects: &[ObjectReference]) {
@@ -175,8 +177,10 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> GCWork<VM>
 
 pub struct ProcessSlotRemset<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> {
     plan: &'static P,
+    objects: Option<Vec<ObjectReference>>,
     slots: Option<Vec<VM::VMSlot>>,
     // recursively generated objects
+    next_objects: VectorQueue<ObjectReference>,
     next_slots: VectorQueue<VM::VMSlot>,
     worker: *mut GCWorker<VM>,
     #[cfg(debug_assertions)]
@@ -192,15 +196,19 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessSlotRemset<VM
     const BUFFER_SIZE: usize = 8192;
 
     pub fn new(
+        objects: Vec<ObjectReference>,
         slots: Vec<VM::VMSlot>,
         #[cfg(debug_assertions)] mutator_id: u32,
         mmtk: &'static MMTK<VM>,
     ) -> Self {
         let plan = mmtk.get_plan().downcast_ref::<P>().unwrap();
         // crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
+
         Self {
             plan,
+            objects: Some(objects),
             slots: Some(slots),
+            next_objects: VectorQueue::default(),
             next_slots: VectorQueue::default(),
             worker: std::ptr::null_mut(),
             #[cfg(debug_assertions)]
@@ -216,9 +224,12 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessSlotRemset<VM
     #[cold]
     fn flush(&mut self) {
         if !self.next_slots.is_empty() {
+            let objects = self.next_objects.take();
             let slots = self.next_slots.take();
+
             let worker = self.worker();
             let w = Self::new(
+                objects,
                 slots,
                 #[cfg(debug_assertions)]
                 self.mutator_id,
@@ -228,9 +239,13 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessSlotRemset<VM
         }
     }
 
-    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+    fn trace_object(
+        &mut self,
+        source: ObjectReference,
+        object: ObjectReference,
+    ) -> ObjectReference {
         self.plan
-            .trace_object::<Self, { TRACE_KIND_PUBLIC }>(self, object, self.worker())
+            .trace_object::<Self, { TRACE_KIND_PUBLIC }>(self, source, object, self.worker())
     }
 
     fn scan_and_enqueue(&mut self, object: ObjectReference) {
@@ -238,6 +253,7 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessSlotRemset<VM
             if s.load().is_none() {
                 return;
             }
+            self.next_objects.push(object);
             self.next_slots.push(s);
             if self.next_slots.len() > Self::BUFFER_SIZE {
                 self.flush();
@@ -246,8 +262,9 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessSlotRemset<VM
         self.plan.post_scan_object(object);
     }
 
-    fn process_slots(&mut self, slots: &[VM::VMSlot]) {
-        for slot in slots.iter() {
+    fn process_slots(&mut self, sources: &[ObjectReference], slots: &[VM::VMSlot]) {
+        debug_assert_eq!(sources.len(), slots.len());
+        for (source, slot) in sources.iter().zip(slots.iter()) {
             if let Some(object) = slot.load() {
                 // #[cfg(debug_assertions)]
                 // {
@@ -265,7 +282,7 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessSlotRemset<VM
                 // slots may contain private objects as public object might be overwritten by
                 // some other private object, so need to exclude those private ones
                 if is_public(object) {
-                    let new_object = self.trace_object(object);
+                    let new_object = self.trace_object(*source, object);
                     slot.store(new_object);
                 }
             }
@@ -279,15 +296,18 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> GCWork<VM>
     fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         self.worker = worker;
         // trace objects
-        if let Some(slots) = self.slots.take() {
-            self.process_slots(&slots)
+        if let (Some(objects), Some(slots)) = (self.objects.take(), self.slots.take()) {
+            self.process_slots(&objects, &slots);
         }
 
+        let mut next_objects = vec![];
         let mut next_slots = vec![];
         while !self.next_slots.is_empty() {
             next_slots.clear();
+            next_objects.clear();
             self.next_slots.swap(&mut next_slots);
-            self.process_slots(&next_slots);
+            self.next_objects.swap(&mut next_objects);
+            self.process_slots(&next_objects, &next_slots);
         }
         self.flush();
     }
@@ -309,7 +329,9 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ObjectQueue
 pub struct ProcessObjectRemset<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> {
     plan: &'static P,
     objects: Option<Vec<ObjectReference>>,
-    // recursively generated slots
+    slots: Option<Vec<VM::VMSlot>>,
+    // recursively generated objects
+    next_objects: VectorQueue<ObjectReference>,
     next_slots: VectorQueue<VM::VMSlot>,
     worker: *mut GCWorker<VM>,
     #[cfg(debug_assertions)]
@@ -331,9 +353,42 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessObjectRemset<
     ) -> Self {
         let plan = mmtk.get_plan().downcast_ref::<P>().unwrap();
         // crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
+        let mut slots = Vec::with_capacity(Self::BUFFER_SIZE);
+        let mut sources = Vec::with_capacity(Self::BUFFER_SIZE);
+        for object in objects {
+            object.iterate_fields::<VM, _>(|s| {
+                if s.load().is_none() {
+                    return;
+                }
+                sources.push(object);
+                slots.push(s);
+            });
+        }
+        Self {
+            plan,
+            objects: Some(sources),
+            slots: Some(slots),
+            next_objects: VectorQueue::default(),
+            next_slots: VectorQueue::default(),
+            worker: std::ptr::null_mut(),
+            #[cfg(debug_assertions)]
+            mutator_id,
+        }
+    }
+
+    pub fn __new(
+        objects: Vec<ObjectReference>,
+        slots: Vec<VM::VMSlot>,
+        #[cfg(debug_assertions)] mutator_id: u32,
+        mmtk: &'static MMTK<VM>,
+    ) -> Self {
+        let plan = mmtk.get_plan().downcast_ref::<P>().unwrap();
+
         Self {
             plan,
             objects: Some(objects),
+            slots: Some(slots),
+            next_objects: VectorQueue::default(),
             next_slots: VectorQueue::default(),
             worker: std::ptr::null_mut(),
             #[cfg(debug_assertions)]
@@ -349,9 +404,11 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessObjectRemset<
     #[cold]
     fn flush(&mut self) {
         if !self.next_slots.is_empty() {
+            let objects = self.next_objects.take();
             let slots = self.next_slots.take();
             let worker = self.worker();
-            let w = ProcessSlotRemset::<VM, P>::new(
+            let w = Self::__new(
+                objects,
                 slots,
                 #[cfg(debug_assertions)]
                 self.mutator_id,
@@ -361,9 +418,13 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessObjectRemset<
         }
     }
 
-    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
+    fn trace_object(
+        &mut self,
+        source: ObjectReference,
+        object: ObjectReference,
+    ) -> ObjectReference {
         self.plan
-            .trace_object::<Self, { TRACE_KIND_PUBLIC }>(self, object, self.worker())
+            .trace_object::<Self, { TRACE_KIND_PUBLIC }>(self, source, object, self.worker())
     }
 
     fn scan_and_enqueue(&mut self, object: ObjectReference) {
@@ -371,6 +432,7 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessObjectRemset<
             if s.load().is_none() {
                 return;
             }
+            self.next_objects.push(object);
             self.next_slots.push(s);
             if self.next_slots.len() > Self::BUFFER_SIZE {
                 self.flush();
@@ -379,10 +441,13 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessObjectRemset<
         self.plan.post_scan_object(object);
     }
 
-    fn process_objects(&mut self, objects: &[ObjectReference]) {
-        for object in objects.iter() {
-            let new_object = self.trace_object(*object);
-            debug_assert_eq!(*object, new_object);
+    fn process_objects(&mut self, objects: &[ObjectReference], slots: &[VM::VMSlot]) {
+        debug_assert_eq!(objects.len(), slots.len());
+        for (source, slot) in objects.iter().zip(slots.iter()) {
+            let object = slot.load().unwrap();
+            let new_object = self.trace_object(*source, object);
+            // debug_assert_eq!(object, new_object);
+            slot.store(new_object);
         }
     }
 }
@@ -392,12 +457,18 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> GCWork<VM>
 {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         self.worker = worker;
-        if let Some(objects) = self.objects.take() {
-            self.process_objects(&objects)
+        if let (Some(objects), Some(slots)) = (self.objects.take(), self.slots.take()) {
+            self.process_objects(&objects, &slots);
         }
-        // All pinned objects have been processed, the remaining
-        // part is to create ProcessSlotRemset work packet to
-        // process recursively generated slots
+        let mut next_objects = vec![];
+        let mut next_slots = vec![];
+        while !self.next_slots.is_empty() {
+            next_slots.clear();
+            next_objects.clear();
+            self.next_slots.swap(&mut next_slots);
+            self.next_objects.swap(&mut next_objects);
+            self.process_objects(&next_objects, &next_slots);
+        }
         self.flush();
     }
 }

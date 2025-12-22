@@ -559,9 +559,6 @@ pub struct CommonSpace<VM: VMBinding> {
     pub options: Arc<Options>,
 
     p: PhantomData<VM>,
-
-    #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
-    pub objects: std::sync::Mutex<std::collections::HashSet<ObjectReference>>,
 }
 
 /// Arguments passed from a policy to create a space. This includes policy specific args.
@@ -632,8 +629,6 @@ impl<VM: VMBinding> CommonSpace<VM> {
             global_state: args.plan_args.global_state,
             options: args.plan_args.options.clone(),
             p: PhantomData,
-            #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
-            objects: std::sync::Mutex::new(std::collections::HashSet::new()),
         };
 
         let vmrequest = args.plan_args.vmrequest;

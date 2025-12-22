@@ -725,6 +725,14 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
         self.local_blocks.extend(blocks);
 
+        #[cfg(debug_assertions)]
+        {
+            use crate::policy::PAGES_FREED_IN_LOCAL_GC;
+            use std::sync::atomic::Ordering;
+
+            PAGES_FREED_IN_LOCAL_GC.fetch_add(self.local_free_blocks.len() * 8, Ordering::SeqCst);
+        }
+
         // Give back free blocks
         // local free block list may contain pre-allocated blocks
         // need to deinit those blocks, otherwise, a subsequent global

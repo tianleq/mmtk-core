@@ -14,6 +14,46 @@ pub const THREAD_LOCAL_GC_ACTIVE: u32 = 1;
 pub const THREAD_LOCAL_GC_INACTIVE: u32 = 0;
 pub const THREAD_LOCAL_GC_PENDING: u32 = u32::MAX;
 
+pub struct ScheduleExecuteThreadlocalCollectionWork;
+
+impl<VM: VMBinding> scheduler::GCWork<VM> for ScheduleExecuteThreadlocalCollectionWork {
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+        #[cfg(debug_assertions)]
+        {
+            use crate::policy::STACK_ROOTS;
+            STACK_ROOTS.lock().unwrap().clear();
+        }
+
+        for mutator in VM::VMActivePlan::mutators() {
+            worker.add_work(
+                scheduler::WorkBucketStage::Local,
+                ExecuteThreadlocalCollectionWork::new(mutator.mutator_tls),
+            );
+        }
+    }
+}
+
+pub struct ExecuteThreadlocalCollectionWork {
+    mutator_tls: VMMutatorThread,
+}
+
+impl ExecuteThreadlocalCollectionWork {
+    pub fn new(tls: VMMutatorThread) -> Self {
+        Self { mutator_tls: tls }
+    }
+}
+
+impl<VM: VMBinding> scheduler::GCWork<VM> for ExecuteThreadlocalCollectionWork {
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        ExecuteThreadlocalCollection {
+            mmtk,
+            mutator_tls: self.mutator_tls,
+            start_time: std::time::Instant::now(),
+        }
+        .execute();
+    }
+}
+
 pub struct ExecuteThreadlocalCollection<VM: VMBinding> {
     pub mmtk: &'static MMTK<VM>,
     pub mutator_tls: VMMutatorThread,
@@ -223,6 +263,15 @@ where
     Closure: ThreadlocalObjectGraphTraversalClosure<VM>,
 {
     fn traverse_from_roots(&mut self, root_slots: Vec<VM::VMSlot>) {
+        #[cfg(debug_assertions)]
+        {
+            use crate::policy::STACK_ROOTS;
+
+            STACK_ROOTS
+                .lock()
+                .unwrap()
+                .extend(root_slots.iter().copied().map(|s| s.to_address()));
+        }
         let root_slots = Some(root_slots);
         Closure::new(self.mmtk, self.tls, root_slots, self.worker).do_closure();
     }
@@ -295,7 +344,7 @@ where
         mutator.stack_slots.extend(
             root_slots
                 .iter()
-                .copied()
+                // .copied()
                 .filter(|slot| slot.load().is_some_and(is_public)),
         );
     }
@@ -342,7 +391,7 @@ where
 
             slot_buffer = root_slots;
         }
-
+        debug_assert_eq!(slot_buffer.len(), source_buffer.len());
         Self {
             plan: mmtk.get_plan().downcast_ref::<P>().unwrap(),
             tls,
@@ -373,7 +422,19 @@ where
             else {
                 continue;
             };
+
             let source = _source.unwrap();
+            #[cfg(debug_assertions)]
+            {
+                debug_assert_eq!(self.slot_buffer.len(), self.source_buffer.len());
+                if source != object {
+                    // this is not roots, so _source - slot <= _source.size
+                    let size = VM::VMObjectModel::get_current_size(source);
+                    debug_assert!(
+                        slot.to_address().as_usize() - source.to_raw_address().as_usize() <= size
+                    );
+                }
+            }
             let new_object = match self.plan.thread_local_trace_object::<KIND>(
                 mutator,
                 source,
@@ -399,6 +460,7 @@ where
                         new_object,
                         self,
                     );
+                    debug_assert_eq!(self.slot_buffer.len(), self.source_buffer.len());
                     self.plan
                         .thread_local_post_scan_object::<KIND>(mutator, new_object);
                     new_object

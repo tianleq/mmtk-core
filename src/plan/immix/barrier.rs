@@ -31,11 +31,11 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
         }
     }
 
-    fn update_remset(&self, slot: VM::VMSlot) {
+    fn update_remset(&self, source: ObjectReference, _slot: VM::VMSlot) {
         // Assumption here is objects published by Non-Java thread are globally reachable
         // So only keep track of objects published by Java thread
         if VM::VMActivePlan::is_mutator(self.tls.0) {
-            VM::VMActivePlan::mutator(self.tls).slot_remset.push(slot);
+            VM::VMActivePlan::mutator(self.tls).slot_remset.push(source);
         } else {
             // This should not be necessary, non-java thread should be part of VM specific roots
             // so all such public objects should be correctly forwarded if necessary
@@ -150,8 +150,8 @@ impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM>
             }
         } else {
             debug_assert_eq!(src.bytes(), dst.bytes());
-            #[cfg(debug_assertions)]
-            let mut update = false;
+            // #[cfg(debug_assertions)]
+            // let mut update = false;
 
             // now we know dst_base is private, but src might still contain public objects,
             // so for any slot that is about to be containing a public objects, it needs to
@@ -161,11 +161,11 @@ impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM>
                 let slot = slots.next().unwrap();
                 if let Some(object) = s.load() {
                     if is_public(object) {
-                        self.update_remset(slot);
-                        #[cfg(debug_assertions)]
-                        {
-                            update = true;
-                        }
+                        self.update_remset(dst_base, slot);
+                        // #[cfg(debug_assertions)]
+                        // {
+                        //     update = true;
+                        // }
                     }
                 }
             }
@@ -232,7 +232,7 @@ impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM>
 
         //     GLOBAL_OBJECT_REMSET.lock().unwrap().insert(src);
         // }
-        self.update_remset(slot);
+        self.update_remset(src, slot);
     }
 
     fn object_reference_write_s3(
@@ -257,13 +257,13 @@ impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM>
         //     GLOBAL_OBJECT_REMSET.lock().unwrap().insert(src);
         // }
         src.iterate_fields::<VM, _>(|slot| {
-            self.update_remset(slot);
+            self.update_remset(src, slot);
         });
     }
 
     fn object_reference_clone_pre(&mut self, obj: ObjectReference) {
         obj.iterate_fields::<VM, _>(|slot| {
-            self.update_remset(slot);
+            self.update_remset(obj, slot);
         });
     }
 }

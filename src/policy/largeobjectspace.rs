@@ -175,7 +175,8 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
         object: ObjectReference,
         _worker: GCWorkerMutRef,
     ) -> ObjectReference {
-        self.trace_object(queue, object)
+        debug_assert!(false, "should not reach here");
+        self.trace_object(queue, object, object)
     }
 
     fn debug_print_object_info(&self, object: ObjectReference) {
@@ -223,6 +224,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LargeObjec
     fn trace_object<Q: ObjectQueue, const KIND: crate::policy::gc_work::TraceKind>(
         &self,
         queue: &mut Q,
+        source: ObjectReference,
         object: ObjectReference,
         _copy: Option<CopySemantics>,
         _worker: &mut GCWorker<VM>,
@@ -247,10 +249,19 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LargeObjec
                     // );
                 }
 
-                let mut objects = self.common.objects.lock().unwrap();
+                let mut objects = _worker.mmtk.state.objects.lock().unwrap();
                 if !objects.contains(&object) {
+                    use crate::policy::GLOBAL_OBJECTS;
+
                     queue.enqueue(object);
                     objects.insert(object);
+                    if is_public(object) {
+                        GLOBAL_OBJECTS.lock().unwrap().insert(object, source);
+                    } else {
+                        use crate::policy::PRIVATE_OBJECTS;
+
+                        PRIVATE_OBJECTS.lock().unwrap().insert(object);
+                    }
                 }
             }
 
@@ -263,8 +274,9 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LargeObjec
                     "los object: {:?} is missing",
                     object
                 );
+                unreachable!("Should not reach here 2");
 
-                let mut objects = self.common.objects.lock().unwrap();
+                let mut objects = _worker.mmtk.state.objects.lock().unwrap();
                 if !objects.contains(&object) {
                     queue.enqueue(object);
                     objects.insert(object);
@@ -276,18 +288,14 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LargeObjec
             if !is_public(object) {
                 return object;
             }
-            #[cfg(debug_assertions)]
-            {
-                use crate::policy::GLOBAL_OBJECTS_CONSERVATIVE;
-                GLOBAL_OBJECTS_CONSERVATIVE.lock().unwrap().insert(object);
-            }
-            self.trace_object(queue, object)
+            self.trace_object(queue, source, object)
         } else if KIND == TRACE_KIND_UPDATE {
             debug_assert!(is_public(object));
             debug_assert!(self.is_marked(object));
             object
         } else {
-            self.trace_object(queue, object)
+            // self.trace_object(queue, source, object)
+            unreachable!()
         }
     }
     fn may_move_objects<const KIND: crate::policy::gc_work::TraceKind>() -> bool {
@@ -387,7 +395,8 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         if is_public(object) {
             if !is_public(source) {
                 // found private --> public
-                mutator.slot_remset.push(slot.unwrap());
+                // mutator.slot_remset.push(slot.unwrap());
+                mutator.slot_remset.push(source);
             }
             return ThreadlocalTracedObjectType::Scanned(object);
         }
@@ -449,11 +458,25 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     pub fn trace_object<Q: ObjectQueue>(
         &self,
         queue: &mut Q,
+        source: ObjectReference,
         object: ObjectReference,
     ) -> ObjectReference {
         match self.trace_object_impl(object) {
             ThreadlocalTracedObjectType::Scanned(_) => (),
-            ThreadlocalTracedObjectType::ToBeScanned(object) => queue.enqueue(object),
+            ThreadlocalTracedObjectType::ToBeScanned(object) => {
+                #[cfg(debug_assertions)]
+                {
+                    if is_public(object) {
+                        use crate::policy::GLOBAL_OBJECTS_CONSERVATIVE;
+
+                        GLOBAL_OBJECTS_CONSERVATIVE
+                            .lock()
+                            .unwrap()
+                            .insert(object, source);
+                    }
+                }
+                queue.enqueue(object)
+            }
         }
         object
     }
@@ -635,6 +658,13 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         #[cfg(feature = "thread_local_gc_copying_stats")]
         {
             self.live_pages.fetch_sub(_pages as usize, Ordering::SeqCst);
+        }
+        #[cfg(debug_assertions)]
+        {
+            use crate::policy::PAGES_FREED_IN_LOCAL_GC;
+            use std::sync::atomic::Ordering;
+
+            PAGES_FREED_IN_LOCAL_GC.fetch_add(_pages as usize, Ordering::SeqCst);
         }
     }
 

@@ -251,6 +251,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
     fn trace_object<Q: ObjectQueue, const KIND: TraceKind>(
         &self,
         queue: &mut Q,
+        source: ObjectReference,
         object: ObjectReference,
         copy: Option<CopySemantics>,
         worker: &mut GCWorker<VM>,
@@ -284,8 +285,6 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
 
                 let public = is_public(object);
                 if public {
-                    use crate::policy::GLOBAL_OBJECTS;
-
                     debug_assert!(
                         self.is_marked(object),
                         "public object: {:?} missing, dangling: {}",
@@ -309,7 +308,6 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
                         "found from space object: {:?}",
                         object
                     );
-                    GLOBAL_OBJECTS.lock().unwrap().insert(object);
                 } else {
                     // use crate::policy::PRIVATE_OBJECTS_IN_CURRENT_GC;
 
@@ -329,10 +327,19 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
                     // // keep track of private object visited during verify trace
                     // PRIVATE_OBJECTS_IN_CURRENT_GC.lock().unwrap().insert(object);
                 }
-                let mut objects = self.common.objects.lock().unwrap();
+                let mut objects = worker.mmtk.state.objects.lock().unwrap();
                 if !objects.contains(&object) {
                     queue.enqueue(object);
                     objects.insert(object);
+                    if is_public(object) {
+                        use crate::policy::GLOBAL_OBJECTS;
+
+                        GLOBAL_OBJECTS.lock().unwrap().insert(object, source);
+                    } else {
+                        use crate::policy::PRIVATE_OBJECTS;
+
+                        PRIVATE_OBJECTS.lock().unwrap().insert(object);
+                    }
                 }
             }
 
@@ -340,6 +347,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
         } else if KIND == TRACE_KIND_VERIFY {
             #[cfg(debug_assertions)]
             {
+                unreachable!("Should not reach here");
                 debug_assert!(self.is_marked(object), "object:{:?} missing", object,);
                 debug_assert!(
                     Line::is_object_marked::<VM>(
@@ -350,7 +358,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
                     object,
                     self.line_mark_state.load(Ordering::Relaxed)
                 );
-                let mut objects = self.common.objects.lock().unwrap();
+                let mut objects = worker.mmtk.state.objects.lock().unwrap();
                 if !objects.contains(&object) {
                     queue.enqueue(object);
                     objects.insert(object);
@@ -364,29 +372,58 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
             }
             #[cfg(debug_assertions)]
             {
-                use crate::policy::GLOBAL_OBJECTS_CONSERVATIVE;
+                // self.trace_object_without_moving(queue, object)
+                let object = if Block::containing(object).is_defrag_source() {
+                    self.trace_object_with_opportunistic_copy(
+                        queue,
+                        object,
+                        copy.unwrap(),
+                        worker,
+                        // This should not be nursery collection. Nursery collection does not use PolicyTraceObject.
+                        false,
+                    )
+                } else {
+                    #[cfg(debug_assertions)]
+                    {
+                        super::DEBUG_PUBLIC_OBJECT_LEFT_IN_PLACE
+                            .lock()
+                            .unwrap()
+                            .insert(object);
+                    }
+                    self.trace_object_without_moving(queue, object)
+                };
 
-                GLOBAL_OBJECTS_CONSERVATIVE.lock().unwrap().insert(object);
-            }
-            // self.trace_object_without_moving(queue, object)
-            if Block::containing(object).is_defrag_source() {
-                self.trace_object_with_opportunistic_copy(
-                    queue,
-                    object,
-                    copy.unwrap(),
-                    worker,
-                    // This should not be nursery collection. Nursery collection does not use PolicyTraceObject.
-                    false,
-                )
-            } else {
                 #[cfg(debug_assertions)]
                 {
-                    super::DEBUG_PUBLIC_OBJECT_LEFT_IN_PLACE
-                        .lock()
-                        .unwrap()
-                        .insert(object);
+                    use crate::policy::GLOBAL_OBJECTS_CONSERVATIVE;
+                    let mut conservative = GLOBAL_OBJECTS_CONSERVATIVE.lock().unwrap();
+                    conservative.entry(object).or_insert(source);
                 }
-                self.trace_object_without_moving(queue, object)
+
+                object
+            }
+            #[cfg(not(debug_assertions))]
+            {
+                // self.trace_object_without_moving(queue, object)
+                if Block::containing(object).is_defrag_source() {
+                    self.trace_object_with_opportunistic_copy(
+                        queue,
+                        object,
+                        copy.unwrap(),
+                        worker,
+                        // This should not be nursery collection. Nursery collection does not use PolicyTraceObject.
+                        false,
+                    )
+                } else {
+                    #[cfg(debug_assertions)]
+                    {
+                        super::DEBUG_PUBLIC_OBJECT_LEFT_IN_PLACE
+                            .lock()
+                            .unwrap()
+                            .insert(object);
+                    }
+                    self.trace_object_without_moving(queue, object)
+                }
             }
         } else if KIND == TRACE_KIND_UPDATE {
             debug_assert!(is_public(object));
@@ -768,7 +805,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             //     self.left_in_place.lock().unwrap().len()
             // );
             self.left_in_place.lock().unwrap().clear();
-            self.common.objects.lock().unwrap().clear();
         }
     }
 
@@ -1358,7 +1394,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     pub fn thread_local_trace_object_with_opportunistic_copy(
         &self,
         mutator: &mut Mutator<VM>,
-        _source: ObjectReference,
         object: ObjectReference,
         semantics: CopySemantics,
         // nursery_collection: bool,
@@ -2049,7 +2084,8 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
             if !is_public(source) {
                 // found a private --> public (root slot will not enter this branch since source == object when it is a root)
                 // slot will never be None here
-                mutator.slot_remset.push(slot.unwrap());
+                // mutator.slot_remset.push(slot.unwrap());
+                mutator.slot_remset.push(source);
             }
             return ThreadlocalTracedObjectType::Scanned(object);
         }
@@ -2063,7 +2099,6 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
             {
                 self.thread_local_trace_object_with_opportunistic_copy(
                     mutator,
-                    source,
                     object,
                     _copy.unwrap(),
                 )

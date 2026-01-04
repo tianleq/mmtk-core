@@ -18,12 +18,6 @@ pub struct ScheduleExecuteThreadlocalCollectionWork;
 
 impl<VM: VMBinding> scheduler::GCWork<VM> for ScheduleExecuteThreadlocalCollectionWork {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
-        #[cfg(debug_assertions)]
-        {
-            use crate::policy::STACK_ROOTS;
-            STACK_ROOTS.lock().unwrap().clear();
-        }
-
         for mutator in VM::VMActivePlan::mutators() {
             worker.add_work(
                 scheduler::WorkBucketStage::Local,
@@ -263,15 +257,15 @@ where
     Closure: ThreadlocalObjectGraphTraversalClosure<VM>,
 {
     fn traverse_from_roots(&mut self, root_slots: Vec<VM::VMSlot>) {
-        #[cfg(debug_assertions)]
-        {
-            use crate::policy::STACK_ROOTS;
+        // #[cfg(debug_assertions)]
+        // {
+        //     use crate::policy::STACK_ROOTS;
 
-            STACK_ROOTS
-                .lock()
-                .unwrap()
-                .extend(root_slots.iter().copied().map(|s| s.to_address()));
-        }
+        //     STACK_ROOTS
+        //         .lock()
+        //         .unwrap()
+        //         .extend(root_slots.iter().copied().map(|s| s.to_address()));
+        // }
         let root_slots = Some(root_slots);
         Closure::new(self.mmtk, self.tls, root_slots, self.worker).do_closure();
     }

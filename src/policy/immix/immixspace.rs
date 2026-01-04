@@ -251,7 +251,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
     fn trace_object<Q: ObjectQueue, const KIND: TraceKind>(
         &self,
         queue: &mut Q,
-        source: ObjectReference,
+        _source: ObjectReference,
         object: ObjectReference,
         copy: Option<CopySemantics>,
         worker: &mut GCWorker<VM>,
@@ -332,38 +332,42 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
                     queue.enqueue(object);
                     objects.insert(object);
                     if is_public(object) {
-                        use crate::policy::GLOBAL_OBJECTS;
+                        // use crate::policy::GLOBAL_OBJECTS;
 
-                        GLOBAL_OBJECTS.lock().unwrap().insert(object, source);
+                        // GLOBAL_OBJECTS.lock().unwrap().insert(object, _source);
+                        self.common
+                            .global_state
+                            .global_objects_precise_count
+                            .fetch_add(1, Ordering::SeqCst);
                     } else {
-                        use crate::policy::PRIVATE_OBJECTS;
+                        // use crate::policy::PRIVATE_OBJECTS;
 
-                        PRIVATE_OBJECTS.lock().unwrap().insert(object);
+                        // PRIVATE_OBJECTS.lock().unwrap().insert(object);
                     }
                 }
             }
 
             object
         } else if KIND == TRACE_KIND_VERIFY {
-            #[cfg(debug_assertions)]
-            {
-                unreachable!("Should not reach here");
-                debug_assert!(self.is_marked(object), "object:{:?} missing", object,);
-                debug_assert!(
-                    Line::is_object_marked::<VM>(
-                        self.line_mark_state.load(Ordering::Relaxed),
-                        object
-                    ),
-                    "object: {:?} has unmarked lines, line mark state: {}",
-                    object,
-                    self.line_mark_state.load(Ordering::Relaxed)
-                );
-                let mut objects = worker.mmtk.state.objects.lock().unwrap();
-                if !objects.contains(&object) {
-                    queue.enqueue(object);
-                    objects.insert(object);
-                }
-            }
+            // #[cfg(debug_assertions)]
+            // {
+            //     unreachable!("Should not reach here");
+            //     debug_assert!(self.is_marked(object), "object:{:?} missing", object,);
+            //     debug_assert!(
+            //         Line::is_object_marked::<VM>(
+            //             self.line_mark_state.load(Ordering::Relaxed),
+            //             object
+            //         ),
+            //         "object: {:?} has unmarked lines, line mark state: {}",
+            //         object,
+            //         self.line_mark_state.load(Ordering::Relaxed)
+            //     );
+            //     let mut objects = worker.mmtk.state.objects.lock().unwrap();
+            //     if !objects.contains(&object) {
+            //         queue.enqueue(object);
+            //         objects.insert(object);
+            //     }
+            // }
 
             object
         } else if KIND == TRACE_KIND_PUBLIC {
@@ -395,9 +399,13 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
 
                 #[cfg(debug_assertions)]
                 {
-                    use crate::policy::GLOBAL_OBJECTS_CONSERVATIVE;
-                    let mut conservative = GLOBAL_OBJECTS_CONSERVATIVE.lock().unwrap();
-                    conservative.entry(object).or_insert(source);
+                    // use crate::policy::GLOBAL_OBJECTS_CONSERVATIVE;
+                    // let mut conservative = GLOBAL_OBJECTS_CONSERVATIVE.lock().unwrap();
+                    // conservative.entry(object).or_insert(source);
+                    self.common
+                        .global_state
+                        .global_objects_count
+                        .fetch_add(1, Ordering::SeqCst);
                 }
 
                 object
@@ -2074,7 +2082,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
         &self,
         mutator: &mut Mutator<VM>,
         source: ObjectReference,
-        slot: Option<VM::VMSlot>,
+        _slot: Option<VM::VMSlot>,
         object: ObjectReference,
         _worker: Option<*mut GCWorker<VM>>,
         _copy: Option<CopySemantics>,
@@ -2084,7 +2092,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
             if !is_public(source) {
                 // found a private --> public (root slot will not enter this branch since source == object when it is a root)
                 // slot will never be None here
-                // mutator.slot_remset.push(slot.unwrap());
+                // mutator.slot_remset.push(_slot.unwrap());
                 mutator.slot_remset.push(source);
             }
             return ThreadlocalTracedObjectType::Scanned(object);

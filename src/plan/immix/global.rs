@@ -314,26 +314,40 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             .store(full_pending, Ordering::Release);
         #[cfg(debug_assertions)]
         {
-            use crate::policy::{
-                GLOBAL_OBJECTS, GLOBAL_OBJECTS_CONSERVATIVE, GLOBAL_ROOTS_COUNTER,
-                GLOBAL_ROOTS_COUNTER_CONSERVATIVE, PAGES_FREED_IN_LOCAL_GC, PRIVATE_OBJECTS,
-            };
+            // use crate::policy::{
+            //     GLOBAL_OBJECTS, GLOBAL_OBJECTS_CONSERVATIVE, GLOBAL_ROOTS_COUNTER,
+            //     GLOBAL_ROOTS_COUNTER_CONSERVATIVE, PAGES_FREED_IN_LOCAL_GC, PRIVATE_OBJECTS,
+            // };
 
-            let mut conservative = GLOBAL_OBJECTS_CONSERVATIVE.lock().unwrap();
-            let mut precise = GLOBAL_OBJECTS.lock().unwrap();
-            let mut private = PRIVATE_OBJECTS.lock().unwrap();
+            // let mut conservative = GLOBAL_OBJECTS_CONSERVATIVE.lock().unwrap();
+            // let mut precise = GLOBAL_OBJECTS.lock().unwrap();
+            // let mut private = PRIVATE_OBJECTS.lock().unwrap();
             // let mut remset = REMSET_OBJECTS.lock().unwrap();
             // let stack_slots = STACK_ROOTS.lock().unwrap();
             // let mut stack_slots_sanity = STACK_ROOTS_SANITY.lock().unwrap();
 
             println!(
-                "{} vs {} at the end of global GC, {} pages freed in local GC, {} vs {}",
-                conservative.len(),
-                precise.len(),
-                PAGES_FREED_IN_LOCAL_GC.load(Ordering::Acquire),
-                GLOBAL_ROOTS_COUNTER_CONSERVATIVE.load(Ordering::Acquire),
-                GLOBAL_ROOTS_COUNTER.load(Ordering::Acquire)
+                "{} vs {} at the end of a global GC",
+                self.common
+                    .base
+                    .global_state
+                    .global_objects_count
+                    .load(Ordering::Acquire),
+                self.common
+                    .base
+                    .global_state
+                    .global_objects_precise_count
+                    .load(Ordering::Acquire)
             );
+
+            // println!(
+            //     "{} vs {} at the end of global GC, {} pages freed in local GC, {} vs {}",
+            //     conservative.len(),
+            //     precise.len(),
+            //     PAGES_FREED_IN_LOCAL_GC.load(Ordering::Acquire),
+            //     GLOBAL_ROOTS_COUNTER_CONSERVATIVE.load(Ordering::Acquire),
+            //     GLOBAL_ROOTS_COUNTER.load(Ordering::Acquire)
+            // );
             // for s in stack_slots.difference(&stack_slots_sanity) {
             //     println!("local GC stack slot: {:?}", s);
             // }
@@ -390,12 +404,12 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             //     }
             //     panic!("retention rate too high");
             // }
-            conservative.clear();
-            precise.clear();
-            private.clear();
+            // conservative.clear();
+            // precise.clear();
+            // private.clear();
             // remset.clear();
-            GLOBAL_ROOTS_COUNTER.store(0, Ordering::Release);
-            GLOBAL_ROOTS_COUNTER_CONSERVATIVE.store(0, Ordering::Release);
+            // GLOBAL_ROOTS_COUNTER.store(0, Ordering::Release);
+            // GLOBAL_ROOTS_COUNTER_CONSERVATIVE.store(0, Ordering::Release);
             // stack_slots_sanity.clear();
             self.common()
                 .base
@@ -404,6 +418,16 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 .lock()
                 .unwrap()
                 .clear();
+            self.common
+                .base
+                .global_state
+                .global_objects_count
+                .store(0, Ordering::Release);
+            self.common
+                .base
+                .global_state
+                .global_objects_precise_count
+                .store(0, Ordering::Release);
             // {
             //     use std::collections::HashSet;
 
@@ -643,7 +667,7 @@ impl<VM: VMBinding> Immix<VM> {
         // Stop mutators
         #[cfg(debug_assertions)]
         {
-            // use crate::scheduler::thread_local_gc_work::ScheduleExecuteThreadlocalCollectionWork;
+            use crate::scheduler::thread_local_gc_work::ScheduleExecuteThreadlocalCollectionWork;
             debug_assert!(plan.base().global_state.objects.lock().unwrap().is_empty());
             scheduler.work_buckets[WorkBucketStage::Unconstrained].add(
                 StopMutators::<Context>::new_with_args(ScanStackSemantic::RootsOnly),
@@ -651,8 +675,8 @@ impl<VM: VMBinding> Immix<VM> {
             // mutators have not reahced safepoint yet, so one cannot iterate through mutators here
             // Instead, craete a work packet in Local bucket and do it there. All mutators are guaranteed
             // to be safe at that point.
-            // scheduler.work_buckets[WorkBucketStage::Local]
-            //     .set_sentinel(Box::new(ScheduleExecuteThreadlocalCollectionWork));
+            scheduler.work_buckets[WorkBucketStage::Local]
+                .set_sentinel(Box::new(ScheduleExecuteThreadlocalCollectionWork));
         }
 
         #[cfg(not(debug_assertions))]

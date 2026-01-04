@@ -333,11 +333,11 @@ impl<VM: VMBinding> GCTriggerPolicy<VM> for FixedHeapSizeTrigger {
     fn on_gc_start(&self, _mmtk: &'static MMTK<VM>) {
         #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
         {
-            use crate::policy::{immix::GLOBAL_BLOCK_SET, PAGES_FREED_IN_LOCAL_GC};
+            use crate::policy::immix::GLOBAL_BLOCK_SET;
             crate::util::GLOBAL_GC_ID.fetch_add(1, Ordering::SeqCst);
             GLOBAL_BLOCK_SET.lock().unwrap().clear();
 
-            PAGES_FREED_IN_LOCAL_GC.store(0, Ordering::Release);
+            // PAGES_FREED_IN_LOCAL_GC.store(0, Ordering::Release);
         }
     }
 

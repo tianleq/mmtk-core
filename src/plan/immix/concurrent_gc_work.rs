@@ -1,5 +1,3 @@
-use itertools::Itertools;
-
 use crate::plan::{PlanTraceObject, VectorQueue};
 use crate::policy::gc_work::TRACE_KIND_PUBLIC;
 use crate::util::metadata::public_bit::is_public;

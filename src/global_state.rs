@@ -54,6 +54,10 @@ pub struct GlobalState {
     pub(crate) live_bytes_in_last_gc: AtomicRefCell<HashMap<&'static str, LiveBytesStats>>,
     #[cfg(debug_assertions)]
     pub(crate) objects: std::sync::Mutex<std::collections::HashSet<ObjectReference>>,
+    #[cfg(debug_assertions)]
+    pub(crate) global_objects_count: AtomicUsize,
+    #[cfg(debug_assertions)]
+    pub(crate) global_objects_precise_count: AtomicUsize,
 }
 
 impl GlobalState {
@@ -213,6 +217,10 @@ impl Default for GlobalState {
             live_bytes_in_last_gc: AtomicRefCell::new(HashMap::new()),
             #[cfg(debug_assertions)]
             objects: std::sync::Mutex::new(std::collections::HashSet::new()),
+            #[cfg(debug_assertions)]
+            global_objects_count: AtomicUsize::new(0),
+            #[cfg(debug_assertions)]
+            global_objects_precise_count: AtomicUsize::new(0),
         }
     }
 }

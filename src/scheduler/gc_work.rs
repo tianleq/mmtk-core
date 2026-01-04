@@ -243,7 +243,7 @@ impl<VM: VMBinding> GCWork<VM> for DefragMutator<VM> {
 pub enum ScanStackSemantic {
     Default,
     RootsOnly,
-    Skip,
+    // Skip,
 }
 /// Stop all mutators
 ///
@@ -306,8 +306,7 @@ impl<C: GCWorkContext> GCWork<C::VM> for StopMutators<C> {
                         use crate::plan::CollectMutatorRoots;
                         mmtk.scheduler.work_buckets[WorkBucketStage::Local]
                             .add(CollectMutatorRoots::<C::VM>::new(mutator));
-                    }
-                    ScanStackSemantic::Skip => {}
+                    } // ScanStackSemantic::Skip => {}
                 }
             }
         });
@@ -1002,13 +1001,13 @@ impl<VM: VMBinding, DPE: ProcessEdgesWork<VM = VM>, PPE: ProcessEdgesWork<VM = V
 {
     #[cfg(not(feature = "debug_publish_object"))]
     fn create_process_roots_work(&mut self, slots: Vec<VM::VMSlot>) {
-        #[cfg(debug_assertions)]
-        {
-            use crate::policy::GLOBAL_ROOTS_COUNTER_CONSERVATIVE;
+        // #[cfg(debug_assertions)]
+        // {
+        //     use crate::policy::GLOBAL_ROOTS_COUNTER_CONSERVATIVE;
 
-            GLOBAL_ROOTS_COUNTER_CONSERVATIVE
-                .fetch_add(slots.len(), std::sync::atomic::Ordering::SeqCst);
-        }
+        //     GLOBAL_ROOTS_COUNTER_CONSERVATIVE
+        //         .fetch_add(slots.len(), std::sync::atomic::Ordering::SeqCst);
+        // }
         // Note: We should use the same USDT name "mmtk:roots" for all the three kinds of roots. A
         // VM binding may not call all of the three methods in this impl. For example, the OpenJDK
         // binding only calls `create_process_roots_work`, and the Ruby binding only calls

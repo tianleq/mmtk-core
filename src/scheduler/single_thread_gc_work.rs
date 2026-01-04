@@ -344,15 +344,15 @@ where
     P: Plan<VM = VM> + PlanTraceObject<VM>,
 {
     fn report_roots(&mut self, root_slots: Vec<VM::VMSlot>) {
-        #[cfg(debug_assertions)]
-        {
-            use crate::policy::{GLOBAL_ROOTS_COUNTER, STACK_ROOTS_SANITY};
-            GLOBAL_ROOTS_COUNTER.fetch_add(root_slots.len(), std::sync::atomic::Ordering::SeqCst);
-            STACK_ROOTS_SANITY
-                .lock()
-                .unwrap()
-                .extend(root_slots.iter().copied().map(|s| s.to_address()));
-        }
+        // #[cfg(debug_assertions)]
+        // {
+        //     use crate::policy::{GLOBAL_ROOTS_COUNTER, STACK_ROOTS_SANITY};
+        //     GLOBAL_ROOTS_COUNTER.fetch_add(root_slots.len(), std::sync::atomic::Ordering::SeqCst);
+        //     STACK_ROOTS_SANITY
+        //         .lock()
+        //         .unwrap()
+        //         .extend(root_slots.iter().copied().map(|s| s.to_address()));
+        // }
         self.sources
             .extend(root_slots.iter().map(|slot| slot.load()));
         self.slots.extend(root_slots);

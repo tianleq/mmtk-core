@@ -16,7 +16,6 @@ impl<VM: VMBinding> GCWork<VM> for ScheduleCollection {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
         // Tell GC trigger that GC started.
         mmtk.gc_trigger.policy.on_gc_start(mmtk);
-
         // Determine collection kind
         let is_emergency = mmtk.state.set_collection_kind(
             mmtk.get_plan().last_collection_was_exhaustive(),

@@ -58,6 +58,9 @@ pub struct GlobalState {
     pub(crate) global_objects_count: AtomicUsize,
     #[cfg(debug_assertions)]
     pub(crate) global_objects_precise_count: AtomicUsize,
+    pub(crate) is_stress_gc: AtomicBool,
+    pub(crate) stress_gc_id: AtomicUsize,
+    pub(crate) total_allocation_bytes: AtomicUsize,
 }
 
 impl GlobalState {
@@ -221,6 +224,9 @@ impl Default for GlobalState {
             global_objects_count: AtomicUsize::new(0),
             #[cfg(debug_assertions)]
             global_objects_precise_count: AtomicUsize::new(0),
+            is_stress_gc: AtomicBool::new(false),
+            stress_gc_id: AtomicUsize::new(0),
+            total_allocation_bytes: AtomicUsize::new(0),
         }
     }
 }

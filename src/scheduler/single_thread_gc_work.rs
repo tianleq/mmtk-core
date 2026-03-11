@@ -92,6 +92,7 @@ where
     P: Plan<VM = VM> + PlanTraceObject<VM> + Send,
 {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        VM::VMScanning::prepare_for_roots_re_scanning();
         // STPrepare::<VM, P>::new(mmtk).execute(worker, mmtk);
         let mut closure = STObjectGraphTraversalClosure::<VM, P, KIND>::new(mmtk, worker);
         // STStopMutators::<VM, P, DEFAULT_TRACE>::new().execute(&mut closure, worker, mmtk);

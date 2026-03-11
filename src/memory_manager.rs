@@ -1029,11 +1029,6 @@ pub fn mmtk_publish_object<VM: VMBinding>(
         if crate::util::metadata::public_bit::is_public(object) {
             return;
         }
-        if VM::VMActivePlan::is_mutator(tls.0) {
-            // Newly published objects need to be pinned and pushed to the remset
-            VM::VMActivePlan::mutator(tls).object_remset.push(object);
-            pin_object(object);
-        }
 
         let mut closure: crate::plan::PublishObjectClosure<VM> =
             crate::plan::PublishObjectClosure::<VM>::new(
@@ -1043,6 +1038,13 @@ pub fn mmtk_publish_object<VM: VMBinding>(
             );
 
         _mmtk_set_public_bit(tls, _mmtk, object);
+        if VM::VMActivePlan::is_mutator(tls.0) {
+            // Newly published objects need to be pinned and pushed to the remset
+            VM::VMActivePlan::mutator(tls).object_remset.push(object);
+            pin_object(object);
+        } else {
+            panic!("tls: {:?}, object: {}", tls, object);
+        }
         // Publish all the descendants
         VM::VMScanning::scan_object(
             VMWorkerThread(VMThread::UNINITIALIZED),

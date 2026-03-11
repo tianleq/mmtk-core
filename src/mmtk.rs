@@ -329,6 +329,13 @@ impl<VM: VMBinding> MMTK<VM> {
         self.stats.start_all();
         self.scheduler.enable_stat();
 
+        {
+            self.state.stress_gc_id.store(0, Ordering::Release);
+            self.state
+                .total_allocation_bytes
+                .store(0, Ordering::Release);
+        }
+
         #[cfg(feature = "debug_thread_local_gc_copying")]
         {
             for entry in std::fs::read_dir("/home/tianleq/misc/local-gc-debug-logs").unwrap() {
@@ -368,6 +375,10 @@ impl<VM: VMBinding> MMTK<VM> {
     pub fn harness_end(&'static self) {
         self.stats.stop_all(self);
         self.state.inside_harness.store(false, Ordering::SeqCst);
+        println!(
+            "total: {}",
+            self.state.total_allocation_bytes.load(Ordering::Acquire)
+        );
         probe!(mmtk, harness_end);
     }
 

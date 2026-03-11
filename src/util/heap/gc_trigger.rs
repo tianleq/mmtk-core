@@ -339,6 +339,11 @@ impl<VM: VMBinding> GCTriggerPolicy<VM> for FixedHeapSizeTrigger {
 
             // PAGES_FREED_IN_LOCAL_GC.store(0, Ordering::Release);
         }
+        {
+            if _mmtk.state.is_stress_gc.load(Ordering::SeqCst) {
+                _mmtk.state.stress_gc_id.fetch_add(1, Ordering::SeqCst);
+            }
+        }
     }
 
     fn on_gc_end(&self, _mmtk: &'static MMTK<VM>) {

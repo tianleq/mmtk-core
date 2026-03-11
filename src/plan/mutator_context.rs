@@ -147,7 +147,7 @@ pub struct MutatorBuilder<VM: VMBinding> {
     finalizable_candidates:
         Box<Vec<<VM::VMReferenceGlue as crate::vm::ReferenceGlue<VM>>::FinalizableType>>,
     #[cfg(feature = "thread_local_gc_copying")]
-    local_allocation_size: usize
+    local_allocation_size: usize,
 }
 
 impl<VM: VMBinding> MutatorBuilder<VM> {
@@ -212,6 +212,9 @@ impl<VM: VMBinding> MutatorBuilder<VM> {
             object_remset: Box::new(Vec::new()),
             #[cfg(feature = "thread_local_gc_copying")]
             stack_slots: Box::new(Vec::new()),
+            allocation_bytes: 0,
+            #[cfg(feature = "thread_local_gc_copying")]
+            state: 2, // this is Line::RESET_MARK_STATE + 1
         }
     }
 }
@@ -255,6 +258,10 @@ pub struct Mutator<VM: VMBinding> {
     pub(crate) object_remset: Box<Vec<ObjectReference>>,
     #[cfg(feature = "thread_local_gc_copying")]
     pub(crate) stack_slots: Box<Vec<VM::VMSlot>>,
+    pub(crate) allocation_bytes: usize,
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub(crate) state: u8
+
 }
 
 impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
@@ -454,6 +461,10 @@ impl<VM: VMBinding> Mutator<VM> {
         for selector in self.get_all_allocator_selectors() {
             unsafe { self.allocators.get_allocator_mut(selector) }.on_mutator_destroy();
         }
+        {
+            use std::sync::atomic::Ordering;
+            self.plan.common().base.global_state.total_allocation_bytes.fetch_add(self.allocation_bytes, Ordering::SeqCst);
+        }
     }
 
     /// Get the allocator for the selector.
@@ -640,7 +651,17 @@ impl<VM: VMBinding> Mutator<VM> {
         self.stats.los_bytes_published = 0;
         self.stats.number_of_los_pages_freed = 0;
     }
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub fn is_thread_local_gc_pending(&self) -> bool {
+        use crate::scheduler::thread_local_gc_work::THREAD_LOCAL_GC_PENDING;
 
+        self.thread_local_gc_status == THREAD_LOCAL_GC_PENDING
+    }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub fn has_mutator_allocated(&self) -> bool {
+        self.local_allocation_size != 0
+    }
 }
 
 /// Each GC plan should provide their implementation of a MutatorContext. *Note that this trait is no longer needed as we removed

@@ -315,14 +315,15 @@ impl Block {
     }
 
     #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
-    pub fn all_public_lines_marked(&self, state: u8) {
+    pub fn all_public_lines_marked(&self, local_line_mark_state: u8, global_line_mark_state: u8) {
         if !self.is_block_published() {
             // trivially true for private block
             return;
         }
         for line in self.lines() {
             if line.is_line_published() {
-                if !line.is_marked(state) {
+                if !line.is_marked(local_line_mark_state) && !line.is_marked(global_line_mark_state)
+                {
                     panic!(
                         "public block: {:?} -> public line: {:?} is not marked",
                         self, line
@@ -443,7 +444,8 @@ impl Block {
         &self,
         _space: &ImmixSpace<VM>,
         mark_histogram: &mut Histogram,
-        line_mark_state: Option<u8>,
+        local_line_mark_state: u8,
+        global_line_mark_state: u8,
     ) -> bool {
         if super::BLOCK_ONLY {
             match self.get_state() {
@@ -475,7 +477,8 @@ impl Block {
             let mut marked_lines = 0;
             let mut holes = 0;
             let mut prev_line_is_marked = true;
-            let line_mark_state = line_mark_state.unwrap();
+
+            #[cfg(debug_assertions)]
             let is_published = self.is_block_published();
             let mut total_hole_size: u8 = 0;
             let mut hole_size: u8 = 0;
@@ -518,14 +521,31 @@ impl Block {
                 // public lines are implicitly marked, mark them explicitly so that
                 // in the future mutator/collector phase, free lines can always be
                 // correctly found by looking at line marks
+                // caveat: do not mark mixed lines as those lines are already marked
                 if line.is_line_published() {
-                    line.mark(line_mark_state);
+                    if !line.is_marked(local_line_mark_state) {
+                        // public lines not marked must have 0 state as local GC bulk zeroing line mark state
+                        debug_assert!(
+                            line.get_mark_state() == 0,
+                            "block: {:?}, line: {:?} has invalid state: {:?}",
+                            self,
+                            line,
+                            line.get_mark_state(),
+                        );
+                        // use global line mark state to mark public lines, otherwise, it will
+                        // be kept alive in the next public GC
+                        line.mark(global_line_mark_state);
+                    }
+                    marked_lines += 1;
+                    prev_line_is_marked = true;
+                    continue;
                 }
-                if line.is_marked(line_mark_state) {
+                // Now we know the current line is private
+                if line.is_marked(local_line_mark_state) {
                     marked_lines += 1;
                     prev_line_is_marked = true;
                     #[cfg(debug_assertions)]
-                    if !line.is_line_published() {
+                    {
                         private_lines_marked += 1;
                     }
                 } else {
@@ -570,25 +590,6 @@ impl Block {
                 }
 
                 true
-                // if is_published {
-                //     debug_assert!(self.get_state() == BlockState::Unmarked);
-
-                //     false
-                // } else {
-                //     #[cfg(debug_assertions)]
-                //     {
-                //         // check if locally freed blocks exist in global reusable pool
-                //         _space.reusable_blocks.iterate_blocks(|block| {
-                //             debug_assert!(
-                //                 self.0 != block.0,
-                //                 "Block: {:?} is now reclaimed and should not be in the reusable pool",
-                //                 self
-                //             )
-                //         });
-                //     }
-
-                //     true
-                // }
             } else {
                 // There are some marked lines. Keep the block live.
                 if marked_lines != Block::LINES {
@@ -934,13 +935,13 @@ impl Block {
     }
 
     #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
-    pub fn verify_reusable_block_info(&self, unavail_state: u8, current_state: u8) {
+    pub fn verify_reusable_block_info(&self, unavail_state: u8, current_state: u8, callsite: u8) {
         let mut marked_lines = 0;
         let mut holes: u8 = 0;
         let mut prev_line_is_marked = true;
         let mut total_hole_size: u8 = 0;
         let mut hole_size: u8 = 0;
-        assert!(unavail_state == current_state || unavail_state == Line::RESET_MARK_STATE);
+        // assert!(unavail_state == current_state || unavail_state == Line::RESET_MARK_STATE);
         for line in self.lines() {
             if line.is_marked(unavail_state) || line.is_marked(current_state) {
                 marked_lines += 1;
@@ -968,9 +969,15 @@ impl Block {
                 assert_eq!(
                     marked_lines,
                     unavailable_lines,
-                    "GC: {}, block: {:?}",
+                    "GC: {}, block: {:?}, unavailable state: {}, mark state: {}, callsite: {}, dirty: {}, mixed: {}, owner: {} ",
                     crate::util::GLOBAL_GC_ID.load(atomic::Ordering::SeqCst),
-                    self
+                    self,
+                    unavail_state,
+                    current_state,
+                    callsite,
+                    self.is_block_dirty(),
+                    self.is_block_mixed(),
+                    self.owner()
                 );
             }
             _ => {
@@ -994,6 +1001,15 @@ impl Block {
     #[cfg(all(feature = "thread_local_gc", debug_assertions))]
     pub fn set_owner(&self, owner: u32) {
         Self::OWNER_TABLE.store_atomic::<u32>(self.start(), owner, Ordering::SeqCst)
+    }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub fn update_line_mark_state(&self, current_state: u8, new_state: u8) {
+        for line in self.lines() {
+            if line.is_marked(current_state) {
+                line.mark(new_state);
+            }
+        }
     }
 }
 

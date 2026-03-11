@@ -27,7 +27,7 @@ pub enum ImmixAllocSemantics {
 
 #[derive(Default)]
 pub struct ReusableBlocks {
-    dense: Vec<Block>,
+    pub dense: Vec<Block>,
     #[cfg(feature = "sparse_immix_block")]
     sparse: Vec<Block>,
 }
@@ -273,6 +273,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                                     .line_unavail_state
                                     .load(atomic::Ordering::Acquire),
                                 self.space.line_mark_state.load(atomic::Ordering::Acquire),
+                                2,
                             );
                             debug_assert!(
                                 block.is_block_dirty(),
@@ -315,9 +316,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                                 "fully occupied block: {:?} contains private lines",
                                 block
                             );
-                            block.all_public_lines_marked(
-                                self.space.line_mark_state.load(atomic::Ordering::Acquire),
-                            );
+                            let state = self.space.line_mark_state.load(atomic::Ordering::Acquire);
+                            block.all_public_lines_marked(state, state);
                         }
                     }
                 }
@@ -464,6 +464,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
     pub fn thread_local_prepare(&mut self) {
         #[cfg(feature = "thread_local_gc_copying")]
         {
+            // Since local GC is executed by the mutator itself,
+            // the allocator is shared between mutator phase and
+            // local GC phase. Set copy to true to change the
+            // allocation semantic is necessary
             self.copy = true;
             self.local_copy_reserve_exhausted = false;
         }
@@ -567,11 +571,15 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
         // TODO defrag in local gc is different, needs to be revisited
         let mut histogram = self.space.defrag.new_histogram();
-        let line_mark_state = if crate::policy::immix::BLOCK_ONLY {
-            None
-        } else {
-            Some(self.space.line_mark_state.load(atomic::Ordering::Relaxed))
+        let local_line_mark_state = {
+            use crate::util::VMMutatorThread;
+            let mutator = VM::VMActivePlan::mutator(VMMutatorThread(self.tls));
+            mutator.state
         };
+        let global_line_mark_state = self
+            .space
+            .line_mark_state
+            .load(std::sync::atomic::Ordering::Acquire);
         debug_assert!(self.local_reusable_blocks.is_empty());
         let mark_hisogram = &mut histogram;
         let mut blocks = vec![];
@@ -583,7 +591,12 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             #[cfg(debug_assertions)]
             debug_assert!(self.mutator_id == block.owner());
 
-            if block.thread_local_can_sweep(self.space, mark_hisogram, line_mark_state) {
+            if block.thread_local_can_sweep(
+                self.space,
+                mark_hisogram,
+                local_line_mark_state,
+                global_line_mark_state,
+            ) {
                 // release free blocks for now, may cache those blocks locally
                 #[cfg(debug_assertions)]
                 {
@@ -614,10 +627,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         #[cfg(debug_assertions)]
                         {
                             block.verify_reusable_block_info(
-                                self.space
-                                    .line_unavail_state
-                                    .load(atomic::Ordering::Acquire),
-                                self.space.line_mark_state.load(atomic::Ordering::Acquire),
+                                local_line_mark_state,
+                                global_line_mark_state,
+                                3,
                             );
                         }
                         #[cfg(feature = "sparse_immix_block")]
@@ -686,9 +698,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             }
             #[cfg(debug_assertions)]
             {
-                block.all_public_lines_marked(
-                    self.space.line_mark_state.load(atomic::Ordering::Relaxed),
-                );
+                block.all_public_lines_marked(local_line_mark_state, global_line_mark_state);
             }
         }
 
@@ -959,6 +969,11 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             None => panic!("does not have enough space to do evacuation during local gc"),
         }
     }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    fn is_mutator(&self) -> bool {
+        self.mutator_id != u32::MAX
+    }
 }
 
 impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
@@ -1223,9 +1238,26 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             )
         {
             let line = self.line.unwrap();
+            let local_line_mark_state = if self.is_mutator() {
+                use crate::util::VMMutatorThread;
+                debug_assert!(VM::VMActivePlan::is_mutator(self.tls));
+                // When a mutator doing local GC, it will never acquire reusable blocks
+                // So here must be mutator phase
+                debug_assert!(
+                    !self.copy,
+                    "mutator: {} in a invalid state",
+                    self.mutator_id
+                );
+                let mutator = VM::VMActivePlan::mutator(VMMutatorThread(self.tls));
+
+                Some(mutator.state)
+            } else {
+                None
+            };
 
             if let Some((start_line, end_line)) =
-                self.immix_space().get_next_available_lines(line, 1)
+                self.immix_space()
+                    .get_next_available_lines(line, 1, local_line_mark_state)
             {
                 // Find recyclable lines. Update the bump allocation cursor and limit.
                 self.bump_pointer.cursor = start_line.start();
@@ -1235,6 +1267,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 {
                     // conservatively increase the local allocation size
                     if !self.copy {
+                        use std::sync::atomic::Ordering;
+
                         #[cfg(debug_assertions)]
                         {
                             if let Some(semantic) = self.semantic {
@@ -1249,6 +1283,15 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         let mutator =
                             VM::VMActivePlan::mutator(crate::util::VMMutatorThread(self.tls));
                         mutator.local_allocation_size += end_line.start() - start_line.start();
+                        let state = self.space.line_mark_state.load(Ordering::Acquire);
+                        Line::eager_mark_lines(
+                            if state + 1 > Line::MAX_MARK_STATE {
+                                Line::RESET_MARK_STATE
+                            } else {
+                                state + 1
+                            },
+                            start_line..end_line,
+                        );
                     }
                 }
 
@@ -1507,17 +1550,24 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         let exists_in_local;
                         #[cfg(debug_assertions)]
                         {
+                            use crate::util::VMMutatorThread;
                             exists_in_local = !block.get_state().is_reusable();
 
+                            debug_assert!(VM::VMActivePlan::is_mutator(self.tls));
                             debug_assert!(
                                 !self.copy,
                                 "evacuation should always acquire a clean page"
                             );
+
+                            let mutator = VM::VMActivePlan::mutator(VMMutatorThread(self.tls));
+
+                            let local_line_mark_state = mutator.state;
+                            let global_line_mark_state =
+                                self.space.line_mark_state.load(atomic::Ordering::Acquire);
                             block.verify_reusable_block_info(
-                                self.space
-                                    .line_unavail_state
-                                    .load(atomic::Ordering::Acquire),
-                                self.space.line_mark_state.load(atomic::Ordering::Acquire),
+                                local_line_mark_state,
+                                global_line_mark_state,
+                                4,
                             );
                         }
                         block.init(false);
@@ -1698,7 +1748,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                         match semantic {
                             ImmixAllocSemantics::Public => {
                                 // public only is true when it is mutator
-                                let is_mutator = self.mutator_id != u32::MAX;
+                                let is_mutator = self.is_mutator();
                                 #[cfg(debug_assertions)]
                                 {
                                     if is_mutator {
@@ -1731,6 +1781,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                             block.taint();
                             // mutator phase only
                             if !self.copy {
+                                use std::sync::atomic::Ordering;
+
                                 let mutator = VM::VMActivePlan::mutator(
                                     crate::util::VMMutatorThread(self.tls),
                                 );
@@ -1744,6 +1796,16 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                                         crate::util::GLOBAL_GC_STATISTICS.lock().unwrap();
                                     guard.bytes_allocated += Block::BYTES;
                                 }
+                                let state = self.space.line_mark_state.load(Ordering::Acquire);
+                                // eager marking should only occur during mutator phase
+                                Line::eager_mark_lines(
+                                    if state + 1 > Line::MAX_MARK_STATE {
+                                        Line::RESET_MARK_STATE
+                                    } else {
+                                        state + 1
+                                    },
+                                    block.start_line()..block.end_line(),
+                                );
                             }
                         }
                     }
@@ -1916,6 +1978,16 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 old_lg_limit,
                 new_lg_limit,
             );
+        }
+    }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub fn mark_local_heap(&self, current_state: u8, new_state: u8) {
+        for block in self.local_blocks.iter() {
+            block.update_line_mark_state(current_state, new_state);
+        }
+        for block in self.local_reusable_blocks.dense.iter() {
+            block.update_line_mark_state(current_state, new_state);
         }
     }
 }

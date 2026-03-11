@@ -282,10 +282,11 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
             #[cfg(debug_assertions)]
             {
                 use crate::policy::immix::DEBUG_PUBLIC_OBJECT_FORWARDING;
+                let line_mark_state = self.line_mark_state.load(Ordering::Relaxed);
 
                 let public = is_public(object);
                 if public {
-                    debug_assert!(
+                    assert!(
                         self.is_marked(object),
                         "public object: {:?} missing, dangling: {}",
                         object,
@@ -294,16 +295,13 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
                             .unwrap()
                             .contains(&object),
                     );
-                    debug_assert!(
-                        Line::is_object_marked::<VM>(
-                            self.line_mark_state.load(Ordering::Relaxed),
-                            object
-                        ),
+                    assert!(
+                        Line::is_object_marked::<VM>(line_mark_state, object),
                         "object: {:?} has unmarked lines, line mark state: {}",
                         object,
-                        self.line_mark_state.load(Ordering::Relaxed)
+                        line_mark_state
                     );
-                    debug_assert!(
+                    assert!(
                         self.get_forwarded_object(object).is_none(),
                         "found from space object: {:?}",
                         object
@@ -311,19 +309,31 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
                 } else {
                     // use crate::policy::PRIVATE_OBJECTS_IN_CURRENT_GC;
 
-                    debug_assert!(
+                    assert!(
                         !self.is_marked(object),
                         "private object:{:?} should not be marked",
                         object,
                     );
-                    debug_assert!(
-                        !Line::is_private_marked::<VM>(
-                            self.line_mark_state.load(Ordering::Relaxed),
-                            object
-                        ),
-                        "private object: {:?} is marked",
-                        object
+                    // now lines having live private objects are also marked
+                    let line = Line::from_unaligned_address(object.to_raw_address());
+                    assert!(
+                        line.is_marked(line_mark_state),
+                        "object: {:?}, owner:{}, mark state: {}, current state: {}, dirty: {}, mixed: {}",
+                        object,
+                        line.block().owner(),
+                        line.get_mark_state(),
+                        line_mark_state,
+                        line.block().is_block_dirty(),
+                        line.block().is_block_mixed()
                     );
+                    // assert!(
+                    //     !Line::is_private_marked::<VM>(
+                    //         self.line_mark_state.load(Ordering::Relaxed),
+                    //         object
+                    //     ),
+                    //     "private object: {:?} is marked",
+                    //     object
+                    // );
                     // // keep track of private object visited during verify trace
                     // PRIVATE_OBJECTS_IN_CURRENT_GC.lock().unwrap().insert(object);
                 }
@@ -334,6 +344,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
                     if is_public(object) {
                         // use crate::policy::GLOBAL_OBJECTS;
 
+                        #[cfg(debug_assertions)]
                         // GLOBAL_OBJECTS.lock().unwrap().insert(object, _source);
                         self.common
                             .global_state
@@ -399,13 +410,19 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
 
                 #[cfg(debug_assertions)]
                 {
-                    // use crate::policy::GLOBAL_OBJECTS_CONSERVATIVE;
-                    // let mut conservative = GLOBAL_OBJECTS_CONSERVATIVE.lock().unwrap();
-                    // conservative.entry(object).or_insert(source);
-                    self.common
-                        .global_state
-                        .global_objects_count
-                        .fetch_add(1, Ordering::SeqCst);
+                    use crate::policy::GLOBAL_OBJECTS_CONSERVATIVE;
+                    let mut conservative = GLOBAL_OBJECTS_CONSERVATIVE.lock().unwrap();
+                    if !conservative.contains_key(&object) {
+                        self.common
+                            .global_state
+                            .global_objects_count
+                            .fetch_add(1, Ordering::SeqCst);
+                    }
+                    conservative.entry(object).or_insert(_source);
+                    // self.common
+                    //     .global_state
+                    //     .global_objects_count
+                    //     .fetch_add(1, Ordering::SeqCst);
                 }
 
                 object
@@ -1000,10 +1017,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
                 {
                     if !copy {
-                        block.verify_reusable_block_info(
-                            self.line_unavail_state.load(Ordering::Acquire),
-                            self.line_mark_state.load(Ordering::Acquire),
-                        );
+                        let unavail_state = self.line_unavail_state.load(Ordering::Acquire);
+                        let line_mark_state = self.line_mark_state.load(Ordering::Acquire);
+                        debug_assert_eq!(unavail_state, line_mark_state);
+                        // The following still holds because block here are public/global reusable blocks
+                        // it does not have any live private objects in it
+                        block.verify_reusable_block_info(unavail_state, line_mark_state, 1);
                     }
                 }
 
@@ -1408,18 +1427,21 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     ) -> ThreadlocalTracedObjectType {
         let block = Block::containing(object);
 
-        #[cfg(debug_assertions)]
-        {
-            debug_assert!(
-                block.is_defrag_source(),
-                "block: {:?}, owner: {:?}, dirty: {}, mutator: {:?}, object: {:?} | block should be defarg source",
-                block,
-                block.owner(),
-                block.is_block_dirty(),
-                mutator.mutator_id,
-                object
-            );
-        }
+        // The following assertion no longer holds when forcing local GC in a global/public GC
+        // PrepareBlockState is executed after those forced local GCs finish, therefore, defrag source
+        // is unknown here
+        // #[cfg(debug_assertions)]
+        // {
+        //     debug_assert!(
+        //         block.is_defrag_source(),
+        //         "block: {:?}, owner: {:?}, public: {}, mutator: {:?}, object: {:?} | block should be defarg source",
+        //         block,
+        //         block.owner(),
+        //         block.is_block_published(),
+        //         mutator.mutator_id,
+        //         object
+        //     );
+        // }
 
         #[cfg(feature = "vo_bit")]
         vo_bit::helper::on_trace_object::<VM>(object);
@@ -1464,10 +1486,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 vo_bit::helper::on_object_marked::<VM>(object);
 
                 if !super::MARK_LINE_AT_SCAN_TIME {
-                    self.thread_local_mark_lines(
-                        object,
-                        self.line_mark_state.load(Ordering::Relaxed),
-                    );
+                    self.thread_local_mark_lines(object, mutator.state);
                 }
                 object
             } else {
@@ -1720,19 +1739,19 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         Line::mark_lines_for_object::<VM>(object, self.line_mark_state.load(Ordering::Acquire));
     }
 
-    #[cfg(feature = "thread_local_gc_copying")]
-    pub fn mark_multiple_lines(&self, start: Address, end: Address) {
-        let state = self.line_mark_state.load(Ordering::Acquire);
-        let start_line = Line::from_unaligned_address(start);
-        let mut end_line = Line::from_unaligned_address(end);
-        if !Line::is_aligned(end) {
-            end_line = end_line.next();
-        }
-        let iter = RegionIterator::<Line>::new(start_line, end_line);
-        for line in iter {
-            line.mark(state);
-        }
-    }
+    // #[cfg(feature = "thread_local_gc_copying")]
+    // pub fn mark_multiple_lines(&self, start: Address, end: Address) {
+    //     let state = self.line_mark_state.load(Ordering::Acquire);
+    //     let start_line = Line::from_unaligned_address(start);
+    //     let mut end_line = Line::from_unaligned_address(end);
+    //     if !Line::is_aligned(end) {
+    //         end_line = end_line.next();
+    //     }
+    //     let iter = RegionIterator::<Line>::new(start_line, end_line);
+    //     for line in iter {
+    //         line.mark(state);
+    //     }
+    // }
 
     #[cfg(feature = "thread_local_gc")]
     pub fn thread_local_mark_lines(&self, object: ObjectReference, local_state: u8) {
@@ -1815,6 +1834,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         &self,
         search_start: Line,
         lines_required: u8,
+        local_line_mark_state: Option<u8>,
     ) -> Option<(Line, Line)> {
         debug_assert!(!super::BLOCK_ONLY);
 
@@ -1867,7 +1887,11 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 Some((start, end, end_cursor - start_cursor))
             }
 
-            let unavail_state = self.line_unavail_state.load(Ordering::Acquire);
+            let unavail_state = if let Some(local_line_mark_state) = local_line_mark_state {
+                local_line_mark_state
+            } else {
+                self.line_unavail_state.load(Ordering::Acquire)
+            };
             let current_state = self.line_mark_state.load(Ordering::Acquire);
 
             let block = search_start.block();
@@ -1981,8 +2005,16 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         };
         // Mark the line
         if !super::MARK_LINE_AT_SCAN_TIME {
-            let state = self.line_mark_state.load(Ordering::Relaxed);
-            self.thread_local_mark_lines(object, state);
+            // let state = self.line_mark_state.load(Ordering::Relaxed);
+            // self.thread_local_mark_lines(
+            //     object,
+            //     if state + 1 > Line::MAX_MARK_STATE {
+            //         Line::RESET_MARK_STATE
+            //     } else {
+            //         state + 1
+            //     },
+            // );
+            self.thread_local_mark_lines(object, _mutator.state);
         }
     }
 
@@ -1995,9 +2027,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
         debug_assert!(crate::util::metadata::public_bit::is_public(object));
         // Mark block and lines
         if !super::BLOCK_ONLY {
-            let state = self.line_mark_state.load(Ordering::Acquire);
-
-            Line::publish_lines_of_object::<VM>(object, state);
+            // let state = self.line_mark_state.load(Ordering::Acquire);
+            Line::publish_lines_of_object::<VM>(object);
         }
         let block = Block::containing(object);
         // This funciton is always called by a mutator, so alway set the dirty bit
@@ -2024,9 +2055,8 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     pub fn publish_runtime_object(&self, object: ObjectReference) {
         // Mark block and lines
         if !super::BLOCK_ONLY {
-            let state = self.line_mark_state.load(Ordering::Acquire);
-
-            Line::publish_lines_of_object::<VM>(object, state);
+            // let state = self.line_mark_state.load(Ordering::Acquire);
+            Line::publish_lines_of_object::<VM>(object);
         }
         // runtime objects should be in a public block when allocated
         // no need to publish the block again
@@ -2138,6 +2168,8 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
         object: ObjectReference,
     ) {
         if super::MARK_LINE_AT_SCAN_TIME && !super::BLOCK_ONLY {
+            use crate::scheduler::thread_local_gc_work::IMMIX_LIVE_BYTES_IN_FORCED_LOCAL_GC;
+
             #[cfg(debug_assertions)]
             {
                 debug_assert!(self.in_space(object));
@@ -2169,8 +2201,21 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
                     unreachable!("should not reach here in thread local gc/defrag")
                 }
             }
-            let state = self.line_mark_state.load(Ordering::Relaxed);
-            self.thread_local_mark_lines(object, state);
+            // let state = self.line_mark_state.load(Ordering::Relaxed);
+            // self.thread_local_mark_lines(
+            //     object,
+            //     if state + 1 > Line::MAX_MARK_STATE {
+            //         Line::RESET_MARK_STATE
+            //     } else {
+            //         state + 1
+            //     },
+            // );
+            self.thread_local_mark_lines(object, _mutator.state);
+
+            IMMIX_LIVE_BYTES_IN_FORCED_LOCAL_GC.fetch_add(
+                VM::VMObjectModel::get_current_size(object),
+                Ordering::SeqCst,
+            );
         }
     }
 
@@ -2215,6 +2260,7 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
         // Clear object mark table for this chunk
         self.reset_object_mark();
 
+        // All public lines will be marked during transitive closure
         #[cfg(feature = "thread_local_gc")]
         self.reset_public_line_mark();
 
@@ -2368,7 +2414,7 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
                 }
             }
             match self.pause {
-                Pause::Full => {
+                Pause::Public | Pause::Full => {
                     if !block.sweep(self.space, &mut histogram, line_mark_state) {
                         // Block is live. Increment the allocated block count.
                         allocated_blocks += 1;
@@ -2376,17 +2422,17 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
                 }
                 Pause::InitialMark => todo!(),
                 Pause::FinalMark => todo!(),
-                Pause::Public => {
-                    // In a public GC, dirty blocks are treated differently, as
-                    // private objects are conservatively treated as alive
-                    if block.is_block_dirty() {
-                        block.sweep_dirty_block(self.space, &mut histogram, line_mark_state);
-                        allocated_blocks += 1;
-                    } else if !block.sweep(self.space, &mut histogram, line_mark_state) {
-                        // Block is live. Increment the allocated block count.
-                        allocated_blocks += 1;
-                    }
-                }
+                // Pause::Public => {
+                //     // In a public GC, dirty blocks are treated differently, as
+                //     // private objects are conservatively treated as alive
+                //     if block.is_block_dirty() {
+                //         block.sweep_dirty_block(self.space, &mut histogram, line_mark_state);
+                //         allocated_blocks += 1;
+                //     } else if !block.sweep(self.space, &mut histogram, line_mark_state) {
+                //         // Block is live. Increment the allocated block count.
+                //         allocated_blocks += 1;
+                //     }
+                // }
             }
         }
         probe!(mmtk, sweep_chunk, allocated_blocks);

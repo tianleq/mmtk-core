@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use super::block::Block;
 use crate::util::linear_scan::{Region, RegionIterator};
 use crate::util::metadata::side_metadata::SideMetadataSpec;
@@ -131,23 +133,29 @@ impl Line {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    pub fn publish_lines_of_object<VM: VMBinding>(object: ObjectReference, state: u8) {
-        // mark line as public
+    pub fn publish_lines_of_object<VM: VMBinding>(object: ObjectReference) {
+        // set line level public bit but do not mark lines because
+        // if line mark is overwritten here, mixed lines will
+        // be incorrectly marked using a stale state
 
-        let (_start_line, _end_line) = Self::mark_lines_for_object_impl::<VM>(object, state);
-        #[cfg(debug_assertions)]
-        {
-            let iter = RegionIterator::<Line>::new(_start_line, _end_line);
-            for line in iter {
-                debug_assert!(
-                    line.is_marked(state),
-                    "public object: {:?} is not marked properly ({:?})",
-                    object,
-                    state
-                );
-                debug_assert!(line.is_line_published());
-            }
+        let start = object.to_object_start::<VM>();
+        let end = start + VM::VMObjectModel::get_current_size(object);
+
+        let start_line = Line::from_unaligned_address(start);
+        let mut end_line = Line::from_unaligned_address(end);
+        if !Line::is_aligned(end) {
+            end_line = end_line.next();
         }
+
+        let iter = RegionIterator::<Line>::new(start_line, end_line);
+        for line in iter {
+            Line::LINE_PUBLICATION_TABLE.store_atomic::<u8>(
+                line.start(),
+                1,
+                atomic::Ordering::SeqCst,
+            );
+        }
+
         #[cfg(feature = "debug_thread_local_gc_copying")]
         {
             use crate::util::TOTAL_PU8LISHED_LINES;
@@ -212,7 +220,7 @@ impl Line {
         (start_line, end_line)
     }
 
-    #[cfg(all(feature = "thread_local_gc", debug_assertions))]
+    #[cfg(feature = "thread_local_gc")]
     pub fn is_object_marked<VM: VMBinding>(state: u8, object: ObjectReference) -> bool {
         let start = object.to_object_start::<VM>();
         let end = start + VM::VMObjectModel::get_current_size(object);
@@ -232,7 +240,7 @@ impl Line {
         true
     }
 
-    #[cfg(all(feature = "thread_local_gc", debug_assertions))]
+    #[cfg(feature = "thread_local_gc")]
     pub fn is_private_marked<VM: VMBinding>(state: u8, object: ObjectReference) -> bool {
         debug_assert!(!crate::util::metadata::public_bit::is_public(object));
         let start = object.to_object_start::<VM>();
@@ -251,5 +259,20 @@ impl Line {
         }
 
         false
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    /// Eagerly mark all line mark states and all side mark bits in the gap.
+    ///
+    /// Useful during concurrent marking.
+    pub fn eager_mark_lines(line_mark_state: u8, lines: Range<Line>) {
+        for line in RegionIterator::<Line>::new(lines.start, lines.end) {
+            line.mark(line_mark_state);
+        }
+    }
+
+    #[cfg(all(feature = "thread_local_gc", debug_assertions))]
+    pub fn get_mark_state(&self) -> u8 {
+        unsafe { Self::MARK_TABLE.load::<u8>(self.start()) }
     }
 }

@@ -131,10 +131,14 @@ where
             {
                 use crate::util::metadata::public_bit::is_public;
                 // debug_assert!(mutator.object_remset.is_empty());
-                debug_assert!(mutator
-                    .object_remset
-                    .iter()
-                    .all(|o| crate::memory_manager::is_pinned(*o) && is_public(*o)));
+                for o in mutator.object_remset.iter() {
+                    debug_assert!(
+                        crate::memory_manager::is_pinned(*o),
+                        "object: {} is not pinned",
+                        *o
+                    );
+                    debug_assert!(is_public(*o), "object: {} is not published", *o)
+                }
             }
 
             worker.scheduler().work_buckets[WorkBucketStage::Closure].add(ProcessObjectRemset::<

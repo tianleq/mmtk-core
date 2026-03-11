@@ -104,11 +104,12 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         //     required
         // }
 
-        use crate::vm::ActivePlan;
+        use crate::{scheduler::thread_local_gc_work::THREAD_LOCAL_GC_PENDING, vm::ActivePlan};
 
         let mutator = VM::VMActivePlan::mutator(_tls);
 
-        mutator.local_allocation_size >= self.options().get_thread_local_heap_size()
+        mutator.thread_local_gc_status == THREAD_LOCAL_GC_PENDING
+            || mutator.local_allocation_size >= self.options().get_thread_local_heap_size()
     }
 
     fn last_collection_was_exhaustive(&self) -> bool {
@@ -149,6 +150,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         //         ImmixGCWorkContext<VM, TRACE_KIND_PUBLIC>,
         //     >(self, &self.immix_space, scheduler);
         // }
+
         self.current_pause
             .store(Some(Pause::Public), Ordering::SeqCst);
         Self::schedule_immix_public_collection::<
@@ -253,6 +255,38 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         }
     }
 
+    #[cfg(feature = "thread_local_gc")]
+    fn do_thread_local_marking(
+        &'static self,
+        tls: VMMutatorThread,
+        _mmtk: &'static crate::MMTK<VM>,
+    ) {
+        use crate::{policy::immix::line::Line, vm::ActivePlan};
+        use std::borrow::Borrow;
+
+        let mutator = VM::VMActivePlan::mutator(tls);
+        let allocators: &crate::util::alloc::allocators::Allocators<VM> =
+            mutator.allocators.borrow();
+        let immix_allocator = unsafe {
+            allocators.get_allocator(mutator.config.allocator_mapping[AllocationSemantics::Default])
+        }
+        .downcast_ref::<crate::util::alloc::ImmixAllocator<VM>>()
+        .unwrap();
+
+        let current_state = self.immix_space.line_mark_state.load(Ordering::Acquire);
+        let new_state = if current_state + 1 > Line::MAX_MARK_STATE {
+            Line::RESET_MARK_STATE
+        } else {
+            current_state + 1
+        };
+        debug_assert_eq!(current_state, mutator.state);
+        immix_allocator.mark_local_heap(current_state, new_state);
+
+        // local state needs to be updated so that future eager marking will
+        // not use a stale state
+        mutator.state = new_state;
+    }
+
     fn get_allocator_mapping(&self) -> &'static EnumMap<AllocationSemantics, AllocatorSelector> {
         &ALLOCATOR_MAPPING
     }
@@ -319,26 +353,26 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             //     GLOBAL_ROOTS_COUNTER_CONSERVATIVE, PAGES_FREED_IN_LOCAL_GC, PRIVATE_OBJECTS,
             // };
 
-            // let mut conservative = GLOBAL_OBJECTS_CONSERVATIVE.lock().unwrap();
+            let mut conservative = crate::policy::GLOBAL_OBJECTS_CONSERVATIVE.lock().unwrap();
             // let mut precise = GLOBAL_OBJECTS.lock().unwrap();
             // let mut private = PRIVATE_OBJECTS.lock().unwrap();
             // let mut remset = REMSET_OBJECTS.lock().unwrap();
             // let stack_slots = STACK_ROOTS.lock().unwrap();
             // let mut stack_slots_sanity = STACK_ROOTS_SANITY.lock().unwrap();
 
-            println!(
-                "{} vs {} at the end of a global GC",
-                self.common
-                    .base
-                    .global_state
-                    .global_objects_count
-                    .load(Ordering::Acquire),
-                self.common
-                    .base
-                    .global_state
-                    .global_objects_precise_count
-                    .load(Ordering::Acquire)
-            );
+            // println!(
+            //     "{} vs {} at the end of a global GC",
+            //     self.common
+            //         .base
+            //         .global_state
+            //         .global_objects_count
+            //         .load(Ordering::Acquire),
+            //     self.common
+            //         .base
+            //         .global_state
+            //         .global_objects_precise_count
+            //         .load(Ordering::Acquire)
+            // );
 
             // println!(
             //     "{} vs {} at the end of global GC, {} pages freed in local GC, {} vs {}",
@@ -404,7 +438,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             //     }
             //     panic!("retention rate too high");
             // }
-            // conservative.clear();
+            conservative.clear();
             // precise.clear();
             // private.clear();
             // remset.clear();
@@ -428,6 +462,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 .global_state
                 .global_objects_precise_count
                 .store(0, Ordering::Release);
+
             // {
             //     use std::collections::HashSet;
 
@@ -436,6 +471,20 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             // }
         }
 
+        {
+            use crate::vm::ActivePlan;
+
+            // At the end of each GC, accumulate allocation bytes in the global varaible.
+            for mutator in VM::VMActivePlan::mutators() {
+                let allocation_bytes = mutator.allocation_bytes;
+                mutator.allocation_bytes = 0;
+                self.common
+                    .base
+                    .global_state
+                    .total_allocation_bytes
+                    .fetch_add(allocation_bytes, Ordering::SeqCst);
+            }
+        }
         // #[cfg(debug_assertions)]
         // {
         //     use crate::policy::{
@@ -665,13 +714,15 @@ impl<VM: VMBinding> Immix<VM> {
         use crate::plan::immix::gc_work::CreateProcessRemsetWork;
 
         // Stop mutators
-        #[cfg(debug_assertions)]
+
+        // #[cfg(debug_assertions)]
         {
             use crate::scheduler::thread_local_gc_work::ScheduleExecuteThreadlocalCollectionWork;
-            debug_assert!(plan.base().global_state.objects.lock().unwrap().is_empty());
             scheduler.work_buckets[WorkBucketStage::Unconstrained].add(
                 StopMutators::<Context>::new_with_args(ScanStackSemantic::RootsOnly),
             );
+            #[cfg(debug_assertions)]
+            debug_assert!(plan.base().global_state.objects.lock().unwrap().is_empty());
             // mutators have not reahced safepoint yet, so one cannot iterate through mutators here
             // Instead, craete a work packet in Local bucket and do it there. All mutators are guaranteed
             // to be safe at that point.
@@ -679,10 +730,6 @@ impl<VM: VMBinding> Immix<VM> {
                 .set_sentinel(Box::new(ScheduleExecuteThreadlocalCollectionWork));
         }
 
-        #[cfg(not(debug_assertions))]
-        scheduler.work_buckets[WorkBucketStage::Unconstrained].add(
-            StopMutators::<Context>::new_with_args(ScanStackSemantic::RootsOnly),
-        );
         // Prepare global/collectors/mutators
         scheduler.work_buckets[WorkBucketStage::Prepare].add(Prepare::<Context>::new(plan));
         // Scan thread-local remember set
@@ -690,17 +737,15 @@ impl<VM: VMBinding> Immix<VM> {
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(CreateProcessRemsetWork::<VM, Self>::new());
 
+        #[cfg(debug_assertions)]
         {
-            #[cfg(debug_assertions)]
-            {
-                use crate::scheduler::single_thread_gc_work::STTrace;
-                // The following is for debug purpose
-                scheduler.work_buckets[WorkBucketStage::SecondRoots].add(STTrace::<
-                    VM,
-                    Self,
-                    { crate::policy::gc_work::TRACE_KIND_VERIFY_PUBLIC },
-                >::new());
-            }
+            use crate::scheduler::single_thread_gc_work::STTrace;
+            // The following is for debug purpose
+            scheduler.work_buckets[WorkBucketStage::SecondRoots].add(STTrace::<
+                VM,
+                Self,
+                { crate::policy::gc_work::TRACE_KIND_VERIFY_PUBLIC },
+            >::new());
         }
 
         // PUblic GC can only release LOS objects
@@ -774,6 +819,22 @@ impl<VM: VMBinding> Immix<VM> {
 
             #[cfg(feature = "thread_local_gc_copying")]
             debug_assert!(KIND == TRACE_KIND_THREAD_LOCAL_COPY);
+        }
+
+        {
+            use crate::{policy::immix::line::Line, vm::ActivePlan};
+
+            let plan = mmtk
+                .get_plan()
+                .downcast_ref::<crate::plan::immix::Immix<VM>>()
+                .unwrap();
+            let mutator = VM::VMActivePlan::mutator(tls);
+            let line_mark_state = plan.immix_space.line_mark_state.load(Ordering::SeqCst);
+            mutator.state = if 1 + line_mark_state > Line::MAX_MARK_STATE {
+                Line::RESET_MARK_STATE
+            } else {
+                1 + line_mark_state
+            };
         }
 
         // Prepare global/collectors/mutators

@@ -52,7 +52,7 @@ mod generational;
 mod sticky;
 
 mod compressor;
-mod immix;
+pub(crate) mod immix;
 mod markcompact;
 mod marksweep;
 mod nogc;

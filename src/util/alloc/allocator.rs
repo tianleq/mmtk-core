@@ -418,6 +418,10 @@ pub trait Allocator<VM: VMBinding>: Downcast {
                         .get_context()
                         .state
                         .increase_allocation_bytes_by(allocated_size);
+                    {
+                        let mutator = VM::VMActivePlan::mutator(VMMutatorThread(self.get_tls()));
+                        mutator.allocation_bytes += allocated_size;
+                    }
 
                     // This is the allocation hook for the analysis trait. If you want to call
                     // an analysis counter specific allocation hook, then here is the place to do so

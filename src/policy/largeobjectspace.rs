@@ -332,6 +332,19 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM>
         }
     }
 
+    fn thread_local_post_scan_object<const KIND: super::gc_work::TraceKind>(
+        &self,
+        _mutator: &crate::Mutator<VM>,
+        object: ObjectReference,
+    ) {
+        use crate::scheduler::thread_local_gc_work::LOS_LIVE_BYTES_IN_FORCED_LOCAL_GC;
+
+        LOS_LIVE_BYTES_IN_FORCED_LOCAL_GC.fetch_add(
+            VM::VMObjectModel::get_current_size(object),
+            Ordering::SeqCst,
+        );
+    }
+
     fn thread_local_may_move_objects<const KIND: super::gc_work::TraceKind>() -> bool {
         false
     }
@@ -471,12 +484,12 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                 #[cfg(debug_assertions)]
                 {
                     if is_public(object) {
-                        // use crate::policy::GLOBAL_OBJECTS_CONSERVATIVE;
+                        use crate::policy::GLOBAL_OBJECTS_CONSERVATIVE;
 
-                        // GLOBAL_OBJECTS_CONSERVATIVE
-                        //     .lock()
-                        //     .unwrap()
-                        //     .insert(object, _source);
+                        GLOBAL_OBJECTS_CONSERVATIVE
+                            .lock()
+                            .unwrap()
+                            .insert(object, _source);
                         self.common
                             .global_state
                             .global_objects_count
@@ -623,6 +636,12 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             if self.common.needs_log_bit {
                 VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.clear::<VM>(object, Ordering::SeqCst);
             }
+            crate::util::memory::set(
+                object.to_object_start::<VM>(),
+                0xAB,
+                VM::VMObjectModel::get_current_size(object),
+            );
+
             let _pages = self
                 .pr
                 .release_pages(get_super_page(object.to_object_start::<VM>()));
@@ -659,6 +678,11 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         debug_assert!(
             !crate::util::metadata::public_bit::is_public(object),
             "public object is reclaimed in thread local gc"
+        );
+        crate::util::memory::set(
+            object.to_object_start::<VM>(),
+            0xAB,
+            VM::VMObjectModel::get_current_size(object),
         );
         let _pages = self
             .pr
@@ -792,7 +816,14 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         _object: ObjectReference,
         #[cfg(feature = "debug_thread_local_gc_copying")] _tls: VMMutatorThread,
     ) {
-        debug_assert!(crate::util::metadata::public_bit::is_public(_object));
+        assert!(crate::util::metadata::public_bit::is_public(_object));
+        // A private object alive in the previous public GC is not marked in that GC and its mark state
+        // will be intrepreted as marked in the next public GC. If it is published and not having its
+        // mark state updated, in the next GC, this newly published object will be considered as marked
+        // even though it is never visited and thus causing reclaiming live objects
+
+        // make sure the object is marked as los flips mark state instead of clear and set
+        self.test_and_mark(_object, self.mark_state);
         self.treadmill.add_to_treadmill(_object, false);
         #[cfg(feature = "debug_thread_local_gc_copying")]
         {

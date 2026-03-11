@@ -271,6 +271,14 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
         false
     }
 
+    #[cfg(feature = "thread_local_gc")]
+    fn do_thread_local_marking(
+        &'static self,
+        _tls: VMMutatorThread,
+        _mmtk: &'static MMTK<Self::VM>,
+    ) {
+    }
+
     // Note: The following methods are about page accounting. The default implementation should
     // work fine for non-copying plans. For copying plans, the plan should override any of these methods
     // if necessary.
@@ -619,6 +627,7 @@ impl<VM: VMBinding> BasePlan<VM> {
             self.global_state
                 .allocation_bytes
                 .store(0, Ordering::SeqCst);
+            self.global_state.is_stress_gc.store(true, Ordering::SeqCst);
         }
 
         debug!(
@@ -999,6 +1008,11 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
         mutator: &Mutator<VM>,
         object: ObjectReference,
     ) {
+        if self.los.in_space(object) {
+            <LargeObjectSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_post_scan_object::<
+                KIND,
+            >(&self.los, mutator, object);
+        }
         <BasePlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_post_scan_object::<KIND>(
             &self.base, mutator, object,
         )

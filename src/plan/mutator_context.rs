@@ -148,6 +148,8 @@ pub struct MutatorBuilder<VM: VMBinding> {
         Box<Vec<<VM::VMReferenceGlue as crate::vm::ReferenceGlue<VM>>::FinalizableType>>,
     #[cfg(feature = "thread_local_gc_copying")]
     local_allocation_size: usize,
+    #[cfg(feature = "thread_local_gc_copying")]
+    local_line_mark_state: u8
 }
 
 impl<VM: VMBinding> MutatorBuilder<VM> {
@@ -164,11 +166,13 @@ impl<VM: VMBinding> MutatorBuilder<VM> {
             #[cfg(feature = "thread_local_gc")]
             mutator_id: 0,
             #[cfg(feature = "thread_local_gc")]
-            thread_local_gc_status: 0,
+            thread_local_gc_status: 0, // THREAD_LOCAL_GC_INACTIVE // it does not affect correctness as newly spawned mutators will not have stale line marks in its local heap
             #[cfg(feature = "thread_local_gc")]
             finalizable_candidates: Box::new(Vec::new()),
             #[cfg(feature = "thread_local_gc_copying")]
             local_allocation_size: 0,
+            #[cfg(feature = "thread_local_gc_copying")]
+            local_line_mark_state: 0
         }
     }
 
@@ -181,6 +185,13 @@ impl<VM: VMBinding> MutatorBuilder<VM> {
         self.mutator_id = mutator_id;
         self
     }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub fn local_line_mark_state(mut self, state: u8) -> Self {
+        self.local_line_mark_state = state;
+        self
+    }
+     
 
     pub fn build(self) -> Mutator<VM> {
         Mutator {
@@ -214,7 +225,7 @@ impl<VM: VMBinding> MutatorBuilder<VM> {
             stack_slots: Box::new(Vec::new()),
             allocation_bytes: 0,
             #[cfg(feature = "thread_local_gc_copying")]
-            state: 2, // this is Line::RESET_MARK_STATE + 1
+            state: self.local_line_mark_state
         }
     }
 }

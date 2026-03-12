@@ -14,6 +14,7 @@ use crate::plan::mutator_context::MutatorBuilder;
 use crate::plan::mutator_context::MutatorConfig;
 use crate::plan::mutator_context::ReservedAllocators;
 use crate::plan::AllocationSemantics;
+use crate::policy::immix::line::Line;
 use crate::util::alloc::allocators::AllocatorSelector;
 use crate::util::alloc::allocators::Allocators;
 use crate::util::alloc::ImmixAllocator;
@@ -255,7 +256,20 @@ pub fn create_immix_mutator<VM: VMBinding>(
     let barrier = Box::new(crate::plan::barriers::NoBarrier);
     let builder = MutatorBuilder::new(mutator_tls, mmtk, config);
     if cfg!(feature = "thread_local_gc") {
-        builder.barrier(barrier).mutator_id(mutator_id).build()
+        let current_state = immix
+            .immix_space
+            .line_mark_state
+            .load(std::sync::atomic::Ordering::Acquire);
+        let state = if 1 + current_state > Line::MAX_MARK_STATE {
+            Line::RESET_MARK_STATE
+        } else {
+            1 + current_state
+        };
+        builder
+            .barrier(barrier)
+            .mutator_id(mutator_id)
+            .local_line_mark_state(state)
+            .build()
     } else {
         builder.build()
     }

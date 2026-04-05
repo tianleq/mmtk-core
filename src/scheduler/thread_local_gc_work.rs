@@ -50,9 +50,19 @@ impl<VM: VMBinding> scheduler::GCWork<VM> for ScheduleExecuteThreadlocalCollecti
             }
             options::LocalGCPolicy::APPLICATIONS => {
                 for mutator in VM::VMActivePlan::mutators() {
-                    if (mutator.is_thread_local_gc_pending() && mutator.has_mutator_allocated())
-                        || mutator.mutator_id >= 30
-                    {
+                    if mutator.is_thread_local_gc_pending() {
+                        if mutator.has_mutator_allocated() {
+                            worker.add_work(
+                                scheduler::WorkBucketStage::Local,
+                                ExecuteThreadlocalCollectionWork::new(mutator.mutator_tls),
+                            );
+                        } else {
+                            worker.add_work(
+                                scheduler::WorkBucketStage::Local,
+                                ExecuteThreadlocalMarkingWork::new(mutator.mutator_tls),
+                            );
+                        }
+                    } else if mutator.mutator_id >= 30 {
                         worker.add_work(
                             scheduler::WorkBucketStage::Local,
                             ExecuteThreadlocalCollectionWork::new(mutator.mutator_tls),
@@ -62,9 +72,19 @@ impl<VM: VMBinding> scheduler::GCWork<VM> for ScheduleExecuteThreadlocalCollecti
             }
             options::LocalGCPolicy::INTERNAL => {
                 for mutator in VM::VMActivePlan::mutators() {
-                    if (mutator.is_thread_local_gc_pending() && mutator.has_mutator_allocated())
-                        || mutator.mutator_id < 30
-                    {
+                    if mutator.is_thread_local_gc_pending() {
+                        if mutator.has_mutator_allocated() {
+                            worker.add_work(
+                                scheduler::WorkBucketStage::Local,
+                                ExecuteThreadlocalCollectionWork::new(mutator.mutator_tls),
+                            );
+                        } else {
+                            worker.add_work(
+                                scheduler::WorkBucketStage::Local,
+                                ExecuteThreadlocalMarkingWork::new(mutator.mutator_tls),
+                            );
+                        }
+                    } else if mutator.mutator_id < 30 {
                         worker.add_work(
                             scheduler::WorkBucketStage::Local,
                             ExecuteThreadlocalCollectionWork::new(mutator.mutator_tls),
@@ -79,11 +99,26 @@ impl<VM: VMBinding> scheduler::GCWork<VM> for ScheduleExecuteThreadlocalCollecti
                 }
                 mutators
                     .sort_by(|m1, m2: &_| m2.local_allocation_size.cmp(&m1.local_allocation_size));
-                for m in mutators.into_iter().take(count) {
-                    worker.add_work(
-                        scheduler::WorkBucketStage::Local,
-                        ExecuteThreadlocalCollectionWork::new(m.mutator_tls),
-                    );
+                for i in 0..mutators.len() {
+                    let mutator = mutators.get(i).unwrap();
+                    if i < count {
+                        worker.add_work(
+                            scheduler::WorkBucketStage::Local,
+                            ExecuteThreadlocalCollectionWork::new(mutator.mutator_tls),
+                        );
+                    } else if mutator.is_thread_local_gc_pending() {
+                        if mutator.has_mutator_allocated() {
+                            worker.add_work(
+                                scheduler::WorkBucketStage::Local,
+                                ExecuteThreadlocalCollectionWork::new(mutator.mutator_tls),
+                            );
+                        } else {
+                            worker.add_work(
+                                scheduler::WorkBucketStage::Local,
+                                ExecuteThreadlocalMarkingWork::new(mutator.mutator_tls),
+                            );
+                        }
+                    }
                 }
             }
             options::LocalGCPolicy::ALL => {

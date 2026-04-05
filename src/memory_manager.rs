@@ -1043,6 +1043,9 @@ pub fn mmtk_publish_object<VM: VMBinding>(
             VM::VMActivePlan::mutator(tls).object_remset.push(object);
             pin_object(object);
         } else {
+            use crate::vm::ObjectModel;
+
+            VM::VMObjectModel::dump_object(object);
             panic!("tls: {:?}, object: {}", tls, object);
         }
         // Publish all the descendants

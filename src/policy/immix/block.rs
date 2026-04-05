@@ -525,6 +525,7 @@ impl Block {
                 if line.is_line_published() {
                     if !line.is_marked(local_line_mark_state) {
                         // public lines not marked must have 0 state as local GC bulk zeroing line mark state
+                        #[cfg(debug_assertions)]
                         debug_assert!(
                             line.get_mark_state() == 0,
                             "block: {:?}, line: {:?} has invalid state: {:?}",
@@ -638,40 +639,40 @@ impl Block {
         }
     }
 
-    pub fn sweep_dirty_block<VM: VMBinding>(
-        &self,
-        _space: &ImmixSpace<VM>,
-        _mark_histogram: &mut Histogram,
-        line_mark_state: Option<u8>,
-        #[cfg(feature = "debug_thread_local_gc_copying")] gc_stats: &mut crate::util::GCStatistics,
-    ) -> bool {
-        let mut marked = false;
-        let line_mark_state = line_mark_state.unwrap();
-        for line in self.lines() {
-            if line.is_marked(line_mark_state) {
-                debug_assert!(
-                    line.is_line_published(),
-                    "line: {:?} should be public",
-                    line
-                );
-                marked = true
-            } else {
-                // We need to clear the line mark state at least twice in every 128 GC
-                // otherwise, the line mark state of the last GC will stick around
-                if line_mark_state > Line::MAX_MARK_STATE - 2 {
-                    line.mark(0);
-                }
-            }
-        }
-        // no lines marked, meaning that the block has no live public objects
-        if !marked {
-            self.reset_publication();
-        }
-        // conservatively treat dirty block as fully occupied
-        self.set_state(BlockState::Unmarked);
+    // pub fn sweep_dirty_block<VM: VMBinding>(
+    //     &self,
+    //     _space: &ImmixSpace<VM>,
+    //     _mark_histogram: &mut Histogram,
+    //     line_mark_state: Option<u8>,
+    //     #[cfg(feature = "debug_thread_local_gc_copying")] gc_stats: &mut crate::util::GCStatistics,
+    // ) -> bool {
+    //     let mut marked = false;
+    //     let line_mark_state = line_mark_state.unwrap();
+    //     for line in self.lines() {
+    //         if line.is_marked(line_mark_state) {
+    //             debug_assert!(
+    //                 line.is_line_published(),
+    //                 "line: {:?} should be public",
+    //                 line
+    //             );
+    //             marked = true
+    //         } else {
+    //             // We need to clear the line mark state at least twice in every 128 GC
+    //             // otherwise, the line mark state of the last GC will stick around
+    //             if line_mark_state > Line::MAX_MARK_STATE - 2 {
+    //                 line.mark(0);
+    //             }
+    //         }
+    //     }
+    //     // no lines marked, meaning that the block has no live public objects
+    //     if !marked {
+    //         self.reset_publication();
+    //     }
+    //     // conservatively treat dirty block as fully occupied
+    //     self.set_state(BlockState::Unmarked);
 
-        false
-    }
+    //     false
+    // }
 
     /// Sweep this block.
     /// Return true if the block is swept.

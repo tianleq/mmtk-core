@@ -279,7 +279,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         } else {
             current_state + 1
         };
-        // debug_assert_eq!(current_state, mutator.state);
+        debug_assert_eq!(current_state, mutator.state);
         immix_allocator.mark_local_heap(current_state, new_state);
 
         // local state needs to be updated so that future eager marking will

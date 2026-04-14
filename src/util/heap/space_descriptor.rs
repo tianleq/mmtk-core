@@ -1,4 +1,5 @@
-use crate::util::constants::*;
+use bytemuck::Zeroable;
+
 use crate::util::heap::layout::vm_layout::{self, vm_layout};
 use crate::util::Address;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -17,7 +18,12 @@ const EXPONENT_BITS: usize = 5;
 const EXPONENT_MASK: usize = ((1 << EXPONENT_BITS) - 1) << EXPONENT_SHIFT;
 const MANTISSA_SHIFT: usize = EXPONENT_SHIFT + EXPONENT_BITS;
 const MANTISSA_BITS: usize = 14;
-const BASE_EXPONENT: usize = BITS_IN_INT - MANTISSA_BITS;
+// FIXME: The constant `i32::BITS` is inherited from JikesRVM. It looks like the current
+// `SpaceDescriptor` encoding can only encode 32-bit address spaces where each space can only have
+// less than 1024 (`1 << SIZE_BITS`) chunks. In this case, `BASE_EXPONENT`` will depend on
+// `i32::BITS`. If we need to extend `SpaceDescriptor` to 64-bit address spaces, we need to redesign
+// the encoding.
+const BASE_EXPONENT: usize = i32::BITS as usize - MANTISSA_BITS;
 
 const INDEX_MASK: usize = !TYPE_MASK;
 const INDEX_SHIFT: usize = TYPE_BITS;
@@ -26,7 +32,10 @@ static DISCONTIGUOUS_SPACE_INDEX: AtomicUsize = AtomicUsize::new(DISCONTIG_INDEX
 const DISCONTIG_INDEX_INCREMENT: usize = 1 << TYPE_BITS;
 
 #[derive(Copy, Clone, PartialEq, Debug)]
+#[repr(transparent)]
 pub struct SpaceDescriptor(usize);
+
+unsafe impl Zeroable for SpaceDescriptor {}
 
 impl SpaceDescriptor {
     pub const UNINITIALIZED: Self = SpaceDescriptor(0);

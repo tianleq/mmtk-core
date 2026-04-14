@@ -75,10 +75,10 @@ pub trait SFT {
     /// This default implementation works for all spaces that use MMTk's mapper to allocate memory.
     /// Some spaces, like `MallocSpace`, use third-party libraries to allocate memory.
     /// Such spaces needs to override this method.
-    #[cfg(feature = "is_mmtk_object")]
+    #[cfg(feature = "vo_bit")]
     fn is_mmtk_object(&self, addr: Address) -> Option<ObjectReference>;
 
-    #[cfg(feature = "is_mmtk_object")]
+    #[cfg(feature = "vo_bit")]
     fn find_object_from_internal_pointer(
         &self,
         ptr: Address,
@@ -86,7 +86,13 @@ pub trait SFT {
     ) -> Option<ObjectReference>;
 
     /// Initialize object metadata (in the header, or in the side metadata).
-    fn initialize_object_metadata(&self, object: ObjectReference, alloc: bool);
+    ///
+    /// This method is called after an object is allocated.  Specifically,
+    /// -   The VM binding calls [`crate::MMTK::initialize_vm_space_object`] which calls this method
+    ///     to set the metadata for the VM space.
+    /// -   Objects in other spaces are allocated by mutators using an MMTk allocator.
+    ///     `Mutator::post_alloc` will call this method after allocation.
+    fn initialize_object_metadata(&self, object: ObjectReference);
 
     /// Trace objects through SFT. This along with [`SFTProcessEdges`](mmtk/scheduler/gc_work/SFTProcessEdges)
     /// provides an easy way for most plans to trace objects without the need to implement any plan-specific
@@ -101,6 +107,12 @@ pub trait SFT {
         object: ObjectReference,
         worker: GCWorkerMutRef,
     ) -> ObjectReference;
+
+    /// Print debug info for the object. The implementer should print one line at a time so in case of an unexpected error,
+    /// we still print something.
+    fn debug_print_object_info(&self, _object: ObjectReference) {
+        println!("This policy does not implement debug_print_object_info.");
+    }
 
     fn set_object_owner(&self, _object: ObjectReference, _object_owner: u32) {}
 }
@@ -162,11 +174,11 @@ impl SFT for EmptySpaceSFT {
     fn is_in_space(&self, _object: ObjectReference) -> bool {
         false
     }
-    #[cfg(feature = "is_mmtk_object")]
+    #[cfg(feature = "vo_bit")]
     fn is_mmtk_object(&self, _addr: Address) -> Option<ObjectReference> {
         None
     }
-    #[cfg(feature = "is_mmtk_object")]
+    #[cfg(feature = "vo_bit")]
     fn find_object_from_internal_pointer(
         &self,
         _ptr: Address,
@@ -175,7 +187,7 @@ impl SFT for EmptySpaceSFT {
         None
     }
 
-    fn initialize_object_metadata(&self, object: ObjectReference, _alloc: bool) {
+    fn initialize_object_metadata(&self, object: ObjectReference) {
         panic!(
             "Called initialize_object_metadata() on {:x}, which maps to an empty space",
             object

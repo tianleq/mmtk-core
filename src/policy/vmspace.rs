@@ -4,6 +4,7 @@ use crate::policy::sft::GCWorkerMutRef;
 use crate::policy::sft::SFT;
 use crate::policy::space::{CommonSpace, Space};
 use crate::util::address::Address;
+use crate::util::alloc::allocator::AllocationOptions;
 use crate::util::constants::BYTES_IN_PAGE;
 use crate::util::heap::externalpageresource::{ExternalPageResource, ExternalPages};
 use crate::util::heap::layout::vm_layout::BYTES_IN_CHUNK;
@@ -57,20 +58,20 @@ impl<VM: VMBinding> SFT for VMSpace<VM> {
     fn is_sane(&self) -> bool {
         true
     }
-    fn initialize_object_metadata(&self, object: ObjectReference, _alloc: bool) {
+    fn initialize_object_metadata(&self, object: ObjectReference) {
         self.mark_state
             .on_object_metadata_initialization::<VM>(object);
-        if self.common.needs_log_bit {
+        if self.common.unlog_allocated_object {
             VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.mark_as_unlogged::<VM>(object, Ordering::SeqCst);
         }
         #[cfg(feature = "vo_bit")]
         crate::util::metadata::vo_bit::set_vo_bit(object);
     }
-    #[cfg(feature = "is_mmtk_object")]
+    #[cfg(feature = "vo_bit")]
     fn is_mmtk_object(&self, addr: Address) -> Option<ObjectReference> {
         crate::util::metadata::vo_bit::is_vo_bit_set_for_addr(addr)
     }
-    #[cfg(feature = "is_mmtk_object")]
+    #[cfg(feature = "vo_bit")]
     fn find_object_from_internal_pointer(
         &self,
         ptr: Address,
@@ -136,7 +137,7 @@ impl<VM: VMBinding> Space<VM> for VMSpace<VM> {
         unreachable!()
     }
 
-    fn acquire(&self, _tls: VMThread, _pages: usize) -> Address {
+    fn acquire(&self, _tls: VMThread, _pages: usize, _alloc_options: AllocationOptions) -> Address {
         unreachable!()
     }
 
@@ -151,6 +152,22 @@ impl<VM: VMBinding> Space<VM> for VMSpace<VM> {
         let external_pages = self.pr.get_external_pages();
         for ep in external_pages.iter() {
             enumerator.visit_address_range(ep.start, ep.end);
+        }
+    }
+
+    fn clear_side_log_bits(&self) {
+        let log_bit = VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec();
+        let external_pages = self.pr.get_external_pages();
+        for ep in external_pages.iter() {
+            log_bit.bzero_metadata(ep.start, ep.end - ep.start);
+        }
+    }
+
+    fn set_side_log_bits(&self) {
+        let log_bit = VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec();
+        let external_pages = self.pr.get_external_pages();
+        for ep in external_pages.iter() {
+            log_bit.bset_metadata(ep.start, ep.end - ep.start);
         }
     }
 }
@@ -286,7 +303,7 @@ impl<VM: VMBinding> VMSpace<VM> {
             // Flip the per-object unlogged bits to "unlogged" state for objects inside the
             // bootimage
             #[cfg(feature = "set_unlog_bits_vm_space")]
-            if self.common.needs_log_bit {
+            if self.common.unlog_traced_object {
                 VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.store_atomic::<VM, u8>(
                     object,
                     1,

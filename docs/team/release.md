@@ -11,13 +11,12 @@ We maintain a 6-week release cycle. A release is usually cut at the end of a wee
 MMTk releases include MMTk core and the officially supported bindings. They share the same version number as MMTk core.
 
 The current releases include the following bindings:
-* OpenJDK
+* OpenJDK (Both OpenJDK 11 and OpenJDK 21)
 * JikesRVM
 * Julia
 
 The current releases do not include the following bindings:
 * Ruby: We have made good progress on the binding development, and we will include it soon.
-* V8: We currently lack of resources to work on the binding.
 
 ## Release Process
 
@@ -71,6 +70,14 @@ Once the PRs are merged, we can tag releases on Github.
 4. Copy the markdown section for this version in the `CHANGELOG.md` as the description for the release.
 5. Tick 'Set as a pre-release'.
 6. Click 'Publish release'.
+
+#### OpenJDK Binary Release
+
+The OpenJDK binding release should also include the compiled binary packaged as a tarball.
+This tarball is used for the canary build in the performance CI. See [Regression Test Canary](https://github.com/mmtk/mmtk-core/blob/master/docs/team/ci.md#regression-test-canary).
+
+You can generate the tarball using OpenJDK’s `make product-bundles` command (with MMTk).
+Among the generated files, the one with the `*_bin.tar.gz` suffix should be included in the release.
 
 ### Post release checklist
 

@@ -214,7 +214,7 @@ pub trait Scanning<VM: VMBinding> {
     /// object reference.
     ///
     /// The `memory_manager::is_mmtk_object` function can be used in this function if
-    /// -   the "is_mmtk_object" feature is enabled, and
+    /// -   the "vo_bit" feature is enabled, and
     /// -   `VM::VMObjectModel::NEED_VO_BITS_DURING_TRACING` is true.
     ///
     /// Arguments:
@@ -239,7 +239,7 @@ pub trait Scanning<VM: VMBinding> {
     /// field is holding a null reference, or a tagged non-reference value such as small integer).
     ///
     /// The `memory_manager::is_mmtk_object` function can be used in this function if
-    /// -   the "is_mmtk_object" feature is enabled, and
+    /// -   the "vo_bit" feature is enabled, and
     /// -   `VM::VMObjectModel::NEED_VO_BITS_DURING_TRACING` is true.
     ///
     /// Arguments:
@@ -275,7 +275,7 @@ pub trait Scanning<VM: VMBinding> {
     /// optimization for the stack roots.
     ///
     /// The `memory_manager::is_mmtk_object` function can be used in this function if
-    /// -   the "is_mmtk_object" feature is enabled.
+    /// -   the "vo_bit" feature is enabled.
     ///
     /// Arguments:
     /// * `tls`: The GC thread that is performing this scanning.
@@ -307,7 +307,7 @@ pub trait Scanning<VM: VMBinding> {
     /// goes here.
     ///
     /// The `memory_manager::is_mmtk_object` function can be used in this function if
-    /// -   the "is_mmtk_object" feature is enabled.
+    /// -   the "vo_bit" feature is enabled.
     ///
     /// Arguments:
     /// * `tls`: The GC thread that is performing this scanning.
@@ -375,7 +375,7 @@ pub trait Scanning<VM: VMBinding> {
     /// the objects retained in the closure.
     ///
     /// The `memory_manager::is_mmtk_object` function can be used in this function if
-    /// -   the "is_mmtk_object" feature is enabled, and
+    /// -   the "vo_bit" feature is enabled, and
     /// -   `VM::VMObjectModel::NEED_VO_BITS_DURING_TRACING` is true.
     ///
     /// Arguments:

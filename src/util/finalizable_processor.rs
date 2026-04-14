@@ -184,10 +184,11 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for Finalization<E> {
         }
 
         let mut finalizable_processor = mmtk.finalizable_processor.lock().unwrap();
+        let num_candidates_begin = finalizable_processor.candidates.len();
+        let num_ready_for_finalize_begin = finalizable_processor.ready_for_finalize.len();
         debug!(
             "Finalization, {} objects in candidates, {} objects ready to finalize",
-            finalizable_processor.candidates.len(),
-            finalizable_processor.ready_for_finalize.len()
+            num_candidates_begin, num_ready_for_finalize_begin
         );
         #[cfg(not(feature = "debug_publish_object"))]
         let mut w = E::new(vec![], false, mmtk, WorkBucketStage::FinalRefClosure);
@@ -220,10 +221,21 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for Finalization<E> {
             finalizable_processor.scan_thread_local(&mut w, &mut mutator.finalizable_candidates);
         }
         finalizable_processor.scan(worker.tls, &mut w, is_nursery_gc(mmtk.get_plan()));
+
+        let num_candidates_end = finalizable_processor.candidates.len();
+        let num_ready_for_finalize_end = finalizable_processor.ready_for_finalize.len();
+
         debug!(
             "Finished finalization, {} objects in candidates, {} objects ready to finalize",
-            finalizable_processor.candidates.len(),
-            finalizable_processor.ready_for_finalize.len()
+            num_candidates_end, num_ready_for_finalize_end
+        );
+        probe!(
+            mmtk,
+            finalization,
+            num_candidates_begin,
+            num_candidates_end,
+            num_ready_for_finalize_begin,
+            num_ready_for_finalize_end
         );
     }
 }

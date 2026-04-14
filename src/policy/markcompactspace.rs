@@ -42,8 +42,6 @@ impl<VM: VMBinding> SFT for MarkCompactSpace<VM> {
     }
 
     fn is_live(&self, object: ObjectReference) -> bool {
-        // Sanity checker cannot use this method to do the verification
-        // since the mark bit will be cleared during the second trace(update forwarding pointer)
         Self::is_marked(object)
     }
 
@@ -66,7 +64,7 @@ impl<VM: VMBinding> SFT for MarkCompactSpace<VM> {
         true
     }
 
-    fn initialize_object_metadata(&self, object: ObjectReference, _alloc: bool) {
+    fn initialize_object_metadata(&self, object: ObjectReference) {
         crate::util::metadata::vo_bit::set_vo_bit(object);
     }
 
@@ -75,12 +73,12 @@ impl<VM: VMBinding> SFT for MarkCompactSpace<VM> {
         true
     }
 
-    #[cfg(feature = "is_mmtk_object")]
+    #[cfg(feature = "vo_bit")]
     fn is_mmtk_object(&self, addr: Address) -> Option<ObjectReference> {
         crate::util::metadata::vo_bit::is_vo_bit_set_for_addr(addr)
     }
 
-    #[cfg(feature = "is_mmtk_object")]
+    #[cfg(feature = "vo_bit")]
     fn find_object_from_internal_pointer(
         &self,
         ptr: Address,
@@ -101,6 +99,15 @@ impl<VM: VMBinding> SFT for MarkCompactSpace<VM> {
         // We should not use trace_object for markcompact space.
         // Depending on which trace it is, we should manually call either trace_mark or trace_forward.
         panic!("sft_trace_object() cannot be used with mark compact space")
+    }
+
+    fn debug_print_object_info(&self, object: ObjectReference) {
+        println!("marked = {}", MarkCompactSpace::<VM>::is_marked(object));
+        println!(
+            "head forwarding pointer = {:?}",
+            MarkCompactSpace::<VM>::get_header_forwarding_pointer(object)
+        );
+        self.common.debug_print_object_global_info(object);
     }
 }
 
@@ -135,6 +142,14 @@ impl<VM: VMBinding> Space<VM> for MarkCompactSpace<VM> {
 
     fn enumerate_objects(&self, enumerator: &mut dyn ObjectEnumerator) {
         object_enum::enumerate_blocks_from_monotonic_page_resource(enumerator, &self.pr);
+    }
+
+    fn clear_side_log_bits(&self) {
+        unimplemented!()
+    }
+
+    fn set_side_log_bits(&self) {
+        unimplemented!()
     }
 }
 

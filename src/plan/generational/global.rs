@@ -41,7 +41,7 @@ pub struct CommonGenPlan<VM: VMBinding> {
 impl<VM: VMBinding> CommonGenPlan<VM> {
     pub fn new(mut args: CreateSpecificPlanArgs<VM>) -> Self {
         let nursery = CopySpace::new(
-            args.get_space_args("nursery", true, false, VMRequest::discontiguous()),
+            args.get_nursery_space_args("nursery", true, false, VMRequest::discontiguous()),
             true,
         );
         let full_heap_gc_count = args
@@ -76,6 +76,11 @@ impl<VM: VMBinding> CommonGenPlan<VM> {
         let full_heap = !self.is_current_gc_nursery();
         self.common.release(tls, full_heap);
         self.nursery.release();
+    }
+
+    pub fn end_of_gc(&mut self, tls: VMWorkerThread, next_gc_full_heap: bool) {
+        self.set_next_gc_full_heap(next_gc_full_heap);
+        self.common.end_of_gc(tls);
     }
 
     /// Independent of how many pages remain in the page budget (a function of heap size), we must

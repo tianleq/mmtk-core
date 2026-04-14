@@ -4,12 +4,11 @@ use crate::util::constants::LOG_BYTES_IN_PAGE;
 use crate::util::constants::{BITS_IN_WORD, BYTES_IN_PAGE, LOG_BITS_IN_BYTE};
 use crate::util::conversions::rshift_align_up;
 use crate::util::heap::layout::vm_layout::VMLayout;
-use crate::util::memory::{MmapAnnotation, MmapStrategy};
 #[cfg(target_pointer_width = "32")]
 use crate::util::metadata::side_metadata::address_to_chunked_meta_address;
+use crate::util::os::*;
 use crate::util::Address;
 use crate::MMAPPER;
-use std::io::Result;
 
 /// Performs address translation in contiguous metadata spaces (e.g. global and policy-specific in 64-bits, and global in 32-bits)
 pub(super) fn address_to_contiguous_meta_address(
@@ -93,10 +92,9 @@ pub(super) fn align_metadata_address(
 /// Unmaps the specified metadata range, or panics.
 #[cfg(test)]
 pub(crate) fn ensure_munmap_metadata(start: Address, size: usize) {
-    use crate::util::memory;
     trace!("ensure_munmap_metadata({}, 0x{:x})", start, size);
 
-    assert!(memory::munmap(start, size).is_ok())
+    assert!(OS::munmap(start, size).is_ok())
 }
 
 /// Unmaps a metadata space (`spec`) for the specified data address range (`start` and `size`)
@@ -128,7 +126,7 @@ pub(super) fn try_mmap_contiguous_metadata_space(
     spec: &SideMetadataSpec,
     no_reserve: bool,
     anno: &MmapAnnotation,
-) -> Result<usize> {
+) -> MmapResult<usize> {
     debug_assert!(start.is_aligned_to(BYTES_IN_PAGE));
     debug_assert!(size % BYTES_IN_PAGE == 0);
 
@@ -143,14 +141,15 @@ pub(super) fn try_mmap_contiguous_metadata_space(
             MMAPPER.ensure_mapped(
                 mmap_start,
                 mmap_size >> LOG_BYTES_IN_PAGE,
-                MmapStrategy::SIDE_METADATA,
+                HugePageSupport::No,
+                MmapProtection::ReadWrite,
                 anno,
             )
         } else {
             MMAPPER.quarantine_address_range(
                 mmap_start,
                 mmap_size >> LOG_BYTES_IN_PAGE,
-                MmapStrategy::SIDE_METADATA,
+                HugePageSupport::No,
                 anno,
             )
         }
@@ -252,12 +251,14 @@ pub fn find_last_non_zero_bit_in_metadata_bytes(
     meta_end: Address,
 ) -> FindMetaBitResult {
     use crate::util::constants::BYTES_IN_ADDRESS;
-    use crate::util::heap::vm_layout::MMAP_CHUNK_BYTES;
+
+    let mmap_granularity = MMAPPER.granularity();
 
     let mut cur = meta_end;
-    // We need to check if metadata address is mapped or not. But we only check at chunk granularity.
-    // This records the start of a chunk that is tested to be mapped.
-    let mut mapped_chunk = Address::MAX;
+    // We need to check if metadata address is mapped or not.  But we make use of the granularity of
+    // the `Mmapper` to reduce the number of checks.  This records the start of a grain that is
+    // tested to be mapped.
+    let mut mapped_grain = Address::MAX;
     while cur > meta_start {
         // If we can check the whole word, set step to word size. Otherwise, the step is 1 (byte) and we check byte.
         let step = if cur.is_aligned_to(BYTES_IN_ADDRESS) && cur - BYTES_IN_ADDRESS >= meta_start {
@@ -277,10 +278,10 @@ pub fn find_last_non_zero_bit_in_metadata_bytes(
         );
 
         // If we are looking at an address that is not in a mapped chunk, we need to check if the chunk if mapped.
-        if cur < mapped_chunk {
+        if cur < mapped_grain {
             if cur.is_mapped() {
                 // This is mapped. No need to check for this chunk.
-                mapped_chunk = cur.align_down(MMAP_CHUNK_BYTES);
+                mapped_grain = cur.align_down(mmap_granularity);
             } else {
                 return FindMetaBitResult::UnmappedMetadata;
             }

@@ -14,8 +14,8 @@ use crate::util::heap::layout::vm_layout::*;
 use crate::util::heap::layout::CreateFreeListResult;
 use crate::util::heap::pageresource::CommonPageResource;
 use crate::util::heap::space_descriptor::SpaceDescriptor;
-use crate::util::memory;
 use crate::util::opaque_pointer::*;
+use crate::util::os::*;
 use crate::util::raw_memory_freelist::RawMemoryFreeList;
 use crate::vm::*;
 use std::marker::PhantomData;
@@ -27,7 +27,7 @@ pub struct FreeListPageResource<VM: VMBinding> {
     sync: Mutex<FreeListPageResourceSync>,
     _p: PhantomData<VM>,
     /// Protect memory on release, and unprotect on re-allocate.
-    pub(crate) protect_memory_on_release: Option<memory::MmapProtection>,
+    pub(crate) protect_memory_on_release: Option<MmapProtection>,
 }
 
 unsafe impl<VM: VMBinding> Send for FreeListPageResource<VM> {}
@@ -219,9 +219,11 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
         // > (e.g., read versus read/write protection) exceeding the
         // > allowed maximum.
         assert!(self.protect_memory_on_release.is_some());
-        // We are not using mmapper.protect(). mmapper.protect() protects the whole chunk and
-        // may protect memory that is still in use.
-        if let Err(e) = memory::mprotect(start, conversions::pages_to_bytes(pages)) {
+        if let Err(e) = OS::set_memory_access(
+            start,
+            conversions::pages_to_bytes(pages),
+            MmapProtection::NoAccess,
+        ) {
             panic!(
                 "Failed at protecting memory (starting at {}): {:?}",
                 start, e
@@ -232,7 +234,7 @@ impl<VM: VMBinding> FreeListPageResource<VM> {
     /// Unprotect the memory
     fn munprotect(&self, start: Address, pages: usize) {
         assert!(self.protect_memory_on_release.is_some());
-        if let Err(e) = memory::munprotect(
+        if let Err(e) = OS::set_memory_access(
             start,
             conversions::pages_to_bytes(pages),
             self.protect_memory_on_release.unwrap(),

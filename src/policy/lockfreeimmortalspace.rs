@@ -8,17 +8,17 @@ use crate::policy::sft::SFT;
 use crate::policy::space::{CommonSpace, Space};
 use crate::util::address::Address;
 
+use crate::util::alloc::allocator::AllocationOptions;
 use crate::util::conversions;
 use crate::util::heap::gc_trigger::GCTrigger;
 use crate::util::heap::layout::vm_layout::vm_layout;
 use crate::util::heap::PageResource;
 use crate::util::heap::VMRequest;
-use crate::util::memory::MmapAnnotation;
-use crate::util::memory::MmapStrategy;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::metadata::side_metadata::SideMetadataSanity;
 use crate::util::object_enum::ObjectEnumerator;
 use crate::util::opaque_pointer::*;
+use crate::util::os::*;
 use crate::util::ObjectReference;
 use crate::vm::VMBinding;
 
@@ -71,15 +71,15 @@ impl<VM: VMBinding> SFT for LockFreeImmortalSpace<VM> {
     fn is_sane(&self) -> bool {
         unimplemented!()
     }
-    fn initialize_object_metadata(&self, _object: ObjectReference, _alloc: bool) {
+    fn initialize_object_metadata(&self, _object: ObjectReference) {
         #[cfg(feature = "vo_bit")]
         crate::util::metadata::vo_bit::set_vo_bit(_object);
     }
-    #[cfg(feature = "is_mmtk_object")]
+    #[cfg(feature = "vo_bit")]
     fn is_mmtk_object(&self, addr: Address) -> Option<ObjectReference> {
         crate::util::metadata::vo_bit::is_vo_bit_set_for_addr(addr)
     }
-    #[cfg(feature = "is_mmtk_object")]
+    #[cfg(feature = "vo_bit")]
     fn find_object_from_internal_pointer(
         &self,
         ptr: Address,
@@ -140,7 +140,7 @@ impl<VM: VMBinding> Space<VM> for LockFreeImmortalSpace<VM> {
         data_pages + meta_pages
     }
 
-    fn acquire(&self, _tls: VMThread, pages: usize) -> Address {
+    fn acquire(&self, _tls: VMThread, pages: usize, alloc_options: AllocationOptions) -> Address {
         trace!("LockFreeImmortalSpace::acquire");
         let bytes = conversions::pages_to_bytes(pages);
         let start = self
@@ -150,7 +150,11 @@ impl<VM: VMBinding> Space<VM> for LockFreeImmortalSpace<VM> {
             })
             .expect("update cursor failed");
         if start + bytes > self.limit {
-            panic!("OutOfMemory")
+            if alloc_options.allow_oom_call {
+                panic!("OutOfMemory");
+            } else {
+                return Address::ZERO;
+            }
         }
         if self.slow_path_zeroing {
             crate::util::memory::zero(start, bytes);
@@ -175,6 +179,14 @@ impl<VM: VMBinding> Space<VM> for LockFreeImmortalSpace<VM> {
 
     fn enumerate_objects(&self, enumerator: &mut dyn ObjectEnumerator) {
         enumerator.visit_address_range(self.start, self.start + self.total_bytes);
+    }
+
+    fn clear_side_log_bits(&self) {
+        unimplemented!()
+    }
+
+    fn set_side_log_bits(&self) {
+        unimplemented!()
     }
 }
 
@@ -242,11 +254,12 @@ impl<VM: VMBinding> LockFreeImmortalSpace<VM> {
         };
 
         // Eagerly memory map the entire heap (also zero all the memory)
-        let strategy = MmapStrategy::new(
-            *args.options.transparent_hugepages,
-            crate::util::memory::MmapProtection::ReadWrite,
-        );
-        crate::util::memory::dzmmap_noreplace(
+        let strategy = MmapStrategy::default()
+            .transparent_hugepages(*args.options.transparent_hugepages)
+            .prot(crate::util::os::MmapProtection::ReadWrite)
+            .replace(false)
+            .reserve(true);
+        crate::util::os::OS::dzmmap(
             start,
             aligned_total_bytes,
             strategy,

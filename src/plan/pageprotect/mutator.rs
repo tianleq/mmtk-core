@@ -1,4 +1,6 @@
 use super::PageProtect;
+use crate::plan::mutator_context::common_prepare_func;
+use crate::plan::mutator_context::common_release_func;
 #[cfg(feature = "thread_local_gc_copying")]
 use crate::plan::mutator_context::generic_thread_local_alloc_copy;
 #[cfg(feature = "thread_local_gc_copying")]
@@ -9,8 +11,6 @@ use crate::plan::mutator_context::generic_thread_local_post_copy;
 use crate::plan::mutator_context::generic_thread_local_prepare;
 #[cfg(feature = "thread_local_gc")]
 use crate::plan::mutator_context::generic_thread_local_release;
-use crate::plan::mutator_context::no_op_release_func;
-use crate::plan::mutator_context::unreachable_prepare_func;
 use crate::plan::mutator_context::Mutator;
 use crate::plan::mutator_context::MutatorBuilder;
 use crate::plan::mutator_context::MutatorConfig;
@@ -51,8 +51,8 @@ pub fn create_pp_mutator<VM: VMBinding>(
             vec.push((AllocatorSelector::LargeObject(0), &page.space));
             vec
         }),
-        prepare_func: &unreachable_prepare_func,
-        release_func: &no_op_release_func,
+        prepare_func: &common_prepare_func,
+        release_func: &common_release_func,
         #[cfg(feature = "thread_local_gc")]
         thread_local_prepare_func: &generic_thread_local_prepare,
         #[cfg(feature = "thread_local_gc")]

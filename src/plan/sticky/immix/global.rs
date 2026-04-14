@@ -6,6 +6,7 @@ use crate::plan::immix;
 use crate::plan::PlanConstraints;
 use crate::policy::gc_work::TraceKind;
 use crate::policy::gc_work::TRACE_KIND_TRANSITIVE_PIN;
+use crate::policy::immix::defrag::StatsForDefrag;
 use crate::policy::immix::ImmixSpace;
 use crate::policy::immix::TRACE_KIND_FAST;
 use crate::policy::sft::SFT;
@@ -14,6 +15,7 @@ use crate::util::copy::CopyConfig;
 use crate::util::copy::CopySelector;
 use crate::util::copy::CopySemantics;
 use crate::util::heap::gc_trigger::SpaceStats;
+use crate::util::metadata::log_bit::UnlogBitsOperation;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::statistics::counter::EventCounter;
 use crate::vm::ObjectModel;
@@ -46,6 +48,7 @@ pub const STICKY_IMMIX_CONSTRAINTS: PlanConstraints = PlanConstraints {
     barrier: crate::plan::BarrierSelector::ObjectBarrier,
     // We may trace duplicate edges in sticky immix (or any plan that uses object remembering barrier). See https://github.com/mmtk/mmtk-core/issues/743.
     may_trace_duplicate_edges: true,
+    generational: true,
     ..immix::IMMIX_CONSTRAINTS
 };
 
@@ -117,25 +120,41 @@ impl<VM: VMBinding> Plan for StickyImmix<VM> {
             // Prepare both large object space and immix space
             self.immix.immix_space.prepare(
                 false,
-                crate::policy::immix::defrag::StatsForDefrag::new(self),
+                Some(StatsForDefrag::new(self)),
+                // We don't do anything special to unlog bits during nursery GC
+                // because ProcessModBuf will set the unlog bits back.
+                UnlogBitsOperation::NoOp,
             );
             self.immix.common.los.prepare(false);
         } else {
             self.full_heap_gc_count.lock().unwrap().inc();
-            self.immix.prepare(tls);
+            self.immix.prepare_inner(
+                tls,
+                // We will reconstruct unlog bits during tracing.
+                UnlogBitsOperation::BulkClear,
+            );
         }
     }
 
     fn release(&mut self, tls: crate::util::VMWorkerThread) {
         if self.is_current_gc_nursery() {
-            self.immix.immix_space.release(false);
+            self.immix.immix_space.release(
+                false,
+                // We don't do anything special to unlog bits during nursery GC
+                // because ProcessModBuf has set the unlog bits back.
+                UnlogBitsOperation::NoOp,
+            );
             self.immix.common.los.release(false);
         } else {
-            self.immix.release(tls);
+            self.immix.release_inner(
+                tls,
+                // We reconstructred unlog bits during tracing.  Keep them.
+                UnlogBitsOperation::NoOp,
+            );
         }
     }
 
-    fn end_of_gc(&mut self, _tls: crate::util::opaque_pointer::VMWorkerThread) {
+    fn end_of_gc(&mut self, tls: crate::util::opaque_pointer::VMWorkerThread) {
         let next_gc_full_heap =
             crate::plan::generational::global::CommonGenPlan::should_next_gc_be_full_heap(self);
         self.next_gc_full_heap
@@ -144,6 +163,8 @@ impl<VM: VMBinding> Plan for StickyImmix<VM> {
         let was_defrag = self.immix.immix_space.end_of_gc();
         self.immix
             .set_last_gc_was_defrag(was_defrag, Ordering::Relaxed);
+
+        self.immix.common.end_of_gc(tls);
     }
 
     fn collection_required(&self, space_full: bool, space: Option<SpaceStats<Self::VM>>) -> bool {
@@ -331,12 +352,7 @@ impl<VM: VMBinding> StickyImmix<VM> {
         let immix = immix::Immix::new_with_args(
             plan_args,
             crate::policy::immix::ImmixSpaceArgs {
-                // Every object we trace in nursery GC becomes a mature object.
-                // Every object we trace in full heap GC is a mature object. Thus in both cases,
-                // they should be unlogged.
-                unlog_object_when_traced: true,
                 // In StickyImmix, both young and old objects are allocated in the ImmixSpace.
-                #[cfg(feature = "vo_bit")]
                 mixed_age: true,
                 #[cfg(feature = "thread_local_gc_copying")]
                 max_local_copy_reserve: 0,

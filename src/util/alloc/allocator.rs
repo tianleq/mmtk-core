@@ -10,9 +10,16 @@ use crate::util::options::Options;
 use crate::vm::VMBinding;
 use crate::vm::{ActivePlan, Collection};
 use crate::MMTK;
-use downcast_rs::Downcast;
-use std::sync::atomic::Ordering;
+
+use std::cell::RefCell;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+
+use crate::policy::space::Space;
+use crate::util::opaque_pointer::*;
+use crate::vm::VMBinding;
+use crate::vm::{ActivePlan, Collection};
+use downcast_rs::Downcast;
 
 #[repr(C)]
 #[derive(Debug)]
@@ -23,6 +30,109 @@ pub enum AllocationError {
     /// The OS is unable to mmap or acquire more memory. Critical error. MMTk expects the VM to
     /// abort if such an error is thrown.
     MmapOutOfMemory,
+}
+
+/// Allow specifying different behaviors with [`Allocator::alloc_with_options`].
+#[repr(C)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct AllocationOptions {
+    /// Whether over-committing is allowed at this allocation site.  Over-committing means the
+    /// allocation is allowed to go beyond the current heap size.  But it is not guaranteed to
+    /// succeed.
+    ///
+    /// **The default is `false`**.
+    ///
+    /// Note that regardless of the value of `allow_overcommit`, the allocation may trigger GC if
+    /// the GC trigger considers it needed.
+    pub allow_overcommit: bool,
+
+    /// Whether the allocation is at a safepoint.
+    ///
+    /// **The default is `true`**.
+    ///
+    /// If `true`, the allocation is allowed to block for GC.
+    ///
+    /// If `false`, the allocation will immediately return a null address if the allocation cannot
+    /// be satisfied without a GC.
+    pub at_safepoint: bool,
+
+    /// Whether the allocation is allowed to call [`Collection::out_of_memory`].
+    ///
+    /// **The default is `true`**.
+    ///
+    /// If `true`, the allocation will call [`Collection::out_of_memory`] when out of memory and
+    /// return null.
+    ///
+    /// If `fasle`, the allocation will return null immediately when out of memory.
+    pub allow_oom_call: bool,
+}
+
+/// The default value for `AllocationOptions` has the same semantics as calling [`Allocator::alloc`]
+/// directly.
+impl Default for AllocationOptions {
+    fn default() -> Self {
+        Self {
+            allow_overcommit: false,
+            at_safepoint: true,
+            allow_oom_call: true,
+        }
+    }
+}
+
+impl AllocationOptions {
+    pub(crate) fn is_default(&self) -> bool {
+        *self == AllocationOptions::default()
+    }
+}
+
+/// A wrapper for [`AllocatorContext`] to hold a [`AllocationOptions`] that can be modified by the
+/// same mutator thread.
+///
+/// All [`Allocator`] instances in `Allocators` share one `AllocationOptions` instance, and it will
+/// only be accessed by the mutator (via `Mutator::allocators`) or the GC worker (via
+/// `GCWorker::copy`) that owns it.  Rust doesn't like multiple mutable references pointing to a
+/// shared data structure.  We cannot use [`atomic::Atomic`] because `AllocationOptions` has
+/// multiple fields. We wrap it in a `RefCell` to make it internally mutable.
+///
+/// Note: The allocation option is called every time [`Allocator::alloc_with_options`] is called.
+/// Because API functions should only be called on allocation slow paths, we believe that `RefCell`
+/// should be good enough for performance.  If this is too slow, we may consider `UnsafeCell`.  If
+/// that's still too slow, we should consider changing the API to make the allocation options a
+/// persistent per-mutator value, and allow the VM binding set its value via a new API function.
+struct AllocationOptionsHolder {
+    alloc_options: RefCell<AllocationOptions>,
+}
+
+/// Strictly speaking, `AllocationOptionsHolder` isn't `Sync`.  Two threads cannot set or clear the
+/// same `AllocationOptionsHolder` at the same time.  However, both `Mutator` and `GCWorker` are
+/// `Send`, and both of which own `Allocators` and require its field `Arc<AllocationContext>` to be
+/// `Send`, which requires `AllocationContext` to be `Sync`, which requires
+/// `AllocationOptionsHolder` to be `Sync`.  (Note that `Arc<T>` can be cloned and given to another
+/// thread, and Rust expects `T` to be `Sync`, too.  But we never share `AllocationContext` between
+/// threads, but only between multiple `Allocator` instances within the same `Allocators` instance.
+/// Rust can't figure this out.)
+unsafe impl Sync for AllocationOptionsHolder {}
+
+impl AllocationOptionsHolder {
+    pub fn new(alloc_options: AllocationOptions) -> Self {
+        Self {
+            alloc_options: RefCell::new(alloc_options),
+        }
+    }
+    pub fn set_alloc_options(&self, options: AllocationOptions) {
+        let mut alloc_options = self.alloc_options.borrow_mut();
+        *alloc_options = options;
+    }
+
+    pub fn clear_alloc_options(&self) {
+        let mut alloc_options = self.alloc_options.borrow_mut();
+        *alloc_options = AllocationOptions::default();
+    }
+
+    pub fn get_alloc_options(&self) -> AllocationOptions {
+        let alloc_options = self.alloc_options.borrow();
+        *alloc_options
+    }
 }
 
 pub fn align_allocation_no_fill<VM: VMBinding>(
@@ -52,7 +162,13 @@ pub fn align_allocation_inner<VM: VMBinding>(
     // Make sure MIN_ALIGNMENT is reasonable.
     #[allow(clippy::assertions_on_constants)]
     {
-        debug_assert!(VM::MIN_ALIGNMENT >= BYTES_IN_INT);
+        // TODO: This is a static assertion that VM::MIN_ALIGNMENT must be at least 4.
+        // This assertion has existed since JikesRVM MMTk.
+        // We are keeping it here because some implementation details of the allocator may rely on this assertion.
+        // Some GC algorithms may require a stricter minimum alignment, and that can override the value.
+        // We should refactor the VM binding API and the internal interface
+        // to reconcile the requirements from the VM and the GC algorithms.
+        debug_assert!(VM::MIN_ALIGNMENT >= std::mem::size_of::<i32>());
     }
     debug_assert!(!(fillalignmentgap && region.is_zero()));
     debug_assert!(alignment <= VM::MAX_ALIGNMENT);
@@ -66,13 +182,9 @@ pub fn align_allocation_inner<VM: VMBinding>(
     }
 
     // May require an alignment
-    let region_isize = region.as_usize() as isize;
     let mask = (alignment - 1) as isize; // fromIntSignExtend
     let neg_off: isize = -(offset as isize); // fromIntSignExtend
-
-    // TODO: Consider using neg_off.wrapping_sub_unsigned(region.as_usize()), and we can remove region_isize.
-    // This requires Rust 1.66.0+.
-    let delta = neg_off.wrapping_sub(region_isize) & mask; // Use wrapping_sub to avoid overflow
+    let delta = neg_off.wrapping_sub_unsigned(region.as_usize()) & mask; // Use wrapping_sub to avoid overflow
 
     if fillalignmentgap && (VM::ALIGNMENT_VALUE != 0) {
         fill_alignment_gap::<VM>(region, region + delta);
@@ -82,22 +194,11 @@ pub fn align_allocation_inner<VM: VMBinding>(
 }
 
 /// Fill the specified region with the alignment value.
-pub fn fill_alignment_gap<VM: VMBinding>(immut_start: Address, end: Address) {
-    let mut start = immut_start;
-
-    if VM::MAX_ALIGNMENT - VM::MIN_ALIGNMENT == BYTES_IN_INT {
-        // At most a single hole
-        if end - start != 0 {
-            unsafe {
-                start.store(VM::ALIGNMENT_VALUE);
-            }
-        }
-    } else {
-        while start < end {
-            unsafe {
-                start.store(VM::ALIGNMENT_VALUE);
-            }
-            start += BYTES_IN_INT;
+pub fn fill_alignment_gap<VM: VMBinding>(start: Address, end: Address) {
+    if VM::ALIGNMENT_VALUE != 0 {
+        let start_ptr = start.to_mut_ptr::<u8>();
+        unsafe {
+            std::ptr::write_bytes(start_ptr, VM::ALIGNMENT_VALUE, end - start);
         }
     }
 }
@@ -128,9 +229,37 @@ pub fn get_maximum_aligned_size_inner<VM: VMBinding>(
     }
 }
 
+#[cfg(debug_assertions)]
+pub(crate) fn assert_allocation_args<VM: VMBinding>(size: usize, align: usize, offset: usize) {
+    use crate::util::constants::*;
+    // MMTk has assumptions about minimal object size.
+    // We need to make sure that all allocations comply with the min object size.
+    // Ideally, we check the allocation size, and if it is smaller, we transparently allocate the min
+    // object size (the VM does not need to know this). However, for the VM bindings we support at the moment,
+    // their object sizes are all larger than MMTk's min object size, so we simply put an assertion here.
+    // If you plan to use MMTk with a VM with its object size smaller than MMTk's min object size, you should
+    // meet the min object size in the fastpath.
+    debug_assert!(size >= MIN_OBJECT_SIZE);
+    // Assert alignment
+    debug_assert!(align >= VM::MIN_ALIGNMENT);
+    debug_assert!(align <= VM::MAX_ALIGNMENT);
+    // Assert offset
+    debug_assert!(VM::USE_ALLOCATION_OFFSET || offset == 0);
+}
+
 /// The context an allocator needs to access in order to perform allocation.
+///
+/// **Note:** An `AllocatorContext` is a thread-local struct, however, it is
+/// used as `Arc<AllocatorContext>` inside all allocator implementations since
+/// we need the entire struct to be `Send`.
+///
+/// See doc comment on `impl Sync` for `AllocationOptionsHolder` above.
+/// See here for more information: <https://github.com/mmtk/mmtk-core/issues/1474>
 pub struct AllocatorContext<VM: VMBinding> {
+    alloc_options: AllocationOptionsHolder,
     pub state: Arc<GlobalState>,
+    /// Have we thrown an OOM already?
+    pub thrown_oom: AtomicBool,
     pub options: Arc<Options>,
     pub gc_trigger: Arc<GCTrigger<VM>>,
     #[cfg(feature = "analysis")]
@@ -140,13 +269,33 @@ pub struct AllocatorContext<VM: VMBinding> {
 impl<VM: VMBinding> AllocatorContext<VM> {
     pub fn new(mmtk: &MMTK<VM>) -> Self {
         Self {
+            alloc_options: AllocationOptionsHolder::new(AllocationOptions::default()),
             state: mmtk.state.clone(),
+            thrown_oom: AtomicBool::new(false),
             options: mmtk.options.clone(),
             gc_trigger: mmtk.gc_trigger.clone(),
             #[cfg(feature = "analysis")]
             analysis_manager: mmtk.analysis_manager.clone(),
         }
     }
+
+    pub fn set_alloc_options(&self, options: AllocationOptions) {
+        self.alloc_options.set_alloc_options(options);
+    }
+
+    pub fn clear_alloc_options(&self) {
+        self.alloc_options.clear_alloc_options();
+    }
+
+    pub fn get_alloc_options(&self) -> AllocationOptions {
+        self.alloc_options.get_alloc_options()
+    }
+}
+
+fn reset_allocation_state<VM: VMBinding, A: Allocator<VM> + ?Sized>(allocator: &A) {
+    let context = allocator.get_context();
+    // Relaxed store is fine since this is a thread-local boolean.
+    context.thrown_oom.store(false, Ordering::Relaxed);
 }
 
 /// A trait which implements allocation routines. Every allocator needs to implements this trait.
@@ -174,13 +323,42 @@ pub trait Allocator<VM: VMBinding>: Downcast {
         unimplemented!()
     }
 
+    /// Check if the requested `size` is an obvious out-of-memory case (requested allocation size is larger than the heap size).
+    /// If it is, call `Collection::out_of_memory`.  Return true if the allocation request is an obvious OOM case, and false otherwise.
+    fn handle_obvious_oom_request(&self, tls: VMThread, size: usize) -> bool {
+        if self.get_context().gc_trigger.will_oom_on_alloc(size) {
+            if self
+                .get_context()
+                .alloc_options
+                .get_alloc_options()
+                .allow_oom_call
+            {
+                self.out_of_memory(tls);
+            }
+            return true;
+        }
+        false
+    }
+
+    /// Wrapper around [`Collection::out_of_memory`]. Used to set up relevant state and signal out
+    /// of memory errors.
+    fn out_of_memory(&self, tls: VMThread) {
+        VM::VMCollection::out_of_memory(tls, AllocationError::HeapOutOfMemory);
+        // Relaxed store is fine since this is a thread-local boolean.
+        self.get_context().thrown_oom.store(true, Ordering::Relaxed);
+    }
+
     /// An allocation attempt. The implementation of this function depends on the allocator used.
     /// If an allocator supports thread local allocations, then the allocation will be serviced
     /// from its TLAB, otherwise it will default to using the slowpath, i.e. [`alloc_slow`](Allocator::alloc_slow).
     ///
+    /// If the heap is full, we trigger a GC and attempt to free up
+    /// more memory, and re-attempt the allocation.
+    ///
     /// Note that in the case where the VM is out of memory, we invoke
     /// [`Collection::out_of_memory`] to inform the binding and then return a null pointer back to
     /// it. We have no assumptions on whether the VM will continue executing or abort immediately.
+    /// If the VM continues execution, the function will return a null address.
     ///
     /// An allocator needs to make sure the object reference for the returned address is in the same
     /// chunk as the returned address (so the side metadata and the SFT for an object reference is valid).
@@ -192,6 +370,26 @@ pub trait Allocator<VM: VMBinding>: Downcast {
     /// * `offset` the required offset in bytes.
     fn alloc(&mut self, size: usize, align: usize, offset: usize) -> Address;
 
+    /// An allocation attempt. The allocation options may specify different behaviors for this allocation request.
+    ///
+    /// Arguments:
+    /// * `size`: the allocation size in bytes.
+    /// * `align`: the required alignment in bytes.
+    /// * `offset` the required offset in bytes.
+    /// * `options`: the allocation options to change the default allocation behavior for this request.
+    fn alloc_with_options(
+        &mut self,
+        size: usize,
+        align: usize,
+        offset: usize,
+        alloc_options: AllocationOptions,
+    ) -> Address {
+        self.get_context().set_alloc_options(alloc_options);
+        let ret = self.alloc(size, align, offset);
+        self.get_context().clear_alloc_options();
+        ret
+    }
+
     /// Slowpath allocation attempt. This function is explicitly not inlined for performance
     /// considerations.
     ///
@@ -202,6 +400,30 @@ pub trait Allocator<VM: VMBinding>: Downcast {
     #[inline(never)]
     fn alloc_slow(&mut self, size: usize, align: usize, offset: usize) -> Address {
         self.alloc_slow_inline(size, align, offset)
+    }
+
+    /// Slowpath allocation attempt. Mostly the same as [`Allocator::alloc_slow`], except that the allocation options
+    /// may specify different behaviors for this allocation request.
+    ///
+    /// This function is not used internally. It is mostly for the bindings.
+    /// [`Allocator::alloc_with_options`] still calls the normal [`Allocator::alloc_slow`].
+    ///
+    /// Arguments:
+    /// * `size`: the allocation size in bytes.
+    /// * `align`: the required alignment in bytes.
+    /// * `offset` the required offset in bytes.
+    fn alloc_slow_with_options(
+        &mut self,
+        size: usize,
+        align: usize,
+        offset: usize,
+        alloc_options: AllocationOptions,
+    ) -> Address {
+        // The function is not used internally. We won't set no_gc_on_fail redundantly.
+        self.get_context().set_alloc_options(alloc_options);
+        let ret = self.alloc_slow(size, align, offset);
+        self.get_context().clear_alloc_options();
+        ret
     }
 
     /// Slowpath allocation attempt. This function executes the actual slowpath allocation.  A
@@ -224,6 +446,7 @@ pub trait Allocator<VM: VMBinding>: Downcast {
         let tls = self.get_tls();
         let is_mutator = VM::VMActivePlan::is_mutator(tls);
         let stress_test = self.get_context().options.is_stress_test_gc_enabled();
+        assert!(!self.get_context().thrown_oom.load(Ordering::Relaxed), "We should not enter alloc_slow_inline if we have already thrown OOM for this allocation request.");
 
         // Information about the previous collection.
         let mut emergency_collection = false;
@@ -251,6 +474,7 @@ pub trait Allocator<VM: VMBinding>: Downcast {
 
             if !is_mutator {
                 debug_assert!(!result.is_zero());
+                debug_assert!(!self.get_context().thrown_oom.load(Ordering::Relaxed));
                 return result;
             }
 
@@ -267,6 +491,7 @@ pub trait Allocator<VM: VMBinding>: Downcast {
                         .allocation_success
                         .store(true, Ordering::SeqCst);
                 }
+                debug_assert!(!self.get_context().thrown_oom.load(Ordering::Relaxed));
 
                 // Only update the allocation bytes if we haven't failed a previous allocation in this loop
                 if stress_test && self.get_context().state.is_initialized() && !previous_result_zero
@@ -308,6 +533,27 @@ pub trait Allocator<VM: VMBinding>: Downcast {
                 return result;
             }
 
+            // From here on, we handle the case that alloc_once failed.
+            assert!(result.is_zero());
+
+            if !self.get_context().get_alloc_options().at_safepoint {
+                // If the allocation is not at safepoint, it will not be able to block for GC.  But
+                // the code beyond this point tests OOM conditions and, if not OOM, try to allocate
+                // again.  Since we didn't block for GC, the allocation will fail again if we try
+                // again. So we return null immediately.
+                reset_allocation_state(self);
+                return Address::ZERO;
+            }
+
+            // If we have already thrown an OOM for this allocation then return a zero.
+            // Relaxed load and store is fine given this is a thread-local boolean.
+            if self.get_context().thrown_oom.load(Ordering::Relaxed) {
+                // Need to reset the thrown_oom state since we're giving up on this allocation,
+                // that is to say, the thrown_oom state is *per* allocation request
+                reset_allocation_state(self);
+                return Address::ZERO;
+            }
+
             // It is possible to have cases where a thread is blocked for another GC (non emergency)
             // immediately after being blocked for a GC (emergency) (e.g. in stress test), that is saying
             // the thread does not leave this loop between the two GCs. The local var 'emergency_collection'
@@ -328,7 +574,8 @@ pub trait Allocator<VM: VMBinding>: Downcast {
                 if fail_with_oom {
                     // Note that we throw a `HeapOutOfMemory` error here and return a null ptr back to the VM
                     trace!("Throw HeapOutOfMemory!");
-                    VM::VMCollection::out_of_memory(tls, AllocationError::HeapOutOfMemory);
+                    self.out_of_memory(tls);
+                    reset_allocation_state(self);
                     self.get_context()
                         .state
                         .allocation_success

@@ -17,13 +17,14 @@ use crate::{
     vm::{ActivePlan, VMBinding},
 };
 
-#[cfg(feature = "is_mmtk_object")]
+#[cfg(feature = "vo_bit")]
 use crate::util::Address;
 
 use crate::plan::ObjectQueue;
 use crate::plan::VectorObjectQueue;
 use crate::policy::sft::SFT;
 use crate::policy::space::{CommonSpace, Space};
+use crate::util::alloc::allocator::AllocationOptions;
 use crate::util::constants::LOG_BYTES_IN_PAGE;
 use crate::util::heap::chunk_map::*;
 use crate::util::linear_scan::Region;
@@ -190,17 +191,17 @@ impl<VM: VMBinding> SFT for MarkSweepSpace<VM> {
         true
     }
 
-    fn initialize_object_metadata(&self, _object: crate::util::ObjectReference, _alloc: bool) {
+    fn initialize_object_metadata(&self, _object: crate::util::ObjectReference) {
         #[cfg(feature = "vo_bit")]
         crate::util::metadata::vo_bit::set_vo_bit(_object);
     }
 
-    #[cfg(feature = "is_mmtk_object")]
+    #[cfg(feature = "vo_bit")]
     fn is_mmtk_object(&self, addr: Address) -> Option<ObjectReference> {
         crate::util::metadata::vo_bit::is_vo_bit_set_for_addr(addr)
     }
 
-    #[cfg(feature = "is_mmtk_object")]
+    #[cfg(feature = "vo_bit")]
     fn find_object_from_internal_pointer(
         &self,
         ptr: Address,
@@ -252,6 +253,20 @@ impl<VM: VMBinding> Space<VM> for MarkSweepSpace<VM> {
 
     fn enumerate_objects(&self, enumerator: &mut dyn ObjectEnumerator) {
         object_enum::enumerate_blocks_from_chunk_map::<Block>(enumerator, &self.chunk_map);
+    }
+
+    fn clear_side_log_bits(&self) {
+        let log_bit = VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec();
+        for chunk in self.chunk_map.all_chunks() {
+            log_bit.bzero_metadata(chunk.start(), Chunk::BYTES);
+        }
+    }
+
+    fn set_side_log_bits(&self) {
+        let log_bit = VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC.extract_side_spec();
+        for chunk in self.chunk_map.all_chunks() {
+            log_bit.bset_metadata(chunk.start(), Chunk::BYTES);
+        }
     }
 }
 
@@ -405,15 +420,7 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
         self.chunk_map.set_allocated(block.chunk(), true);
     }
 
-    pub fn prepare(&mut self, full_heap: bool) {
-        if self.common.needs_log_bit && full_heap {
-            if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC {
-                for chunk in self.chunk_map.all_chunks() {
-                    side.bzero_metadata(chunk.start(), Chunk::BYTES);
-                }
-            }
-        }
-
+    pub fn prepare(&mut self, _full_heap: bool) {
         #[cfg(debug_assertions)]
         self.abandoned_in_gc.lock().unwrap().assert_empty();
 
@@ -462,7 +469,13 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
         crate::util::metadata::vo_bit::bzero_vo_bit(block.start(), Block::BYTES);
     }
 
-    pub fn acquire_block(&self, tls: VMThread, size: usize, align: usize) -> BlockAcquireResult {
+    pub fn acquire_block(
+        &self,
+        tls: VMThread,
+        size: usize,
+        align: usize,
+        alloc_options: AllocationOptions,
+    ) -> BlockAcquireResult {
         {
             let mut abandoned = self.abandoned.lock().unwrap();
             let bin = mi_bin::<VM>(size, align);
@@ -484,7 +497,7 @@ impl<VM: VMBinding> MarkSweepSpace<VM> {
             }
         }
 
-        let acquired = self.acquire(tls, Block::BYTES >> LOG_BYTES_IN_PAGE);
+        let acquired = self.acquire(tls, Block::BYTES >> LOG_BYTES_IN_PAGE, alloc_options);
         if acquired.is_zero() {
             BlockAcquireResult::Exhausted
         } else {

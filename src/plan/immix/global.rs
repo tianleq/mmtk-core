@@ -26,6 +26,7 @@ use crate::util::alloc::allocators::AllocatorSelector;
 use crate::util::copy::*;
 use crate::util::heap::gc_trigger::SpaceStats;
 use crate::util::heap::VMRequest;
+use crate::util::metadata::log_bit::UnlogBitsOperation;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 #[cfg(any(feature = "debug_publish_object", feature = "thread_local_gc"))]
 use crate::util::ObjectReference;
@@ -203,22 +204,17 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn prepare(&mut self, tls: VMWorkerThread) {
-        self.common.prepare(tls, true);
-        self.immix_space.prepare(
-            true,
-            crate::policy::immix::defrag::StatsForDefrag::new(self),
-        );
+        self.prepare_inner(tls, UnlogBitsOperation::NoOp)
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
-        self.common.release(tls, true);
-        // release the collected region
-        self.immix_space.release(true);
+        self.release_inner(tls, UnlogBitsOperation::NoOp);
     }
 
-    fn end_of_gc(&mut self, _tls: VMWorkerThread) {
+    fn end_of_gc(&mut self, tls: VMWorkerThread) {
         self.last_gc_was_defrag
             .store(self.immix_space.end_of_gc(), Ordering::Relaxed);
+        self.common.end_of_gc(tls);
     }
 
     fn current_gc_may_move_object(&self) -> bool {
@@ -377,8 +373,6 @@ impl<VM: VMBinding> Immix<VM> {
         Self::new_with_args(
             plan_args,
             ImmixSpaceArgs {
-                unlog_object_when_traced: false,
-                #[cfg(feature = "vo_bit")]
                 mixed_age: false,
                 #[cfg(feature = "thread_local_gc_copying")]
                 max_local_copy_reserve,
@@ -393,7 +387,21 @@ impl<VM: VMBinding> Immix<VM> {
     ) -> Self {
         let immix = Immix {
             immix_space: ImmixSpace::new(
-                plan_args.get_space_args("immix", true, false, VMRequest::discontiguous()),
+                if space_args.mixed_age {
+                    plan_args.get_mixed_age_space_args(
+                        "immix",
+                        true,
+                        false,
+                        VMRequest::discontiguous(),
+                    )
+                } else {
+                    plan_args.get_normal_space_args(
+                        "immix",
+                        true,
+                        false,
+                        VMRequest::discontiguous(),
+                    )
+                },
                 space_args,
             ),
             common: CommonPlan::new(plan_args),
@@ -437,6 +445,33 @@ impl<VM: VMBinding> Immix<VM> {
 
     pub(in crate::plan) fn set_last_gc_was_defrag(&self, defrag: bool, order: Ordering) {
         self.last_gc_was_defrag.store(defrag, order)
+    }
+
+    /// Prepare with unlog-bit operation.
+    /// Some Immix-derived plans may need to set/clear unlog bits when preparing.
+    pub(in crate::plan) fn prepare_inner(
+        &mut self,
+        tls: VMWorkerThread,
+        unlog_bits_op: UnlogBitsOperation,
+    ) {
+        self.common.prepare(tls, true);
+        self.immix_space.prepare(
+            true,
+            Some(crate::policy::immix::defrag::StatsForDefrag::new(self)),
+            unlog_bits_op,
+        );
+    }
+
+    /// Release with unlog-bit operation.
+    /// Some Immix-derived plans may need to set/clear unlog bits when releasing.
+    pub(in crate::plan) fn release_inner(
+        &mut self,
+        tls: VMWorkerThread,
+        unlog_bits_op: UnlogBitsOperation,
+    ) {
+        self.common.release(tls, true);
+        // release the collected region
+        self.immix_space.release(true, unlog_bits_op);
     }
 
     #[cfg(feature = "thread_local_gc")]

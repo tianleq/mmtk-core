@@ -3,6 +3,8 @@ use super::GenCopy;
 use crate::plan::barriers::ObjectBarrier;
 use crate::plan::generational::barrier::GenObjectBarrierSemantics;
 use crate::plan::generational::create_gen_space_mapping;
+use crate::plan::mutator_context::common_prepare_func;
+use crate::plan::mutator_context::common_release_func;
 #[cfg(feature = "thread_local_gc_copying")]
 use crate::plan::mutator_context::generic_thread_local_alloc_copy;
 #[cfg(feature = "thread_local_gc_copying")]
@@ -13,7 +15,6 @@ use crate::plan::mutator_context::generic_thread_local_post_copy;
 use crate::plan::mutator_context::generic_thread_local_prepare;
 #[cfg(feature = "thread_local_gc")]
 use crate::plan::mutator_context::generic_thread_local_release;
-use crate::plan::mutator_context::unreachable_prepare_func;
 use crate::plan::mutator_context::Mutator;
 use crate::plan::mutator_context::MutatorBuilder;
 use crate::plan::mutator_context::MutatorConfig;
@@ -23,7 +24,7 @@ use crate::util::{VMMutatorThread, VMWorkerThread};
 use crate::vm::VMBinding;
 use crate::MMTK;
 
-pub fn gencopy_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {
+pub fn gencopy_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, tls: VMWorkerThread) {
     // reset nursery allocator
     let bump_allocator = unsafe {
         mutator
@@ -33,6 +34,8 @@ pub fn gencopy_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: V
     .downcast_mut::<BumpAllocator<VM>>()
     .unwrap();
     bump_allocator.reset();
+
+    common_release_func(mutator, tls);
 }
 
 pub fn create_gencopy_mutator<VM: VMBinding>(
@@ -46,7 +49,7 @@ pub fn create_gencopy_mutator<VM: VMBinding>(
             mmtk.get_plan(),
             &gencopy.gen.nursery,
         )),
-        prepare_func: &unreachable_prepare_func,
+        prepare_func: &common_prepare_func,
         release_func: &gencopy_mutator_release,
         #[cfg(feature = "thread_local_gc")]
         thread_local_prepare_func: &generic_thread_local_prepare,

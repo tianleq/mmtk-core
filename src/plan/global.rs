@@ -28,7 +28,7 @@ use crate::util::options::PlanSelector;
 use crate::util::statistics::stats::Stats;
 use crate::util::{conversions, ObjectReference};
 use crate::util::{VMMutatorThread, VMWorkerThread};
-use crate::vm::{Collection, VMBinding};
+use crate::vm::{Collection, ObjectModel, VMBinding};
 use downcast_rs::Downcast;
 use enum_map::EnumMap;
 use std::sync::atomic::Ordering;
@@ -1041,6 +1041,7 @@ impl<VM: VMBinding> CommonPlan<VM> {
                     crate::policy::immix::ImmixSpaceArgs {
                         mixed_age: false,
                         never_move_objects: true,
+                        max_local_copy_reserve: 0
                     },
                 )
             }
@@ -1142,13 +1143,36 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
             );
         }
         if self.nonmoving.in_space(object) {
-            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
-                &self.nonmoving,
-                mutator,
-                object,
-                worker,
-                None,
-            );
+            cfg_if::cfg_if! {
+                if #[cfg(feature = "immortal_as_nonmoving")] {
+                    return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+                        &self.nonmoving,
+                        mutator,
+                        object,
+                        worker,
+                        None,
+                    );
+                } else if #[cfg(feature = "marksweep_as_nonmoving")] {
+                    use crate::policy::marksweepspace::native_ms::MarkSweepSpace;
+                    return <MarkSweepSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+                        &self.nonmoving,
+                        mutator,
+                        object,
+                        worker,
+                        None,
+                    );
+                } else {
+                    use crate::policy::immix::ImmixSpace;
+                    // Immix requires extra args.
+                    return <ImmixSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+                        &self.nonmoving,
+                        mutator,
+                        object,
+                        worker,
+                        None,
+                    );
+                }
+            }
         }
         <BasePlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
             &self.base, mutator, object, worker,
@@ -1187,15 +1211,36 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
             );
         }
         if self.nonmoving.in_space(object) {
-            return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
-                &self.nonmoving,
-                mutator,
-                source,
-                object,
-                None,
-                None,
-
-            );
+            cfg_if::cfg_if! {
+                if #[cfg(feature = "immortal_as_nonmoving")] {
+                    return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+                        &self.nonmoving,
+                        mutator,
+                        object,
+                        worker,
+                        None,
+                    );
+                } else if #[cfg(feature = "marksweep_as_nonmoving")] {
+                    use crate::policy::marksweepspace::native_ms::MarkSweepSpace;
+                    return <MarkSweepSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+                        &self.nonmoving,
+                        mutator,
+                        object,
+                        worker,
+                        None,
+                    );
+                } else {
+                    use crate::policy::immix::ImmixSpace;
+                    // Immix requires extra args.
+                    return <ImmixSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+                        &self.nonmoving,
+                        mutator,
+                        object,
+                        worker,
+                        None,
+                    );
+                }
+            }
         }
         <BasePlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
             &self.base, mutator, source, object, worker,

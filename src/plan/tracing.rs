@@ -209,7 +209,11 @@ pub(crate) struct SlotIterator<VM: VMBinding> {
 
 impl<VM: VMBinding> SlotIterator<VM> {
     /// Iterate over the slots of an object by applying a function to each slot.
-    pub fn iterate_fields<F: FnMut(VM::VMSlot)>(object: ObjectReference, _tls: VMThread, mut f: F) {
+    pub fn iterate_fields<F: FnMut(Option<ObjectReference>, VM::VMSlot)>(
+        object: ObjectReference,
+        _tls: VMThread,
+        mut f: F,
+    ) {
         // FIXME: We should use tls from the arguments.
         // See https://github.com/mmtk/mmtk-core/issues/1375
         let fake_tls = VMWorkerThread(VMThread::UNINITIALIZED);

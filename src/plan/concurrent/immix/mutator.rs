@@ -4,6 +4,16 @@ use crate::plan::concurrent::immix::ConcurrentImmix;
 use crate::plan::concurrent::Pause;
 use crate::plan::mutator_context::create_allocator_mapping;
 use crate::plan::mutator_context::create_space_mapping;
+#[cfg(feature = "thread_local_gc_copying")]
+use crate::plan::mutator_context::generic_thread_local_alloc_copy;
+#[cfg(feature = "thread_local_gc_copying")]
+use crate::plan::mutator_context::generic_thread_local_defrag_prepare;
+#[cfg(feature = "thread_local_gc_copying")]
+use crate::plan::mutator_context::generic_thread_local_post_copy;
+#[cfg(feature = "thread_local_gc")]
+use crate::plan::mutator_context::generic_thread_local_prepare;
+#[cfg(feature = "thread_local_gc")]
+use crate::plan::mutator_context::generic_thread_local_release;
 
 use crate::plan::mutator_context::Mutator;
 use crate::plan::mutator_context::MutatorBuilder;
@@ -109,6 +119,16 @@ pub fn create_concurrent_immix_mutator<VM: VMBinding>(
 
         prepare_func: &concurent_immix_mutator_prepare,
         release_func: &concurrent_immix_mutator_release,
+        #[cfg(feature = "thread_local_gc")]
+        thread_local_prepare_func: &generic_thread_local_prepare,
+        #[cfg(feature = "thread_local_gc")]
+        thread_local_release_func: &generic_thread_local_release,
+        #[cfg(feature = "thread_local_gc_copying")]
+        thread_local_alloc_copy_func: &generic_thread_local_alloc_copy,
+        #[cfg(feature = "thread_local_gc_copying")]
+        thread_local_post_copy_func: &generic_thread_local_post_copy,
+        #[cfg(feature = "thread_local_gc_copying")]
+        thread_local_defrag_prepare_func: &generic_thread_local_defrag_prepare,
     };
 
     let builder = MutatorBuilder::new(mutator_tls, mmtk, config);

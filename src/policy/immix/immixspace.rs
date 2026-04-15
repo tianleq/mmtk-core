@@ -740,10 +740,16 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     #[cfg(feature = "thread_local_gc_copying")]
     /// Allocate n clean blocks.
-    pub fn get_clean_blocks(&self, tls: VMThread, copy: bool, n: usize) -> Option<Vec<Block>> {
+    pub fn get_clean_blocks(
+        &self,
+        tls: VMThread,
+        copy: bool,
+        n: usize,
+        alloc_options: AllocationOptions,
+    ) -> Option<Vec<Block>> {
         let mut blocks = Vec::with_capacity(n);
         for _ in 0..n {
-            if let Some(block) = self.get_clean_block(tls, copy) {
+            if let Some(block) = self.get_clean_block(tls, copy, alloc_options) {
                 blocks.push(block);
             } else {
                 break;
@@ -1055,14 +1061,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                                     .is_unlogged::<VM>(new_object, Ordering::Relaxed)
                         );
                         #[cfg(feature = "vo_bit")]
-                        vo_bit::helper::on_object_forwarded::<VM>(_new_object);
+                        vo_bit::helper::on_object_forwarded::<VM>(new_object);
                         #[cfg(feature = "debug_publish_object")]
                         crate::util::metadata::public_bit::set_public_bit(
-                            _new_object,
+                            new_object,
                             Some(u32::MAX),
                         );
                         #[cfg(not(feature = "debug_publish_object"))]
-                        crate::util::metadata::public_bit::set_public_bit(_new_object);
+                        crate::util::metadata::public_bit::set_public_bit(new_object);
                     },
                 );
 

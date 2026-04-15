@@ -472,7 +472,7 @@ impl<VM: VMBinding> MMTK<VM> {
         use crate::scheduler::thread_local_gc_work::ACTIVE_LOCAL_GC_COUNTER;
         use crate::vm::Collection;
 
-        if self.gc_requester.request_thread_local_gc(tls) {
+        if self.gc_trigger.request_thread_local_gc(tls) {
             mmtk.stats.start_local_gc();
             crate::scheduler::thread_local_gc_work::ExecuteThreadlocalCollection {
                 mmtk,

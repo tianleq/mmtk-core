@@ -1,12 +1,8 @@
+use super::object_enum::ObjectEnumerator;
+use crate::util::ObjectReference;
 use std::collections::HashSet;
-use std::marker::PhantomData;
 use std::mem::swap;
 use std::sync::Mutex;
-
-use crate::util::ObjectReference;
-use crate::vm::VMBinding;
-
-use super::object_enum::ObjectEnumerator;
 
 /// A data structure for recording objects in the LOS.
 ///
@@ -30,7 +26,7 @@ struct TreadMillSync {
     alloc_nursery: HashSet<ObjectReference>,
 }
 
-impl<VM: VMBinding> std::fmt::Debug for TreadMill<VM> {
+impl std::fmt::Debug for TreadMill {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let sync = self.sync.lock().unwrap();
         f.debug_struct("TreadMill")
@@ -42,7 +38,7 @@ impl<VM: VMBinding> std::fmt::Debug for TreadMill<VM> {
     }
 }
 
-impl<VM: VMBinding> TreadMill<VM> {
+impl TreadMill {
     pub fn new() -> Self {
         TreadMill {
             sync: Mutex::new(Default::default()),
@@ -174,7 +170,7 @@ impl<VM: VMBinding> TreadMill<VM> {
     }
 }
 
-impl<VM: VMBinding> Default for TreadMill<VM> {
+impl Default for TreadMill {
     fn default() -> Self {
         Self::new()
     }

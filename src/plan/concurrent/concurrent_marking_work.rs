@@ -77,7 +77,7 @@ impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND
         crate::plan::tracing::SlotIterator::<VM>::iterate_fields(
             object,
             self.worker().tls.0,
-            |s| {
+            |_o, s| {
                 let Some(t) = s.load() else {
                     return;
                 };

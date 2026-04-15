@@ -1,5 +1,15 @@
 use crate::plan::compressor::Compressor;
 use crate::plan::mutator_context::common_prepare_func;
+#[cfg(feature = "thread_local_gc_copying")]
+use crate::plan::mutator_context::generic_thread_local_alloc_copy;
+#[cfg(feature = "thread_local_gc_copying")]
+use crate::plan::mutator_context::generic_thread_local_defrag_prepare;
+#[cfg(feature = "thread_local_gc_copying")]
+use crate::plan::mutator_context::generic_thread_local_post_copy;
+#[cfg(feature = "thread_local_gc")]
+use crate::plan::mutator_context::generic_thread_local_prepare;
+#[cfg(feature = "thread_local_gc")]
+use crate::plan::mutator_context::generic_thread_local_release;
 use crate::plan::mutator_context::Mutator;
 use crate::plan::mutator_context::MutatorBuilder;
 use crate::plan::mutator_context::MutatorConfig;
@@ -53,6 +63,16 @@ pub fn create_compressor_mutator<VM: VMBinding>(
         }),
         prepare_func: &common_prepare_func,
         release_func: &compressor_mutator_release,
+        #[cfg(feature = "thread_local_gc")]
+        thread_local_prepare_func: &generic_thread_local_prepare,
+        #[cfg(feature = "thread_local_gc")]
+        thread_local_release_func: &generic_thread_local_release,
+        #[cfg(feature = "thread_local_gc_copying")]
+        thread_local_alloc_copy_func: &generic_thread_local_alloc_copy,
+        #[cfg(feature = "thread_local_gc_copying")]
+        thread_local_post_copy_func: &generic_thread_local_post_copy,
+        #[cfg(feature = "thread_local_gc_copying")]
+        thread_local_defrag_prepare_func: &generic_thread_local_defrag_prepare,
     };
 
     let builder = MutatorBuilder::new(mutator_tls, mmtk, config);

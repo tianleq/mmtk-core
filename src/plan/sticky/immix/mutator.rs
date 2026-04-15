@@ -11,11 +11,9 @@ use crate::plan::mutator_context::generic_thread_local_post_copy;
 use crate::plan::mutator_context::generic_thread_local_prepare;
 #[cfg(feature = "thread_local_gc")]
 use crate::plan::mutator_context::generic_thread_local_release;
-use crate::plan::mutator_context::MutatorBuilder;
 use crate::plan::mutator_context::{
     common_prepare_func, common_release_func, create_space_mapping, MutatorBuilder, MutatorConfig,
 };
-use crate::plan::mutator_context::{create_space_mapping, unreachable_prepare_func, MutatorConfig};
 use crate::plan::sticky::immix::global::StickyImmix;
 use crate::util::alloc::AllocatorSelector;
 use crate::util::opaque_pointer::VMWorkerThread;

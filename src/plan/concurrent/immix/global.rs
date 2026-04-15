@@ -307,6 +307,15 @@ impl<VM: VMBinding> Plan for ConcurrentImmix<VM> {
     fn concurrent(&self) -> Option<&dyn ConcurrentPlan<VM = VM>> {
         Some(self)
     }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn publish_object(
+        &self,
+        _object: crate::util::ObjectReference,
+        #[cfg(feature = "debug_thread_local_gc_copying")] tls: crate::util::VMMutatorThread,
+    ) {
+        unimplemented!();
+    }
 }
 
 impl<VM: VMBinding> ConcurrentImmix<VM> {
@@ -328,6 +337,7 @@ impl<VM: VMBinding> ConcurrentImmix<VM> {
         let immix_args = ImmixSpaceArgs {
             mixed_age: false,
             never_move_objects: false,
+            max_local_copy_reserve: 0,
         };
 
         // These buckets are not used in an Immix plan. We can simply disable them.

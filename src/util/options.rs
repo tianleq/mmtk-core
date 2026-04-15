@@ -909,64 +909,64 @@ mod gc_trigger_tests {
 // At some point, we may disallow this and all the options can only be set by command line.
 options! {
     /// The GC plan to use.
-    plan:                  PlanSelector         [env_var: true, command_line: true] [always_valid] = PlanSelector::GenImmix,
+    plan:                   PlanSelector            [always_valid] = PlanSelector::GenImmix,
     /// Number of GC worker threads.
-    threads:               usize                [env_var: true, command_line: true] [|v: &usize| *v > 0]    = num_cpus::get(),
+    threads:                usize                   [|v: &usize| *v > 0] = num_cpus::get(),
     /// Enable an optimization that only scans the part of the stack that has changed since the last GC (not supported)
-    use_short_stack_scans: bool                 [env_var: true, command_line: true]  [always_valid] = false,
+    use_short_stack_scans:  bool                    [always_valid] = false,
     /// Enable a return barrier (not supported)
-    use_return_barrier:    bool                 [env_var: true, command_line: true]  [always_valid] = false,
+    use_return_barrier:     bool                    [always_valid] = false,
     /// Should we eagerly finish sweeping at the start of a collection? (not supported)
-    eager_complete_sweep:  bool                 [env_var: true, command_line: true]  [always_valid] = false,
+    eager_complete_sweep:   bool                    [always_valid] = false,
     /// Should we ignore GCs requested by the user (e.g. java.lang.System.gc)?
-    ignore_system_gc:      bool                 [env_var: true, command_line: true]  [always_valid] = false,
+    ignore_system_gc:       bool                    [always_valid] = false,
     /// The nursery size for generational plans. It can be one of Bounded, ProportionalBounded or Fixed.
     /// The nursery size can be set like 'Fixed:8192', for example,
     /// to have a Fixed nursery size of 8192 bytes, or 'ProportionalBounded:0.2,1.0' to have a nursery size
     /// between 20% and 100% of the heap size. You can omit lower bound and upper bound to use the default
     /// value for bounded nursery by using '_'. For example, 'ProportionalBounded:0.1,_' sets the min nursery
     /// to 10% of the heap size while using the default value for max nursery.
-    nursery:               NurserySize          [env_var: true, command_line: true]  [|v: &NurserySize| v.validate()]
+    nursery:                NurserySize             [|v: &NurserySize| v.validate()]
         = NurserySize::ProportionalBounded { min: DEFAULT_PROPORTIONAL_MIN_NURSERY, max: DEFAULT_PROPORTIONAL_MAX_NURSERY },
     /// Should a major GC be performed when a system GC is required?
-    full_heap_system_gc:   bool                 [env_var: true, command_line: true]  [always_valid] = false,
+    full_heap_system_gc:    bool                    [always_valid] = false,
     /// Should finalization be disabled?
-    no_finalizer:          bool                 [env_var: true, command_line: true]  [always_valid] = false,
+    no_finalizer:           bool                    [always_valid] = false,
     /// Should reference type processing be disabled?
     /// If reference type processing is disabled, no weak reference processing work is scheduled,
     /// and we expect a binding to treat weak references as strong references.
     /// We disable weak reference processing by default, as we are still working on it. This will be changed to `false`
     /// once weak reference processing is implemented properly.
-    no_reference_types:    bool                 [env_var: true, command_line: true]  [always_valid] = true,
+    no_reference_types:     bool                    [always_valid] = true,
     /// The zeroing approach to use for new object allocations. Affects each plan differently. (not supported)
-    nursery_zeroing:       NurseryZeroingOptions[env_var: true, command_line: true]  [always_valid] = NurseryZeroingOptions::Temporal,
+    nursery_zeroing:        NurseryZeroingOptions   [always_valid] = NurseryZeroingOptions::Temporal,
     /// How frequent (every X bytes) should we do a stress GC?
-    stress_factor:         usize                [env_var: true, command_line: true]  [always_valid] = DEFAULT_STRESS_FACTOR,
+    stress_factor:          usize                   [always_valid] = DEFAULT_STRESS_FACTOR,
     /// How frequent (every X bytes) should we run analysis (a STW event that collects data)
-    analysis_factor:       usize                [env_var: true, command_line: true]  [always_valid] = DEFAULT_STRESS_FACTOR,
+    analysis_factor:        usize                   [always_valid] = DEFAULT_STRESS_FACTOR,
     /// Precise stress test. Trigger stress GCs exactly at X bytes if this is true. This is usually used to test the GC correctness
     /// and will significantly slow down the mutator performance. If this is false, stress GCs will only be triggered when an allocation reaches
     /// the slow path. This means we may have allocated more than X bytes or fewer than X bytes when we actually trigger a stress GC.
     /// But this should have no obvious mutator overhead, and can be used to test GC performance along with a larger stress
     /// factor (e.g. tens of metabytes).
-    precise_stress:        bool                 [env_var: true, command_line: true]  [always_valid] = true,
+    precise_stress:         bool                    [always_valid] = true,
     /// The start of vmspace.
-    vm_space_start:        Address              [env_var: true, command_line: true]  [always_valid] = Address::ZERO,
+    vm_space_start:         Address                 [always_valid] = Address::ZERO,
     /// The size of vmspace.
-    vm_space_size:         usize                [env_var: true, command_line: true] [|v: &usize| *v > 0]    = 0xdc0_0000,
+    vm_space_size:          usize                   [|v: &usize| *v > 0] = 0xdc0_0000,
     /// Perf events to measure
     /// Semicolons are used to separate events
     /// Each event is in the format of event_name,pid,cpu (see man perf_event_open for what pid and cpu mean).
     /// For example, PERF_COUNT_HW_CPU_CYCLES,0,-1 measures the CPU cycles for the current process on all the CPU cores.
     /// Measuring perf events for work packets. NOTE that be VERY CAREFUL when using this option, as this may greatly slowdown GC performance.
     // TODO: Ideally this option should only be included when the features 'perf_counter' and 'work_packet_stats' are enabled. The current macro does not allow us to do this.
-    work_perf_events:       PerfEventOptions     [env_var: true, command_line: true] [|_| cfg!(all(feature = "perf_counter", feature = "work_packet_stats"))] = PerfEventOptions {events: vec![]},
+    work_perf_events:       PerfEventOptions        [|_| cfg!(all(feature = "perf_counter", feature = "work_packet_stats"))] = PerfEventOptions {events: vec![]},
     /// Measuring perf events for GC and mutators
     // TODO: Ideally this option should only be included when the features 'perf_counter' are enabled. The current macro does not allow us to do this.
-    phase_perf_events:      PerfEventOptions     [env_var: true, command_line: true] [|_| cfg!(feature = "perf_counter")] = PerfEventOptions {events: vec![]},
+    phase_perf_events:      PerfEventOptions        [|_| cfg!(feature = "perf_counter")] = PerfEventOptions {events: vec![]},
     /// Should we exclude perf events occurring in kernel space. By default we include the kernel.
     /// Only set this option if you know the implications of excluding the kernel!
-    perf_exclude_kernel:    bool                  [env_var: true, command_line: true] [|_| cfg!(feature = "perf_counter")] = false,
+    perf_exclude_kernel:    bool                    [|_| cfg!(feature = "perf_counter")] = false,
     /// Set how to bind affinity to the GC Workers. Default thread affinity delegates to the OS
     /// scheduler. If a list of cores are specified, cores are allocated to threads in a round-robin
     /// fashion. The core ids should match the ones reported by /proc/cpuinfo. Core ids are
@@ -980,20 +980,33 @@ options! {
     /// `MMTK_THREAD_AFFINITY="12" taskset -c 6-12 <program>` will not work, on the other hand, as
     /// there is no core with (perceived) id 12.
     // XXX: This option is currently only supported on Linux.
-    thread_affinity:        AffinityKind         [env_var: true, command_line: true] [|v: &AffinityKind| v.validate()] = AffinityKind::OsDefault,
+    thread_affinity:        AffinityKind            [|v: &AffinityKind| v.validate()] = AffinityKind::OsDefault,
     /// Set the GC trigger. This defines the heap size and how MMTk triggers a GC.
     /// Default to a fixed heap size of 0.5x physical memory.
-    gc_trigger:             GCTriggerSelector    [env_var: true, command_line: true] [|v: &GCTriggerSelector| v.validate()] = GCTriggerSelector::FixedHeapSize((crate::util::memory::get_system_total_memory() as f64 * 0.5f64) as usize),
+    gc_trigger:             GCTriggerSelector       [|v: &GCTriggerSelector| v.validate()] = GCTriggerSelector::FixedHeapSize((OS::get_system_total_memory().unwrap_or(4 * 1024 * 1024 * 1024) as f64 * 0.5f64) as usize),
     /// Enable transparent hugepage support for MMTk spaces via madvise (only Linux is supported)
     /// This only affects the memory for MMTk spaces.
-    transparent_hugepages: bool                  [env_var: true, command_line: true]  [|v: &bool| !v || cfg!(target_os = "linux")] = false,
+    transparent_hugepages:  bool                    [|v: &bool| !v || cfg!(target_os = "linux")] = false,
     /// Count live bytes for objects in each space during a GC.
-    count_live_bytes_in_gc: bool                 [env_var: true, command_line: true] [always_valid] = false,
+    count_live_bytes_in_gc: bool                    [always_valid] = false,
+    /// Make every GC a defragment GC. (for debugging)
+    immix_always_defrag: bool                       [always_valid] = true,
+    /// Mark every allocated block as defragmentation source before GC. (for debugging)
+    /// Depending on the defrag headroom, Immix may not be able to defrag every block even if this option is set to true.
+    immix_defrag_every_block: bool                  [always_valid] = false,
+    /// Percentage of heap size reserved for defragmentation.
+    /// According to [this paper](https://doi.org/10.1145/1375581.1375586), Immix works well with
+    /// headroom between 1% to 3% of the heap size.
+    immix_defrag_headroom_percent: usize            [|v: &usize| *v <= 50] = 5,
+    /// Disable concurrent marking in ConcurrentImmix. Setting this to true will make ConcurrentImmix behave exactly like full heap Immix. This option is only intended for debugging.
+    concurrent_immix_disable_concurrent_marking: bool              [always_valid] = false,
     /// max local heap
-    max_local_heap:        ThreadlocalHeapSize   [env_var: true, command_line: true] [|v: &ThreadlocalHeapSize| v.size > 0] = ThreadlocalHeapSize {size: 1 << 20},
+    max_local_heap:        ThreadlocalHeapSize      [|v: &ThreadlocalHeapSize| v.size > 0] = ThreadlocalHeapSize {size: 1 << 20},
     /// max number of concurrent local gc
-    max_concurrent_local_gc: u32               [env_var: true, command_line: true]  [always_valid] = crate::scheduler::thread_local_gc_work::DEFAULT_MAX_CONCURRENT_LOCAL_GC,
-    max_local_copy_reserve:  u8               [env_var: true, command_line: true]  [always_valid] = crate::scheduler::thread_local_gc_work::DEFAULT_MAX_LOCAL_COPY_RESERVE
+    max_concurrent_local_gc: u32                    [always_valid] = crate::scheduler::thread_local_gc_work::DEFAULT_MAX_CONCURRENT_LOCAL_GC,
+    max_local_copy_reserve:  u8                     [always_valid] = crate::scheduler::thread_local_gc_work::DEFAULT_MAX_LOCAL_COPY_RESERVE,
+    max_concurrent_defrag_mutator: u32              [always_valid] = 0,
+    defrag_mutator_threshold: usize                 [always_valid] = crate::scheduler::thread_local_gc_work::DEFRAG_MUTATOR_THRESHOLD
 }
 
 #[cfg(not(feature = "thread_local_gc"))]

@@ -20,7 +20,7 @@ use crate::vm::VMBinding;
 use crate::MMTK;
 use enum_map::EnumMap;
 
-pub fn immix_mutator_prepare<VM: VMBinding>(mutator: &mut Mutator<VM>, _tls: VMWorkerThread) {
+pub fn immix_mutator_prepare<VM: VMBinding>(mutator: &mut Mutator<VM>, tls: VMWorkerThread) {
     #[cfg(feature = "thread_local_gc")]
     use crate::util::alloc::LargeObjectAllocator;
     let allocators: &mut Allocators<VM> = mutator.allocators.borrow_mut();

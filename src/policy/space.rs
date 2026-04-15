@@ -24,7 +24,7 @@ use crate::policy::sft::EMPTY_SFT_NAME;
 use crate::policy::sft::SFT;
 use crate::util::alloc::allocator::AllocationOptions;
 use crate::util::copy::*;
-use crate::util::heap::gc_trigger::{GCKind, GCTrigger};
+use crate::util::heap::gc_trigger::GCTrigger;
 use crate::util::heap::layout::vm_layout::BYTES_IN_CHUNK;
 use crate::util::heap::layout::Mmapper;
 use crate::util::heap::layout::VMMap;

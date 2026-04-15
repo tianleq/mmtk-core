@@ -3,23 +3,16 @@ use crate::policy::space::Space;
 use crate::util::address::Address;
 #[cfg(feature = "analysis")]
 use crate::util::analysis::AnalysisManager;
-use crate::util::constants::*;
 use crate::util::heap::gc_trigger::GCTrigger;
 use crate::util::opaque_pointer::*;
 use crate::util::options::Options;
 use crate::vm::VMBinding;
 use crate::vm::{ActivePlan, Collection};
 use crate::MMTK;
-
+use downcast_rs::Downcast;
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-
-use crate::policy::space::Space;
-use crate::util::opaque_pointer::*;
-use crate::vm::VMBinding;
-use crate::vm::{ActivePlan, Collection};
-use downcast_rs::Downcast;
 
 #[repr(C)]
 #[derive(Debug)]

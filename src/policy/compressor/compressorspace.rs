@@ -341,7 +341,7 @@ impl<VM: VMBinding> CompressorSpace<VM> {
 
     fn update_references(&self, worker: &mut GCWorker<VM>, object: ObjectReference) {
         if VM::VMScanning::support_slot_enqueuing(worker.tls, object) {
-            VM::VMScanning::scan_object(worker.tls, object, &mut |s: VM::VMSlot| {
+            VM::VMScanning::scan_object(worker.tls, object, &mut |_parent, s: VM::VMSlot| {
                 if let Some(o) = s.load() {
                     s.store(self.forward(o, false));
                 }

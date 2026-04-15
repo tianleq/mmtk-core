@@ -156,8 +156,18 @@ impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND
     }
 
     fn object_probable_write_slow(&mut self, obj: ObjectReference) {
-        crate::plan::tracing::SlotIterator::<VM>::iterate_fields(obj, self.tls.0, |s| {
+        crate::plan::tracing::SlotIterator::<VM>::iterate_fields(obj, self.tls.0, |_o, s| {
             self.enqueue_node(Some(obj), s, None);
         });
+    }
+
+    fn object_array_copy_slow(
+        &mut self,
+        _src_base: ObjectReference,
+        _dst_base: ObjectReference,
+        src: <Self::VM as VMBinding>::VMMemorySlice,
+        dst: <Self::VM as VMBinding>::VMMemorySlice,
+    ) {
+        self.memory_region_copy_slow(src, dst);
     }
 }

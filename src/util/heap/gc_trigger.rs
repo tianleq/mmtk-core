@@ -5,9 +5,11 @@ use crate::plan::Plan;
 use crate::policy::space::Space;
 use crate::scheduler::GCWorkScheduler;
 use crate::util::constants::BYTES_IN_PAGE;
+#[cfg(feature = "thread_local_gc")]
+use crate::util::VMMutatorThread;
 
+use crate::util::conversions;
 use crate::util::options::{GCTriggerSelector, Options, DEFAULT_MAX_NURSERY, DEFAULT_MIN_NURSERY};
-use crate::util::{conversions, VMMutatorThread};
 use crate::vm::Collection;
 use crate::vm::VMBinding;
 use crate::MMTK;
@@ -318,6 +320,14 @@ impl<VM: VMBinding> GCTrigger<VM> {
         let max_pages = self.policy.get_max_heap_size_in_pages();
         let requested_pages = size >> crate::util::constants::LOG_BYTES_IN_PAGE;
         requested_pages > max_pages
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn request_thread_local_gc(&self, _tls: VMMutatorThread) -> bool {
+        // If global gc has been requested, then skip the local gc
+        // worst case is that a local gc is triggered while global gc is blocked,
+        // waiting for the local gc to finish
+        !self.request_flag.load(Ordering::Relaxed)
     }
 }
 

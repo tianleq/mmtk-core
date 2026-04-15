@@ -177,6 +177,15 @@ impl<VM: VMBinding> Plan for Compressor<VM> {
     fn get_used_pages(&self) -> usize {
         self.compressor_space.reserved_pages() + self.common.get_used_pages()
     }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn publish_object(
+        &self,
+        _object: crate::util::ObjectReference,
+        #[cfg(feature = "debug_thread_local_gc_copying")] tls: VMMutatorThread,
+    ) {
+        unimplemented!();
+    }
 }
 
 impl<VM: VMBinding> Compressor<VM> {

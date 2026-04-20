@@ -271,10 +271,7 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
             if !crate::util::metadata::public_bit::is_public(object) {
                 // set public bit on the object
                 #[cfg(feature = "debug_publish_object")]
-                crate::util::metadata::public_bit::set_public_bit::<VM>(
-                    object,
-                    Some(self.mutator_id),
-                );
+                crate::util::metadata::public_bit::set_public_bit(object, Some(self.mutator_id));
                 #[cfg(not(feature = "debug_publish_object"))]
                 crate::util::metadata::public_bit::set_public_bit(object);
                 #[cfg(feature = "thread_local_gc")]

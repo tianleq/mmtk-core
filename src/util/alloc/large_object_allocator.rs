@@ -192,11 +192,12 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
 
     #[cfg(feature = "thread_local_gc")]
     pub fn prepare(&mut self) {
-        // Remove public los objects from local los set
-        // Those public los objects have been added to the global tredmill
-        // and are managed there.
-        self.local_los_objects
-            .retain(|object| !crate::util::metadata::public_bit::is_public(*object))
+        self.thread_local_prepare();
+        #[cfg(debug_assertions)]
+        for object in self.local_los_objects.iter() {
+            use crate::util::metadata::public_bit::is_public;
+            assert!(!is_public(*object));
+        }
     }
 
     #[cfg(feature = "thread_local_gc")]
@@ -207,14 +208,16 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
         for object in self.local_los_objects.drain() {
             debug_assert!(
                 !crate::util::metadata::public_bit::is_public(object),
-                "Public Object:{:?} found in local los set",
-                object
+                "Public Object:{:?} found in local los set of mutator: {:?}",
+                object,
+                self.tls
             );
 
             if self.space.is_live(object) {
                 live_objects.push(object);
             } else {
                 // local/private objects also need to be reclaimed in a global gc
+
                 self.space.thread_local_sweep_large_object(object);
                 #[cfg(feature = "debug_thread_local_gc_copying")]
                 {
@@ -238,7 +241,11 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
 
     #[cfg(feature = "thread_local_gc")]
     pub fn thread_local_prepare(&mut self) {
-        self.prepare();
+        // Remove public los objects from local los set
+        // Those public los objects have been added to the global tredmill
+        // and are managed there.
+        self.local_los_objects
+            .retain(|object| !crate::util::metadata::public_bit::is_public(*object));
     }
 
     #[cfg(feature = "thread_local_gc")]

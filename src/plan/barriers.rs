@@ -489,7 +489,7 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
             {
                 let dst_owner = self.semantics.get_object_owner(dst_base);
                 let src_owner = self.semantics.get_object_owner(src_base);
-                if !is_public::<S::VM>(src_base) {
+                if !is_public(src_base) {
                     // both src_base and dst_base are private
                     assert!(
                         src_owner == dst_owner,
@@ -503,7 +503,7 @@ impl<S: BarrierSemantics> Barrier<S::VM> for PublicObjectMarkingBarrier<S> {
                     // so need to rule out public objects
                     for slot in src.iter_slots() {
                         if let Some(object) = slot.load() {
-                            if !is_public::<S::VM>(object) {
+                            if !is_public(object) {
                                 let owner = self.semantics.get_object_owner(object);
                                 assert!(
                                     dst_owner == owner,

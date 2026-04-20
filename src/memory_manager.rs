@@ -1001,7 +1001,7 @@ pub fn add_work_packets<VM: VMBinding>(
 #[cfg(all(feature = "public_bit", not(feature = "debug_thread_local_gc_copying")))]
 pub fn mmtk_set_public_bit<VM: VMBinding>(_mmtk: &'static MMTK<VM>, object: ObjectReference) {
     #[cfg(feature = "debug_publish_object")]
-    crate::util::metadata::public_bit::set_public_bit::<VM>(object, None);
+    crate::util::metadata::public_bit::set_public_bit(object, None);
     #[cfg(not(feature = "debug_publish_object"))]
     crate::util::metadata::public_bit::set_public_bit(object);
     #[cfg(feature = "thread_local_gc")]

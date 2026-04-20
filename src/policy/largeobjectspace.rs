@@ -87,15 +87,20 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
         }
 
         let allocate_as_live = self.should_allocate_as_live();
+        #[cfg(not(feature = "thread_local_gc"))]
         let into_nursery = !allocate_as_live;
 
         // mark/nursery bits: Set mark state plus optionally nursery bit.
         {
+            #[cfg(not(feature = "thread_local_gc"))]
             let mark_nursery_state = if into_nursery {
                 self.mark_state | NURSERY_BIT
             } else {
                 self.mark_state
             };
+
+            #[cfg(feature = "thread_local_gc")]
+            let mark_nursery_state = self.mark_state;
 
             VM::VMObjectModel::LOCAL_LOS_MARK_NURSERY_SPEC.store_atomic::<VM, u8>(
                 object,

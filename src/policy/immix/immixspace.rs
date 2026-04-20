@@ -1794,7 +1794,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 crate::util::object_extra_header_metadata::get_extra_header_metadata::<VM, usize>(
                     object,
                 ) & crate::util::object_extra_header_metadata::BOTTOM_HALF_MASK;
-            return u32::try_from(metadata).unwrap();
+            u32::try_from(metadata).unwrap()
         }
         #[cfg(not(feature = "debug_publish_object"))]
         Block::containing(object).owner()
@@ -1802,7 +1802,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
     #[cfg(feature = "debug_publish_object")]
     pub fn is_object_published(&self, object: ObjectReference) -> bool {
-        let is_published = crate::util::metadata::public_bit::is_public::<VM>(object);
+        let is_published = crate::util::metadata::public_bit::is_public(object);
         if object_forwarding::is_forwarded_or_being_forwarded::<VM>(object) {
             // object's public bit may have been cleared, so need to read the public bit on the forwarded object
             let new_object = object_forwarding::spin_and_get_forwarded_object::<VM>(
@@ -1810,9 +1810,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 object_forwarding::get_forwarding_status::<VM>(object),
             );
 
-            let is_published = crate::util::metadata::public_bit::is_public::<VM>(new_object);
-
-            is_published
+            crate::util::metadata::public_bit::is_public(new_object)
         } else {
             // object has not been forwarded yet, the public bit read before is still valid
             is_published

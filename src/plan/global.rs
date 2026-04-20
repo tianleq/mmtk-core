@@ -1213,9 +1213,19 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
         if self.nonmoving.in_space(object) {
             cfg_if::cfg_if! {
                 if #[cfg(feature = "immortal_as_nonmoving")] {
+                    #[cfg(not(feature = "debug_publish_object"))]
                     return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
                         &self.nonmoving,
                         mutator,
+                        object,
+                        worker,
+                        None,
+                    );
+                    #[cfg(feature = "debug_publish_object")]
+                    return <ImmortalSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+                        &self.nonmoving,
+                        mutator,
+                        source,
                         object,
                         worker,
                         None,
@@ -1232,9 +1242,19 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for CommonPlan<VM> {
                 } else {
                     use crate::policy::immix::ImmixSpace;
                     // Immix requires extra args.
+                    #[cfg(not(feature = "debug_publish_object"))]
                     return <ImmixSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
                         &self.nonmoving,
                         mutator,
+                        object,
+                        worker,
+                        None,
+                    );
+                    #[cfg(feature = "debug_publish_object")]
+                    return <ImmixSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
+                        &self.nonmoving,
+                        mutator,
+                        source,
                         object,
                         worker,
                         None,

@@ -97,7 +97,7 @@ name = "main"
 harness = false
 
 [features]
-default = ["builtin_env_logger", "log/release_max_level_off"]
+default = ["builtin_env_logger", "log/release_max_level_off", "immortal_as_nonmoving"]
 
 # Built-in env_logger.  This feature is enabled by default.
 # The user can disable this default feature to remove `env_logger` from the dependencies.

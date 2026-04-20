@@ -43,7 +43,7 @@ pub fn unset_public_bit(object: ObjectReference) -> Address {
     metadata_addr
 }
 #[cfg(feature = "debug_publish_object")]
-pub fn public_bit_metadata_address<VM: VMBinding>(object: ObjectReference) -> Address {
+pub fn public_bit_metadata_address(object: ObjectReference) -> Address {
     crate::util::metadata::side_metadata::address_to_meta_address(
         &PUBLIC_SIDE_METADATA_SPEC,
         object.to_raw_address(),

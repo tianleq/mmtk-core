@@ -437,7 +437,7 @@ impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIN
 
     #[cfg(feature = "debug_publish_object")]
     fn visit_slot(&mut self, object: ObjectReference, slot: VM::VMSlot) {
-        if let Some(_) = slot.load() {
+        if slot.load().is_some() {
             self.source_buffer.push(Some(object));
             self.slot_buffer.push(slot);
         }

@@ -341,14 +341,14 @@ impl<VM: VMBinding> CopySpace<VM> {
     #[cfg(feature = "debug_publish_object")]
     pub fn is_object_published(&self, object: ObjectReference) -> bool {
         // read the public bit of the old object first
-        let is_published = crate::util::metadata::public_bit::is_public::<VM>(object);
+        let is_published = crate::util::metadata::public_bit::is_public(object);
         if object_forwarding::is_forwarded_or_being_forwarded::<VM>(object) {
             // object's public bit may have been cleared, so need to read the public bit on the forwarded object
             let new_object = object_forwarding::spin_and_get_forwarded_object::<VM>(
                 object,
                 object_forwarding::get_forwarding_status::<VM>(object),
             );
-            crate::util::metadata::public_bit::is_public::<VM>(new_object)
+            crate::util::metadata::public_bit::is_public(new_object)
         } else {
             // object has not been forwarded yet, the public bit read before is still valid
             is_published

@@ -223,6 +223,7 @@ impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND
     const OVERWRITE_REFERENCE: bool = false;
     const SCAN_OBJECTS_IMMEDIATELY: bool = true;
 
+    #[cfg(not(feature = "debug_publish_object"))]
     fn new(
         slots: Vec<SlotOf<Self>>,
         roots: bool,
@@ -231,6 +232,23 @@ impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND
     ) -> Self {
         debug_assert!(roots);
         let base = ProcessEdgesBase::new(slots, roots, mmtk, bucket);
+        Self {
+            base,
+            _p: std::marker::PhantomData,
+        }
+    }
+
+    #[cfg(feature = "debug_publish_object")]
+    fn new(
+        sources: Vec<Option<ObjectReference>>,
+        slots: Vec<SlotOf<Self>>,
+        roots: bool,
+        vm_roots: u8,
+        mmtk: &'static MMTK<Self::VM>,
+        bucket: WorkBucketStage,
+    ) -> Self {
+        debug_assert!(roots);
+        let base = ProcessEdgesBase::new(sources, slots, roots, vm_roots, mmtk, bucket);
         Self {
             base,
             _p: std::marker::PhantomData,

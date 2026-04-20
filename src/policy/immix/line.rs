@@ -139,7 +139,7 @@ impl Line {
             end_line = end_line.next();
         }
 
-        let is_public_object = crate::util::metadata::public_bit::is_public::<VM>(object);
+        let is_public_object = crate::util::metadata::public_bit::is_public(object);
 
         let iter = RegionIterator::<Line>::new(start_line, end_line);
         for line in iter {

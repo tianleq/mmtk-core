@@ -39,11 +39,19 @@ impl<VM: VMBinding> scheduler::GCWork<VM> for ScheduleExecuteThreadlocalCollecti
                                 scheduler::WorkBucketStage::Local,
                                 ExecuteThreadlocalCollectionWork::new(mutator.mutator_tls),
                             );
+                            _mmtk
+                                .state
+                                .forced_local_gc_counter
+                                .fetch_add(1, Ordering::SeqCst);
                         } else {
                             worker.add_work(
                                 scheduler::WorkBucketStage::Local,
                                 ExecuteThreadlocalMarkingWork::new(mutator.mutator_tls),
                             );
+                            _mmtk
+                                .state
+                                .forced_local_marking_counter
+                                .fetch_add(1, Ordering::SeqCst);
                         }
                     }
                 }
@@ -56,11 +64,19 @@ impl<VM: VMBinding> scheduler::GCWork<VM> for ScheduleExecuteThreadlocalCollecti
                                 scheduler::WorkBucketStage::Local,
                                 ExecuteThreadlocalCollectionWork::new(mutator.mutator_tls),
                             );
+                            _mmtk
+                                .state
+                                .forced_local_gc_counter
+                                .fetch_add(1, Ordering::SeqCst);
                         } else {
                             worker.add_work(
                                 scheduler::WorkBucketStage::Local,
                                 ExecuteThreadlocalMarkingWork::new(mutator.mutator_tls),
                             );
+                            _mmtk
+                                .state
+                                .forced_local_marking_counter
+                                .fetch_add(1, Ordering::SeqCst);
                         }
                     } else if mutator.mutator_id >= 30 {
                         worker.add_work(
@@ -78,11 +94,19 @@ impl<VM: VMBinding> scheduler::GCWork<VM> for ScheduleExecuteThreadlocalCollecti
                                 scheduler::WorkBucketStage::Local,
                                 ExecuteThreadlocalCollectionWork::new(mutator.mutator_tls),
                             );
+                            _mmtk
+                                .state
+                                .forced_local_gc_counter
+                                .fetch_add(1, Ordering::SeqCst);
                         } else {
                             worker.add_work(
                                 scheduler::WorkBucketStage::Local,
                                 ExecuteThreadlocalMarkingWork::new(mutator.mutator_tls),
                             );
+                            _mmtk
+                                .state
+                                .forced_local_marking_counter
+                                .fetch_add(1, Ordering::SeqCst);
                         }
                     } else if mutator.mutator_id < 30 {
                         worker.add_work(
@@ -106,17 +130,29 @@ impl<VM: VMBinding> scheduler::GCWork<VM> for ScheduleExecuteThreadlocalCollecti
                             scheduler::WorkBucketStage::Local,
                             ExecuteThreadlocalCollectionWork::new(mutator.mutator_tls),
                         );
+                        _mmtk
+                            .state
+                            .forced_local_gc_counter
+                            .fetch_add(1, Ordering::SeqCst);
                     } else if mutator.is_thread_local_gc_pending() {
                         if mutator.has_mutator_allocated() {
                             worker.add_work(
                                 scheduler::WorkBucketStage::Local,
                                 ExecuteThreadlocalCollectionWork::new(mutator.mutator_tls),
                             );
+                            _mmtk
+                                .state
+                                .forced_local_gc_counter
+                                .fetch_add(1, Ordering::SeqCst);
                         } else {
                             worker.add_work(
                                 scheduler::WorkBucketStage::Local,
                                 ExecuteThreadlocalMarkingWork::new(mutator.mutator_tls),
                             );
+                            _mmtk
+                                .state
+                                .forced_local_marking_counter
+                                .fetch_add(1, Ordering::SeqCst);
                         }
                     }
                 }
@@ -127,6 +163,10 @@ impl<VM: VMBinding> scheduler::GCWork<VM> for ScheduleExecuteThreadlocalCollecti
                         scheduler::WorkBucketStage::Local,
                         ExecuteThreadlocalCollectionWork::new(mutator.mutator_tls),
                     );
+                    _mmtk
+                        .state
+                        .forced_local_gc_counter
+                        .fetch_add(1, Ordering::SeqCst);
                 }
             }
         }

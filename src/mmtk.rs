@@ -334,6 +334,12 @@ impl<VM: VMBinding> MMTK<VM> {
             self.state
                 .total_allocation_bytes
                 .store(0, Ordering::Release);
+            self.state
+                .forced_local_gc_counter
+                .store(0, Ordering::Relaxed);
+            self.state
+                .forced_local_marking_counter
+                .store(0, Ordering::Relaxed);
         }
 
         #[cfg(feature = "debug_thread_local_gc_copying")]

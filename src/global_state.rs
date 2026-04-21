@@ -61,6 +61,8 @@ pub struct GlobalState {
     pub(crate) is_stress_gc: AtomicBool,
     pub(crate) stress_gc_id: AtomicUsize,
     pub(crate) total_allocation_bytes: AtomicUsize,
+    pub(crate) forced_local_gc_counter: AtomicUsize,
+    pub(crate) forced_local_marking_counter: AtomicUsize,
 }
 
 impl GlobalState {
@@ -227,6 +229,8 @@ impl Default for GlobalState {
             is_stress_gc: AtomicBool::new(false),
             stress_gc_id: AtomicUsize::new(0),
             total_allocation_bytes: AtomicUsize::new(0),
+            forced_local_gc_counter: AtomicUsize::new(0),
+            forced_local_marking_counter: AtomicUsize::new(0),
         }
     }
 }

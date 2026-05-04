@@ -2,7 +2,9 @@ use std::borrow::BorrowMut;
 
 use super::Immix;
 #[cfg(feature = "public_bit")]
-use crate::plan::barriers::{PublicObjectMarkingBarrier, PublicObjectMarkingBarrierSemantics};
+use crate::plan::barriers::PublicObjectMarkingBarrier;
+#[cfg(feature = "public_bit")]
+use crate::plan::immix::barrier::PublicObjectMarkingBarrierSemantics;
 use crate::plan::mutator_context::common_prepare_func;
 use crate::plan::mutator_context::common_release_func;
 use crate::plan::mutator_context::create_allocator_mapping;
@@ -12,6 +14,7 @@ use crate::plan::mutator_context::MutatorBuilder;
 use crate::plan::mutator_context::MutatorConfig;
 use crate::plan::mutator_context::ReservedAllocators;
 use crate::plan::AllocationSemantics;
+use crate::policy::immix::line::Line;
 use crate::util::alloc::allocators::AllocatorSelector;
 use crate::util::alloc::allocators::Allocators;
 use crate::util::alloc::ImmixAllocator;
@@ -35,6 +38,15 @@ pub fn immix_mutator_prepare<VM: VMBinding>(mutator: &mut Mutator<VM>, tls: VMWo
     #[cfg(feature = "thread_local_gc")]
     {
         immix_allocator.prepare();
+
+        // let immix_public_allocator = unsafe {
+        //     allocators
+        //         .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Public])
+        // }
+        // .downcast_mut::<ImmixAllocator<VM>>()
+        // .unwrap();
+        // immix_public_allocator.reset();
+
         let los_allocator: &mut LargeObjectAllocator<VM> = unsafe {
             allocators.get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Los])
         }
@@ -61,7 +73,20 @@ pub fn immix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, tls: VMWo
     {
         // For a thread local gc, it needs to sweep blocks from its local block list
         // so need to do it here
+
+        use crate::scheduler::thread_local_gc_work::THREAD_LOCAL_GC_PENDING;
         immix_allocator.release();
+
+        // // public allocator does not cache blocks in its local list,
+        // // so no need to do release
+        // let immix_public_allocator = unsafe {
+        //     allocators
+        //         .get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Public])
+        // }
+        // .downcast_mut::<ImmixAllocator<VM>>()
+        // .unwrap();
+        // immix_public_allocator.reset();
+
         let los_allocator: &mut LargeObjectAllocator<VM> = unsafe {
             allocators.get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Los])
         }
@@ -69,8 +94,7 @@ pub fn immix_mutator_release<VM: VMBinding>(mutator: &mut Mutator<VM>, tls: VMWo
         .unwrap();
         los_allocator.release();
         // Force a local gc in the next polling
-        mutator.local_allocation_size = u32::MAX as usize;
-        mutator.thread_local_gc_status = 0;
+        mutator.thread_local_gc_status = THREAD_LOCAL_GC_PENDING;
     }
     common_release_func(mutator, tls);
 }
@@ -93,6 +117,21 @@ pub fn immix_mutator_thread_local_prepare<VM: VMBinding>(mutator: &mut Mutator<V
     .downcast_mut::<LargeObjectAllocator<VM>>()
     .unwrap();
     los_allocator.thread_local_prepare();
+
+    // clear the remember set, it will be rebuilt during local GC
+    mutator.slot_remset.clear();
+    // clear the object remset as it is not needed once a local GC rebuild slot remset
+    // objects in the remset can be unpinned now, in the following local GC, slot remset will be rebuilt
+    mutator.object_remset.drain(..).for_each(|object| {
+        debug_assert!(
+            crate::memory_manager::is_pinned(object),
+            "mutator: {},  object: {:?} should be pinned",
+            mutator.mutator_id,
+            object
+        );
+        crate::memory_manager::unpin_object(object);
+    });
+    debug_assert_eq!(mutator.object_remset.len(), 0);
 }
 
 #[cfg(feature = "thread_local_gc")]
@@ -164,7 +203,7 @@ pub fn immix_mutator_thread_local_defrag_prepare<VM: VMBinding>(mutator: &mut Mu
 }
 
 pub(in crate::plan) const RESERVED_ALLOCATORS: ReservedAllocators = ReservedAllocators {
-    n_immix: 1,
+    n_immix: 2,
     ..ReservedAllocators::DEFAULT
 };
 
@@ -186,6 +225,7 @@ pub fn create_immix_mutator<VM: VMBinding>(
         space_mapping: Box::new({
             let mut vec = create_space_mapping(RESERVED_ALLOCATORS, true, immix);
             vec.push((AllocatorSelector::Immix(0), &immix.immix_space));
+            vec.push((AllocatorSelector::Immix(1), &immix.immix_space));
             vec
         }),
         prepare_func: &immix_mutator_prepare,
@@ -208,7 +248,6 @@ pub fn create_immix_mutator<VM: VMBinding>(
             mmtk,
             #[cfg(feature = "debug_publish_object")]
             mutator_id,
-            #[cfg(feature = "debug_thread_local_gc_copying")]
             mutator_tls,
         ),
     ));
@@ -216,7 +255,20 @@ pub fn create_immix_mutator<VM: VMBinding>(
     let barrier = Box::new(crate::plan::barriers::NoBarrier);
     let builder = MutatorBuilder::new(mutator_tls, mmtk, config);
     if cfg!(feature = "thread_local_gc") {
-        builder.barrier(barrier).mutator_id(mutator_id).build()
+        let current_state = immix
+            .immix_space
+            .line_mark_state
+            .load(std::sync::atomic::Ordering::Acquire);
+        let state = if 1 + current_state > Line::MAX_MARK_STATE {
+            Line::RESET_MARK_STATE
+        } else {
+            1 + current_state
+        };
+        builder
+            .barrier(barrier)
+            .mutator_id(mutator_id)
+            .local_line_mark_state(state)
+            .build()
     } else {
         builder.build()
     }

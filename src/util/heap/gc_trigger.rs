@@ -442,6 +442,13 @@ impl<VM: VMBinding> GCTriggerPolicy<VM> for FixedHeapSizeTrigger {
             use crate::policy::immix::GLOBAL_BLOCK_SET;
             crate::util::GLOBAL_GC_ID.fetch_add(1, Ordering::SeqCst);
             GLOBAL_BLOCK_SET.lock().unwrap().clear();
+
+            // PAGES_FREED_IN_LOCAL_GC.store(0, Ordering::Release);
+        }
+        {
+            if _mmtk.state.is_stress_gc.load(Ordering::SeqCst) {
+                _mmtk.state.stress_gc_id.fetch_add(1, Ordering::SeqCst);
+            }
         }
     }
 

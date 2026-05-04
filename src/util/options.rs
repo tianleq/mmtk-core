@@ -356,6 +356,11 @@ impl Options {
     pub fn get_max_local_copy_reserve(&self) -> u8 {
         *self.max_local_copy_reserve
     }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn get_local_gc_policy(&self) -> LocalGCPolicy {
+        *self.local_gc_policy
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -607,6 +612,38 @@ impl FromStr for ThreadlocalHeapSize {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         ThreadlocalHeapSize::parse(s)
+    }
+}
+
+#[cfg(feature = "thread_local_gc")]
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum LocalGCPolicy {
+    NONE,
+    INTERNAL,     // INTERNAL THREADS
+    APPLICATIONS, // APPLICATION THREADS
+    LRT,          // least recent triggered
+    ALL,
+}
+
+#[cfg(feature = "thread_local_gc")]
+impl LocalGCPolicy {
+    pub fn parse(s: &str) -> Result<LocalGCPolicy, String> {
+        match s.to_uppercase().trim() {
+            "INTERNAL" => Ok(LocalGCPolicy::INTERNAL),
+            "APPLICATIONS" => Ok(LocalGCPolicy::APPLICATIONS),
+            "LRT" => Ok(LocalGCPolicy::LRT),
+            "ALL" => Ok(LocalGCPolicy::ALL),
+            _ => Ok(LocalGCPolicy::NONE),
+        }
+    }
+}
+
+#[cfg(feature = "thread_local_gc")]
+impl FromStr for LocalGCPolicy {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        LocalGCPolicy::parse(s)
     }
 }
 
@@ -1006,7 +1043,8 @@ options! {
     max_concurrent_local_gc: u32                    [always_valid] = crate::scheduler::thread_local_gc_work::DEFAULT_MAX_CONCURRENT_LOCAL_GC,
     max_local_copy_reserve:  u8                     [always_valid] = crate::scheduler::thread_local_gc_work::DEFAULT_MAX_LOCAL_COPY_RESERVE,
     max_concurrent_defrag_mutator: u32              [always_valid] = 0,
-    defrag_mutator_threshold: usize                 [always_valid] = crate::scheduler::thread_local_gc_work::DEFRAG_MUTATOR_THRESHOLD
+    defrag_mutator_threshold: usize                 [always_valid] = crate::scheduler::thread_local_gc_work::DEFRAG_MUTATOR_THRESHOLD,
+    local_gc_policy: LocalGCPolicy                  [always_valid] = LocalGCPolicy::NONE
 }
 
 #[cfg(not(feature = "thread_local_gc"))]

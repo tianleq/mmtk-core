@@ -603,6 +603,37 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                     stats.live_bytes as f64 * 100.0 / stats.used_bytes as f64,
                 );
             }
+            {
+                use std::fs::OpenOptions;
+                use std::io::Write;
+                use std::sync::atomic::Ordering;
+
+                if mmtk.state.inside_harness.load(Ordering::SeqCst)
+                    && mmtk.state.is_stress_gc.load(Ordering::SeqCst)
+                {
+                    let mut log_file = OpenOptions::new()
+                        .create(true)
+                        .truncate(false)
+                        .append(true)
+                        .open("/home/tianleq/iso+.log")
+                        .unwrap();
+                    for (space_name, &stats) in live_bytes_in_last_gc.iter() {
+                        writeln!(
+                            &mut log_file,
+                            "{} | {} = {} pages ({:.1}% live)",
+                            mmtk.state.stress_gc_id.load(Ordering::Acquire),
+                            space_name,
+                            stats.used_pages,
+                            stats.live_bytes as f64 * 100.0 / stats.used_bytes as f64,
+                        )
+                        .unwrap();
+                    }
+                }
+            }
+            {
+                use std::sync::atomic::Ordering;
+                mmtk.state.is_stress_gc.store(false, Ordering::SeqCst);
+            }
         }
 
         mmtk.state

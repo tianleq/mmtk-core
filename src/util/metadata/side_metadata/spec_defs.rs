@@ -58,6 +58,8 @@ define_side_metadata_specs!(
     VO_BIT       = (global: true, log_num_of_bits: 0, log_bytes_in_region: LOG_MIN_OBJECT_SIZE as usize),
     // Mark objects that are shared across mutators
     PUBLIC_BIT      = (global: true, log_num_of_bits: 0, log_bytes_in_region: LOG_MIN_OBJECT_SIZE as usize),
+    // // Log slots in remset
+    // SLOT_LOG_BIT      = (global: true, log_num_of_bits: 0, log_bytes_in_region: LOG_MIN_OBJECT_SIZE as usize),
     // Track the index in SFT map for a chunk (only used for SFT sparse chunk map)
     SFT_DENSE_CHUNK_MAP_INDEX   = (global: true, log_num_of_bits: 3, log_bytes_in_region: LOG_BYTES_IN_CHUNK),
     // Mark chunks (any plan that uses the chunk map should include this spec in their global sidemetadata specs)

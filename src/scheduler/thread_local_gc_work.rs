@@ -3,14 +3,226 @@ use scheduler::GCWorker;
 use crate::plan::PlanThreadlocalTraceObject;
 use crate::plan::ThreadlocalTracedObjectType::*;
 use crate::policy::gc_work::TraceKind;
+use crate::policy::space::Space;
+use crate::util::metadata::public_bit::is_public;
 use crate::util::*;
 use crate::vm::slot::Slot;
 use crate::vm::*;
 use crate::*;
 use std::marker::PhantomData;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 pub const THREAD_LOCAL_GC_ACTIVE: u32 = 1;
 pub const THREAD_LOCAL_GC_INACTIVE: u32 = 0;
+pub const THREAD_LOCAL_GC_PENDING: u32 = u32::MAX;
+
+lazy_static! {
+    pub static ref IMMIX_LIVE_BYTES_IN_FORCED_LOCAL_GC: AtomicUsize = AtomicUsize::new(0);
+    pub static ref LOS_LIVE_BYTES_IN_FORCED_LOCAL_GC: AtomicUsize = AtomicUsize::new(0);
+}
+
+pub struct ScheduleExecuteThreadlocalCollectionWork;
+
+impl<VM: VMBinding> scheduler::GCWork<VM> for ScheduleExecuteThreadlocalCollectionWork {
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+        IMMIX_LIVE_BYTES_IN_FORCED_LOCAL_GC.store(0, std::sync::atomic::Ordering::SeqCst);
+        LOS_LIVE_BYTES_IN_FORCED_LOCAL_GC.store(0, std::sync::atomic::Ordering::SeqCst);
+        let count = _mmtk.get_options().get_max_concurrent_local_gc() as usize;
+
+        match _mmtk.get_options().get_local_gc_policy() {
+            options::LocalGCPolicy::NONE => {
+                for mutator in VM::VMActivePlan::mutators() {
+                    if mutator.is_thread_local_gc_pending() {
+                        if mutator.has_mutator_allocated() {
+                            worker.add_work(
+                                scheduler::WorkBucketStage::Local,
+                                ExecuteThreadlocalCollectionWork::new(mutator.mutator_tls),
+                            );
+                            _mmtk
+                                .state
+                                .forced_local_gc_counter
+                                .fetch_add(1, Ordering::SeqCst);
+                        } else {
+                            worker.add_work(
+                                scheduler::WorkBucketStage::Local,
+                                ExecuteThreadlocalMarkingWork::new(mutator.mutator_tls),
+                            );
+                            _mmtk
+                                .state
+                                .forced_local_marking_counter
+                                .fetch_add(1, Ordering::SeqCst);
+                        }
+                    }
+                }
+            }
+            options::LocalGCPolicy::APPLICATIONS => {
+                for mutator in VM::VMActivePlan::mutators() {
+                    if mutator.is_thread_local_gc_pending() {
+                        if mutator.has_mutator_allocated() {
+                            worker.add_work(
+                                scheduler::WorkBucketStage::Local,
+                                ExecuteThreadlocalCollectionWork::new(mutator.mutator_tls),
+                            );
+                            _mmtk
+                                .state
+                                .forced_local_gc_counter
+                                .fetch_add(1, Ordering::SeqCst);
+                        } else {
+                            worker.add_work(
+                                scheduler::WorkBucketStage::Local,
+                                ExecuteThreadlocalMarkingWork::new(mutator.mutator_tls),
+                            );
+                            _mmtk
+                                .state
+                                .forced_local_marking_counter
+                                .fetch_add(1, Ordering::SeqCst);
+                        }
+                    } else if mutator.mutator_id >= 30 {
+                        worker.add_work(
+                            scheduler::WorkBucketStage::Local,
+                            ExecuteThreadlocalCollectionWork::new(mutator.mutator_tls),
+                        );
+                    }
+                }
+            }
+            options::LocalGCPolicy::INTERNAL => {
+                for mutator in VM::VMActivePlan::mutators() {
+                    if mutator.is_thread_local_gc_pending() {
+                        if mutator.has_mutator_allocated() {
+                            worker.add_work(
+                                scheduler::WorkBucketStage::Local,
+                                ExecuteThreadlocalCollectionWork::new(mutator.mutator_tls),
+                            );
+                            _mmtk
+                                .state
+                                .forced_local_gc_counter
+                                .fetch_add(1, Ordering::SeqCst);
+                        } else {
+                            worker.add_work(
+                                scheduler::WorkBucketStage::Local,
+                                ExecuteThreadlocalMarkingWork::new(mutator.mutator_tls),
+                            );
+                            _mmtk
+                                .state
+                                .forced_local_marking_counter
+                                .fetch_add(1, Ordering::SeqCst);
+                        }
+                    } else if mutator.mutator_id < 30 {
+                        worker.add_work(
+                            scheduler::WorkBucketStage::Local,
+                            ExecuteThreadlocalCollectionWork::new(mutator.mutator_tls),
+                        );
+                    }
+                }
+            }
+            options::LocalGCPolicy::LRT => {
+                let mut mutators = Vec::with_capacity(count);
+                for mutator in VM::VMActivePlan::mutators() {
+                    mutators.push(mutator);
+                }
+                mutators
+                    .sort_by(|m1, m2: &_| m2.local_allocation_size.cmp(&m1.local_allocation_size));
+                for i in 0..mutators.len() {
+                    let mutator = mutators.get(i).unwrap();
+                    if i < count {
+                        worker.add_work(
+                            scheduler::WorkBucketStage::Local,
+                            ExecuteThreadlocalCollectionWork::new(mutator.mutator_tls),
+                        );
+                        _mmtk
+                            .state
+                            .forced_local_gc_counter
+                            .fetch_add(1, Ordering::SeqCst);
+                    } else if mutator.is_thread_local_gc_pending() {
+                        if mutator.has_mutator_allocated() {
+                            worker.add_work(
+                                scheduler::WorkBucketStage::Local,
+                                ExecuteThreadlocalCollectionWork::new(mutator.mutator_tls),
+                            );
+                            _mmtk
+                                .state
+                                .forced_local_gc_counter
+                                .fetch_add(1, Ordering::SeqCst);
+                        } else {
+                            worker.add_work(
+                                scheduler::WorkBucketStage::Local,
+                                ExecuteThreadlocalMarkingWork::new(mutator.mutator_tls),
+                            );
+                            _mmtk
+                                .state
+                                .forced_local_marking_counter
+                                .fetch_add(1, Ordering::SeqCst);
+                        }
+                    }
+                }
+            }
+            options::LocalGCPolicy::ALL => {
+                for mutator in VM::VMActivePlan::mutators() {
+                    worker.add_work(
+                        scheduler::WorkBucketStage::Local,
+                        ExecuteThreadlocalCollectionWork::new(mutator.mutator_tls),
+                    );
+                    _mmtk
+                        .state
+                        .forced_local_gc_counter
+                        .fetch_add(1, Ordering::SeqCst);
+                }
+            }
+        }
+    }
+}
+
+struct ExecuteThreadlocalMarkingWork {
+    mutator_tls: VMMutatorThread,
+}
+
+impl ExecuteThreadlocalMarkingWork {
+    pub fn new(tls: VMMutatorThread) -> Self {
+        Self { mutator_tls: tls }
+    }
+}
+
+impl<VM: VMBinding> scheduler::GCWork<VM> for ExecuteThreadlocalMarkingWork {
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        mmtk.get_plan()
+            .do_thread_local_marking(self.mutator_tls, mmtk);
+    }
+}
+
+struct ExecuteThreadlocalCollectionWork {
+    mutator_tls: VMMutatorThread,
+}
+
+impl ExecuteThreadlocalCollectionWork {
+    pub fn new(tls: VMMutatorThread) -> Self {
+        Self { mutator_tls: tls }
+    }
+}
+
+impl<VM: VMBinding> scheduler::GCWork<VM> for ExecuteThreadlocalCollectionWork {
+    fn do_work(&mut self, _worker: &mut GCWorker<VM>, mmtk: &'static MMTK<VM>) {
+        ExecuteThreadlocalCollection {
+            mmtk,
+            mutator_tls: self.mutator_tls,
+            start_time: std::time::Instant::now(),
+        }
+        .execute();
+        {
+            let plan = mmtk
+                .get_plan()
+                .downcast_ref::<crate::plan::immix::Immix<VM>>()
+                .unwrap();
+            let immix_index = plan.immix_space.get_descriptor().get_index();
+            let los_index = plan.common().get_los().get_descriptor().get_index();
+            let mut live_bytes_stats = _worker.shared.live_bytes_per_space.borrow_mut();
+            live_bytes_stats[immix_index] +=
+                IMMIX_LIVE_BYTES_IN_FORCED_LOCAL_GC.swap(0, Ordering::SeqCst);
+            live_bytes_stats[los_index] +=
+                LOS_LIVE_BYTES_IN_FORCED_LOCAL_GC.swap(0, Ordering::SeqCst);
+        }
+    }
+}
 
 pub struct ExecuteThreadlocalCollection<VM: VMBinding> {
     pub mmtk: &'static MMTK<VM>,
@@ -22,6 +234,8 @@ impl<VM: VMBinding> ExecuteThreadlocalCollection<VM> {
     pub fn execute(&mut self) {
         let mutator = VM::VMActivePlan::mutator(self.mutator_tls);
         mutator.thread_local_gc_status = THREAD_LOCAL_GC_ACTIVE;
+        // record before local GC starts so that evacuation does not increase its value
+        let allocation_bytes = mutator.allocation_bytes;
         info!("Start of Thread local GC {:?}", mutator.mutator_id,);
 
         // A hook of local gc, no-op at the moment
@@ -29,10 +243,10 @@ impl<VM: VMBinding> ExecuteThreadlocalCollection<VM> {
             .gc_trigger
             .policy
             .on_thread_local_gc_start(self.mmtk, mutator);
-
         self.mmtk
             .get_plan()
             .do_thread_local_collection(self.mutator_tls, self.mmtk);
+
         let elapsed = self.start_time.elapsed();
         mutator.thread_local_gc_status = THREAD_LOCAL_GC_INACTIVE;
         info!(
@@ -51,6 +265,7 @@ impl<VM: VMBinding> ExecuteThreadlocalCollection<VM> {
             mutator.reset_stats();
         }
         mutator.local_allocation_size = 0;
+        mutator.allocation_bytes = allocation_bytes;
         // local gc has finished,
         ACTIVE_LOCAL_GC_COUNTER.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
     }
@@ -144,7 +359,7 @@ impl EndOfThreadLocalGC {
 }
 
 /// Scan a specific mutator
-pub struct ScanMutator<VM, Closure>
+pub struct ScanMutator<VM, Closure, const KIND: TraceKind>
 where
     VM: VMBinding,
     Closure: ThreadlocalObjectGraphTraversalClosure<VM>,
@@ -155,7 +370,7 @@ where
     phantom: PhantomData<Closure>,
 }
 
-impl<VM, Closure> ScanMutator<VM, Closure>
+impl<VM, Closure, const KIND: TraceKind> ScanMutator<VM, Closure, KIND>
 where
     VM: VMBinding,
     Closure: ThreadlocalObjectGraphTraversalClosure<VM>,
@@ -175,15 +390,17 @@ where
 
     pub fn execute(&mut self) {
         trace!("scan_mutator start");
-        // self.mmtk.state.prepare_for_stack_scanning();
-        let object_graph_traversal =
-            ThreadlocalObjectGraphTraversal::<VM, Closure>::new(self.mmtk, self.tls, self.worker);
+        let object_graph_traversal = ThreadlocalObjectGraphTraversal::<VM, Closure, KIND>::new(
+            self.mmtk,
+            self.tls,
+            self.worker,
+        );
         VM::VMCollection::scan_mutator(self.tls, object_graph_traversal);
         trace!("scan_mutator end");
     }
 }
 
-pub struct ThreadlocalObjectGraphTraversal<VM, Closure>
+pub struct ThreadlocalObjectGraphTraversal<VM, Closure, const KIND: TraceKind>
 where
     VM: VMBinding,
     Closure: ThreadlocalObjectGraphTraversalClosure<VM>,
@@ -194,17 +411,7 @@ where
     phantom: PhantomData<Closure>,
 }
 
-impl<VM, Closure> ObjectGraphTraversal<VM::VMSlot> for ThreadlocalObjectGraphTraversal<VM, Closure>
-where
-    VM: VMBinding,
-    Closure: ThreadlocalObjectGraphTraversalClosure<VM>,
-{
-    fn traverse_from_roots(&mut self, root_slots: Vec<VM::VMSlot>) {
-        Closure::new(self.mmtk, self.tls, Some(root_slots), self.worker).do_closure();
-    }
-}
-
-impl<VM, Closure> ThreadlocalObjectGraphTraversal<VM, Closure>
+impl<VM, Closure, const KIND: TraceKind> ThreadlocalObjectGraphTraversal<VM, Closure, KIND>
 where
     VM: VMBinding,
     Closure: ThreadlocalObjectGraphTraversalClosure<VM>,
@@ -222,6 +429,34 @@ where
         }
     }
 }
+impl<VM, Closure, const KIND: TraceKind> ObjectGraphTraversal<VM::VMSlot>
+    for ThreadlocalObjectGraphTraversal<VM, Closure, KIND>
+where
+    VM: VMBinding,
+    Closure: ThreadlocalObjectGraphTraversalClosure<VM>,
+{
+    fn traverse_from_roots(&mut self, root_slots: Vec<VM::VMSlot>) {
+        // #[cfg(debug_assertions)]
+        // {
+        //     use crate::policy::STACK_ROOTS;
+
+        //     STACK_ROOTS
+        //         .lock()
+        //         .unwrap()
+        //         .extend(root_slots.iter().copied().map(|s| s.to_address()));
+        // }
+        let root_slots = Some(root_slots);
+        Closure::new(self.mmtk, self.tls, root_slots, self.worker).do_closure();
+    }
+
+    fn report_roots(&mut self, _root_slots: Vec<VM::VMSlot>) {
+        unreachable!();
+    }
+
+    fn traverse(&mut self) {
+        unreachable!();
+    }
+}
 
 pub trait ThreadlocalObjectGraphTraversalClosure<VM: VMBinding>: SlotVisitor<VM::VMSlot> {
     fn do_closure(&mut self);
@@ -235,6 +470,62 @@ pub trait ThreadlocalObjectGraphTraversalClosure<VM: VMBinding>: SlotVisitor<VM:
     ) -> Self;
 }
 
+// only collect stack roots, no scanning/tracing
+pub struct ThreadStackWalker<VM>
+where
+    VM: VMBinding,
+{
+    tls: VMMutatorThread,
+    _p: PhantomData<VM>,
+}
+
+impl<VM> ThreadStackWalker<VM>
+where
+    VM: VMBinding,
+{
+    pub fn new(tls: VMMutatorThread) -> Self {
+        Self {
+            tls,
+            _p: PhantomData,
+        }
+    }
+}
+
+impl<VM> ObjectGraphTraversal<VM::VMSlot> for ThreadStackWalker<VM>
+where
+    VM: VMBinding,
+{
+    fn traverse_from_roots(&mut self, root_slots: Vec<VM::VMSlot>) {
+        self.report_roots(root_slots);
+    }
+
+    fn report_roots(&mut self, root_slots: Vec<VM::VMSlot>) {
+        // for slots containing null/private objects, there is no need to collect them
+        // #[cfg(debug_assertions)]
+        // {
+        //     root_slots
+        //         .iter()
+        //         .copied()
+        //         .filter(|slot| slot.load().is_some_and(is_public))
+        //         .for_each(|slot| println!("stack slot: {:?}, object: {:?}", slot, slot.load()));
+        // }
+
+        // cannot store stack roots into the slot remset as the remset is carried over to the next local GC
+        // but stack slots will become invalid shortly after the GC. Instead, push those stack slots into a
+        // dedicated buffer
+        let mutator = VM::VMActivePlan::mutator(self.tls);
+        mutator.stack_slots.extend(
+            root_slots
+                .iter()
+                .filter(|slot| slot.load().is_some_and(is_public)),
+        );
+    }
+
+    fn traverse(&mut self) {
+        unreachable!();
+    }
+}
+
 pub struct PlanThreadlocalObjectGraphTraversalClosure<
     VM: VMBinding,
     P: Plan<VM = VM> + PlanThreadlocalTraceObject<VM>,
@@ -243,7 +534,6 @@ pub struct PlanThreadlocalObjectGraphTraversalClosure<
     plan: &'static P,
     tls: VMMutatorThread,
     slot_buffer: Vec<VM::VMSlot>,
-    #[cfg(feature = "debug_publish_object")]
     source_buffer: Vec<Option<ObjectReference>>,
     worker: Option<*mut GCWorker<VM>>,
 }
@@ -261,24 +551,22 @@ where
         worker: Option<*mut GCWorker<VM>>,
     ) -> Self {
         let mut slot_buffer = Vec::with_capacity(4096);
-        #[cfg(feature = "debug_publish_object")]
-        let mut source_buffer = Vec::new();
-        if let Some(roots) = root_slots {
-            #[cfg(feature = "debug_publish_object")]
-            {
-                source_buffer = Vec::with_capacity(roots.capacity());
-                for slot in &roots {
-                    source_buffer.push(slot.load());
-                }
-            }
-            slot_buffer = roots;
-        }
 
+        let mut source_buffer = Vec::new();
+        if let Some(root_slots) = root_slots {
+            source_buffer = Vec::with_capacity(root_slots.capacity());
+            for slot in &root_slots {
+                let root = slot.load();
+                source_buffer.push(root);
+            }
+
+            slot_buffer = root_slots;
+        }
+        debug_assert_eq!(slot_buffer.len(), source_buffer.len());
         Self {
             plan: mmtk.get_plan().downcast_ref::<P>().unwrap(),
             tls,
             slot_buffer,
-            #[cfg(feature = "debug_publish_object")]
             source_buffer,
             worker,
         }
@@ -293,11 +581,10 @@ where
         let mutator = VM::VMActivePlan::mutator(self.tls);
 
         while let Some(slot) = self.slot_buffer.pop() {
-            #[cfg(feature = "debug_publish_object")]
             let _source = self.source_buffer.pop().unwrap();
             let _object = slot.load();
             #[cfg(feature = "debug_publish_object")]
-            let (Some(object), Some(source)) = (_object, _source) else {
+            let (Some(object), Some(_)) = (_object, _source) else {
                 continue;
             };
 
@@ -307,10 +594,22 @@ where
                 continue;
             };
 
+            let source = _source.unwrap();
+            #[cfg(debug_assertions)]
+            {
+                debug_assert_eq!(self.slot_buffer.len(), self.source_buffer.len());
+                if source != object {
+                    // this is not roots, so _source - slot <= _source.size
+                    let size = VM::VMObjectModel::get_current_size(source);
+                    debug_assert!(
+                        slot.to_address().as_usize() - source.to_raw_address().as_usize() <= size
+                    );
+                }
+            }
             let new_object = match self.plan.thread_local_trace_object::<KIND>(
                 mutator,
-                #[cfg(feature = "debug_publish_object")]
                 source,
+                Some(slot),
                 object,
                 self.worker,
             ) {
@@ -332,6 +631,7 @@ where
                         new_object,
                         self,
                     );
+                    debug_assert_eq!(self.slot_buffer.len(), self.source_buffer.len());
                     self.plan
                         .thread_local_post_scan_object::<KIND>(mutator, new_object);
                     new_object
@@ -374,8 +674,8 @@ where
 
         let new_object = match self.plan.thread_local_trace_object::<KIND>(
             mutator,
-            #[cfg(feature = "debug_publish_object")]
             object,
+            None,
             object,
             self.worker,
         ) {
@@ -409,8 +709,8 @@ where
 
         match self.plan.thread_local_trace_object::<KIND>(
             mutator,
-            #[cfg(feature = "debug_publish_object")]
             object,
+            None,
             object,
             self.worker,
         ) {
@@ -425,17 +725,12 @@ where
     }
 }
 
-impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind>
-    SlotVisitor<VM::VMSlot> for PlanThreadlocalObjectGraphTraversalClosure<VM, P, KIND>
+impl<VM, P, const KIND: TraceKind> SlotVisitor<VM::VMSlot>
+    for PlanThreadlocalObjectGraphTraversalClosure<VM, P, KIND>
+where
+    VM: VMBinding,
+    P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>,
 {
-    #[cfg(not(feature = "debug_publish_object"))]
-    fn visit_slot(&mut self, slot: VM::VMSlot) {
-        if slot.load().is_some() {
-            self.slot_buffer.push(slot);
-        }
-    }
-
-    #[cfg(feature = "debug_publish_object")]
     fn visit_slot(&mut self, object: ObjectReference, slot: VM::VMSlot) {
         if slot.load().is_some() {
             self.source_buffer.push(Some(object));
@@ -444,8 +739,10 @@ impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIN
     }
 }
 
-impl<VM: VMBinding, P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKind> Drop
-    for PlanThreadlocalObjectGraphTraversalClosure<VM, P, KIND>
+impl<VM, P, const KIND: TraceKind> Drop for PlanThreadlocalObjectGraphTraversalClosure<VM, P, KIND>
+where
+    VM: VMBinding,
+    P: PlanThreadlocalTraceObject<VM> + Plan<VM = VM>,
 {
     #[inline(always)]
     fn drop(&mut self) {

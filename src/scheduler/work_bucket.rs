@@ -312,6 +312,7 @@ pub enum WorkBucketStage {
     /// work in the unconstrained bucket will always be consumed during STW. Users can disable this bucket
     /// and cache some concurrent work during STW, and only enable this bucket and allow concurrent execution once a STW is done.
     Concurrent,
+    Local,
     /// Preparation work.  Plans, spaces, GC workers, mutators, etc. should be prepared for GC at
     /// this stage.
     Prepare,
@@ -373,7 +374,7 @@ pub enum WorkBucketStage {
 impl WorkBucketStage {
     /// The first stop-the-world stage. This stage has no open condition, and will be opened manually
     /// once all the mutators threads are stopped.
-    pub const FIRST_STW_STAGE: Self = WorkBucketStage::Prepare;
+    pub const FIRST_STW_STAGE: Self = WorkBucketStage::Local;
 
     /// Is this the first stop-the-world stage? See [`Self::FIRST_STW_STAGE`].
     pub const fn is_first_stw_stage(&self) -> bool {

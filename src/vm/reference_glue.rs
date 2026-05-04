@@ -78,6 +78,6 @@ impl Finalizable for ObjectReference {
         *self = object;
     }
     fn keep_alive<E: ProcessEdgesWork>(&mut self, trace: &mut E) {
-        *self = trace.trace_object(*self);
+        *self = trace.trace_object(*self, *self);
     }
 }

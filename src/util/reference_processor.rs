@@ -236,7 +236,7 @@ impl ReferenceProcessor {
         e: &mut E,
         referent: ObjectReference,
     ) -> ObjectReference {
-        e.trace_object(referent)
+        e.trace_object(referent, referent)
     }
 
     /// This function is called when forwarding the references and referents (for MarkCompact). It
@@ -247,7 +247,7 @@ impl ReferenceProcessor {
         e: &mut E,
         referent: ObjectReference,
     ) -> ObjectReference {
-        e.trace_object(referent)
+        e.trace_object(referent, referent)
     }
 
     /// Inform the binding to enqueue the weak references whose referents were cleared in this GC.
@@ -552,6 +552,7 @@ impl<E: ProcessEdgesWork> GCWork<E::VM> for SoftRefProcessing<E> {
             // instance of `E` for this.
             let mut w = E::new(
                 vec![],
+                vec![],
                 #[cfg(feature = "debug_publish_object")]
                 vec![],
                 false,
@@ -606,7 +607,7 @@ pub(crate) struct RefForwarding<E: ProcessEdgesWork>(PhantomData<E>);
 impl<E: ProcessEdgesWork> GCWork<E::VM> for RefForwarding<E> {
     fn do_work(&mut self, worker: &mut GCWorker<E::VM>, mmtk: &'static MMTK<E::VM>) {
         #[cfg(not(feature = "debug_publish_object"))]
-        let mut w = E::new(vec![], false, mmtk, WorkBucketStage::RefForwarding);
+        let mut w = E::new(vec![], vec![], false, mmtk, WorkBucketStage::RefForwarding);
         #[cfg(feature = "debug_publish_object")]
         let mut w = E::new(
             vec![],

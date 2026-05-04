@@ -1,5 +1,4 @@
 //! Mutator context for each application thread.
-
 use crate::plan::barriers::Barrier;
 use crate::plan::global::Plan;
 use crate::plan::AllocationSemantics;
@@ -17,6 +16,7 @@ use enum_map::EnumMap;
 use super::barriers::NoBarrier;
 
 pub(crate) type SpaceMapping<VM> = Vec<(AllocatorSelector, &'static dyn Space<VM>)>;
+type ThreadlocalAllocCopyFn<VM> = &'static (dyn Fn(&mut Mutator<VM>, usize, usize, usize) -> Address + Send + Sync);
 
 /// A place-holder implementation for `MutatorConfig::prepare_func` that should not be called.
 /// It is the most often used by plans that sets `PlanConstraints::needs_prepare_mutator` to
@@ -96,8 +96,7 @@ pub struct MutatorConfig<VM: VMBinding> {
     pub thread_local_release_func: &'static (dyn Fn(&mut Mutator<VM>) + Send + Sync),
     #[cfg(feature = "thread_local_gc_copying")]
     /// Plan-specific code for mutator thread-local copy alloc. 
-    pub thread_local_alloc_copy_func:
-        &'static (dyn Fn(&mut Mutator<VM>, usize, usize, usize) -> Address + Send + Sync),
+    pub thread_local_alloc_copy_func: ThreadlocalAllocCopyFn<VM>,
     #[cfg(feature = "thread_local_gc_copying")]
     /// Plan-specific code for mutator post thread-local copy.
     pub thread_local_post_copy_func:
@@ -148,7 +147,9 @@ pub struct MutatorBuilder<VM: VMBinding> {
     finalizable_candidates:
         Box<Vec<<VM::VMReferenceGlue as crate::vm::ReferenceGlue<VM>>::FinalizableType>>,
     #[cfg(feature = "thread_local_gc_copying")]
-    local_allocation_size: usize
+    local_allocation_size: usize,
+    #[cfg(feature = "thread_local_gc_copying")]
+    local_line_mark_state: u8
 }
 
 impl<VM: VMBinding> MutatorBuilder<VM> {
@@ -165,11 +166,13 @@ impl<VM: VMBinding> MutatorBuilder<VM> {
             #[cfg(feature = "thread_local_gc")]
             mutator_id: 0,
             #[cfg(feature = "thread_local_gc")]
-            thread_local_gc_status: 0,
+            thread_local_gc_status: 0, // THREAD_LOCAL_GC_INACTIVE // it does not affect correctness as newly spawned mutators will not have stale line marks in its local heap
             #[cfg(feature = "thread_local_gc")]
             finalizable_candidates: Box::new(Vec::new()),
             #[cfg(feature = "thread_local_gc_copying")]
             local_allocation_size: 0,
+            #[cfg(feature = "thread_local_gc_copying")]
+            local_line_mark_state: 0
         }
     }
 
@@ -182,6 +185,13 @@ impl<VM: VMBinding> MutatorBuilder<VM> {
         self.mutator_id = mutator_id;
         self
     }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub fn local_line_mark_state(mut self, state: u8) -> Self {
+        self.local_line_mark_state = state;
+        self
+    }
+     
 
     pub fn build(self) -> Mutator<VM> {
         Mutator {
@@ -207,6 +217,15 @@ impl<VM: VMBinding> MutatorBuilder<VM> {
             request_id: 0,
             #[cfg(feature = "debug_thread_local_gc_copying")]
             stats: Box::new(crate::util::LocalGCStatistics::default()),
+            #[cfg(feature = "thread_local_gc_copying")]
+            slot_remset: Box::new(Vec::new()),
+            #[cfg(feature = "thread_local_gc_copying")]
+            object_remset: Box::new(Vec::new()),
+            #[cfg(feature = "thread_local_gc_copying")]
+            stack_slots: Box::new(Vec::new()),
+            allocation_bytes: 0,
+            #[cfg(feature = "thread_local_gc_copying")]
+            state: self.local_line_mark_state
         }
     }
 }
@@ -242,7 +261,21 @@ pub struct Mutator<VM: VMBinding> {
     #[cfg(feature = "debug_thread_local_gc_copying")]
     pub(crate) stats: Box<crate::util::LocalGCStatistics>,
     #[cfg(feature = "thread_local_gc_copying")]
-    pub(crate) local_allocation_size: usize
+    pub(crate) local_allocation_size: usize,
+    #[cfg(feature = "thread_local_gc_copying")]
+    // pub(crate) slot_remset: Box<Vec<VM::VMSlot>>,
+    #[allow(clippy::box_collection)]
+    pub(crate) slot_remset: Box<Vec<ObjectReference>>,
+    #[cfg(feature = "thread_local_gc_copying")]
+    #[allow(clippy::box_collection)]
+    pub(crate) object_remset: Box<Vec<ObjectReference>>,
+    #[cfg(feature = "thread_local_gc_copying")]
+    #[allow(clippy::box_collection)]
+    pub(crate) stack_slots: Box<Vec<VM::VMSlot>>,
+    pub(crate) allocation_bytes: usize,
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub(crate) state: u8
+
 }
 
 impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
@@ -386,6 +419,7 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
             }
         }
 
+
     }
 
     fn get_tls(&self) -> VMMutatorThread {
@@ -440,6 +474,10 @@ impl<VM: VMBinding> Mutator<VM> {
     pub fn on_destroy(&mut self) {
         for selector in self.get_all_allocator_selectors() {
             unsafe { self.allocators.get_allocator_mut(selector) }.on_mutator_destroy();
+        }
+        {
+            use std::sync::atomic::Ordering;
+            self.plan.common().base.global_state.total_allocation_bytes.fetch_add(self.allocation_bytes, Ordering::SeqCst);
         }
     }
 
@@ -627,7 +665,17 @@ impl<VM: VMBinding> Mutator<VM> {
         self.stats.los_bytes_published = 0;
         self.stats.number_of_los_pages_freed = 0;
     }
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub fn is_thread_local_gc_pending(&self) -> bool {
+        use crate::scheduler::thread_local_gc_work::THREAD_LOCAL_GC_PENDING;
 
+        self.thread_local_gc_status == THREAD_LOCAL_GC_PENDING
+    }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    pub fn has_mutator_allocated(&self) -> bool {
+        self.local_allocation_size != 0
+    }
 }
 
 /// Each GC plan should provide their implementation of a MutatorContext. *Note that this trait is no longer needed as we removed

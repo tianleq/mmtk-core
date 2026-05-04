@@ -4,6 +4,11 @@ pub(crate) type TraceKind = u8;
 
 pub const DEFAULT_TRACE: u8 = u8::MAX;
 pub const TRACE_KIND_TRANSITIVE_PIN: u8 = DEFAULT_TRACE - 1;
+pub(crate) const TRACE_KIND_PUBLIC: TraceKind = TRACE_KIND_TRANSITIVE_PIN - 1;
+pub(crate) const TRACE_KIND_UPDATE: TraceKind = TRACE_KIND_PUBLIC - 1;
+pub(crate) const TRACE_KIND_VERIFY_PUBLIC: u8 = TRACE_KIND_UPDATE - 1;
+pub(crate) const TRACE_KIND_VERIFY: u8 = TRACE_KIND_VERIFY_PUBLIC - 1;
+// pub(crate) const TRACE_KIND_CONCURRENT_PUBLIC: TraceKind = TRACE_KIND_VERIFY - 1;
 
 use crate::plan::ObjectQueue;
 #[cfg(feature = "thread_local_gc")]
@@ -27,6 +32,7 @@ pub trait PolicyTraceObject<VM: VMBinding> {
     fn trace_object<Q: ObjectQueue, const KIND: TraceKind>(
         &self,
         queue: &mut Q,
+        source: ObjectReference,
         object: ObjectReference,
         copy: Option<CopySemantics>,
         worker: &mut GCWorker<VM>,
@@ -44,24 +50,13 @@ pub trait PolicyTraceObject<VM: VMBinding> {
 
 #[cfg(feature = "thread_local_gc")]
 pub trait PolicyThreadlocalTraceObject<VM: VMBinding> {
-    #[cfg(not(feature = "debug_publish_object"))]
-    /// Trace object in the policy. If the policy copies objects, we should
-    /// expect `copy` to be a `Some` value.
-    fn thread_local_trace_object<const KIND: TraceKind>(
-        &self,
-        mutator: &mut Mutator<VM>,
-        object: ObjectReference,
-        worker: Option<*mut GCWorker<VM>>,
-        copy: Option<CopySemantics>,
-    ) -> ThreadlocalTracedObjectType;
-
-    #[cfg(feature = "debug_publish_object")]
     /// Trace object in the policy. If the policy copies objects, we should
     /// expect `copy` to be a `Some` value.
     fn thread_local_trace_object<const KIND: TraceKind>(
         &self,
         mutator: &mut Mutator<VM>,
         source: ObjectReference,
+        slot: Option<VM::VMSlot>,
         object: ObjectReference,
         worker: Option<*mut GCWorker<VM>>,
         copy: Option<CopySemantics>,

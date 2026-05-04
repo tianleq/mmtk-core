@@ -56,6 +56,7 @@ pub trait ActivePlan<VM: VMBinding> {
     /// * `worker`: The GC worker that is doing this tracing. This is used to copy object (see [`crate::vm::ObjectModel::copy`])
     fn vm_trace_object<Q: ObjectQueue>(
         _queue: &mut Q,
+        _source: ObjectReference,
         object: ObjectReference,
         _worker: &mut GCWorker<VM>,
     ) -> ObjectReference {

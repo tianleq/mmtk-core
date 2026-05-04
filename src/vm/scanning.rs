@@ -7,28 +7,11 @@ use crate::vm::VMBinding;
 
 /// Callback trait of scanning functions that report slots.
 pub trait SlotVisitor<SL: Slot> {
-    #[cfg(not(feature = "debug_publish_object"))]
-    /// Call this function for each slot.
-    fn visit_slot(&mut self, slot: SL);
-    #[cfg(feature = "debug_publish_object")]
-    /// Call this function for each edge.
     fn visit_slot(&mut self, object: ObjectReference, slot: SL);
 }
 
 /// This lets us use closures as SlotVisitor.
 impl<SL: Slot, F: FnMut(Option<ObjectReference>, SL)> SlotVisitor<SL> for F {
-    #[cfg(not(feature = "debug_publish_object"))]
-    fn visit_slot(&mut self, slot: SL) {
-        #[cfg(debug_assertions)]
-        trace!(
-            "(FunctionClosure) Visit slot {:?} (pointing to {:?})",
-            slot,
-            slot.load()
-        );
-        self(None, slot)
-    }
-
-    #[cfg(feature = "debug_publish_object")]
     fn visit_slot(&mut self, object: ObjectReference, slot: SL) {
         #[cfg(debug_assertions)]
         trace!(
@@ -166,6 +149,8 @@ pub trait RootsWorkFactory<SL: Slot>: Clone + Send + 'static {
 
 #[cfg(feature = "thread_local_gc")]
 pub trait ObjectGraphTraversal<SL: Slot> {
+    fn report_roots(&mut self, root_slots: Vec<SL>);
+    fn traverse(&mut self);
     fn traverse_from_roots(&mut self, root_slots: Vec<SL>);
 }
 
@@ -440,4 +425,20 @@ pub trait Scanning<VM: VMBinding> {
         _tracer_context: impl ObjectTracerContext<VM>,
     ) {
     }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn single_threaded_scan_vm_specific_roots(
+        tls: VMWorkerThread,
+
+        closure: impl ObjectGraphTraversal<VM::VMSlot>,
+    );
+
+    #[cfg(feature = "thread_local_gc")]
+    fn single_threaded_scan_roots_in_mutator_thread(
+        tls: VMWorkerThread,
+
+        mutator: &'static mut Mutator<VM>,
+
+        closure: impl ObjectGraphTraversal<VM::VMSlot>,
+    );
 }

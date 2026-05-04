@@ -4,7 +4,7 @@ use crate::plan::barriers::NoBarrier;
 #[cfg(feature = "public_bit")]
 use crate::plan::barriers::PublicObjectMarkingBarrier;
 #[cfg(feature = "public_bit")]
-use crate::plan::barriers::PublicObjectMarkingBarrierSemantics;
+use crate::plan::immix::barrier::PublicObjectMarkingBarrierSemantics;
 use crate::plan::mutator_context::common_prepare_func;
 use crate::plan::mutator_context::common_release_func;
 #[cfg(feature = "thread_local_gc_copying")]
@@ -99,7 +99,6 @@ pub fn create_ss_mutator<VM: VMBinding>(
             mmtk,
             #[cfg(feature = "debug_publish_object")]
             mutator_id,
-            #[cfg(feature = "debug_thread_local_gc_copying")]
             mutator_tls,
         ),
     ));

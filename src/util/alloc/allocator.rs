@@ -459,6 +459,8 @@ pub trait Allocator<VM: VMBinding>: Downcast {
                 // global acquire and do a poll.
                 let need_poll = is_mutator && self.get_context().gc_trigger.should_do_stress_gc();
                 self.alloc_slow_once_precise_stress(size, align, offset, need_poll)
+            } else if previous_result_zero {
+                self.alloc_slow_cold(size, align, offset)
             } else {
                 // If we are not doing precise stress GC, just call the normal alloc_slow_once().
                 // Normal stress test only checks for stress GC in the slowpath.
@@ -506,6 +508,10 @@ pub trait Allocator<VM: VMBinding>: Downcast {
                         .get_context()
                         .state
                         .increase_allocation_bytes_by(allocated_size);
+                    {
+                        let mutator = VM::VMActivePlan::mutator(VMMutatorThread(self.get_tls()));
+                        mutator.allocation_bytes += allocated_size;
+                    }
 
                     // This is the allocation hook for the analysis trait. If you want to call
                     // an analysis counter specific allocation hook, then here is the place to do so
@@ -620,6 +626,10 @@ pub trait Allocator<VM: VMBinding>: Downcast {
         let ret = self.alloc_slow_once(size, align, offset);
         probe!(mmtk, alloc_slow_once_end);
         ret
+    }
+
+    fn alloc_slow_cold(&mut self, size: usize, align: usize, offset: usize) -> Address {
+        self.alloc_slow_once_traced(size, align, offset)
     }
 
     /// Single slowpath allocation attempt for stress test. When the stress factor is set (e.g. to

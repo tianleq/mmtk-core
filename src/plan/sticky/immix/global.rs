@@ -331,7 +331,7 @@ impl<VM: VMBinding> crate::plan::generational::global::GenerationalPlanExt<VM> f
                 .immix
                 .common()
                 .get_los()
-                .trace_object::<Q>(queue, object);
+                .trace_object::<Q>(queue, object, object);
         }
 
         object

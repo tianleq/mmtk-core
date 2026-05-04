@@ -239,6 +239,16 @@ impl Stats {
         print!("Total time: ");
         self.total_time.lock().unwrap().print_total(None);
         println!(" ms");
+        println!(
+            "Forced local GC: {}",
+            mmtk.state.forced_local_gc_counter.load(Ordering::Relaxed)
+        );
+        println!(
+            "Forced local Marking: {}",
+            mmtk.state
+                .forced_local_marking_counter
+                .load(Ordering::Relaxed)
+        );
 
         println!("------------------------------ End MMTk Statistics -----------------------------")
     }

@@ -4,6 +4,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
 
+#[cfg(debug_assertions)]
+use crate::util::ObjectReference;
+
 /// This stores some global states for an MMTK instance.
 /// Some MMTK components like plans and allocators may keep an reference to the struct, and can access it.
 // This used to be a part of the `BasePlan`. In that case, any component that accesses
@@ -51,6 +54,17 @@ pub struct GlobalState {
     pub(crate) live_bytes_in_last_gc: AtomicRefCell<HashMap<&'static str, LiveBytesStats>>,
     /// The number of used pages at the end of the last GC. This can be used to estimate how many pages we have allocated since last GC.
     pub(crate) used_pages_after_last_gc: AtomicUsize,
+    #[cfg(debug_assertions)]
+    pub(crate) objects: std::sync::Mutex<std::collections::HashSet<ObjectReference>>,
+    #[cfg(debug_assertions)]
+    pub(crate) global_objects_count: AtomicUsize,
+    #[cfg(debug_assertions)]
+    pub(crate) global_objects_precise_count: AtomicUsize,
+    pub(crate) is_stress_gc: AtomicBool,
+    pub(crate) stress_gc_id: AtomicUsize,
+    pub(crate) total_allocation_bytes: AtomicUsize,
+    pub(crate) forced_local_gc_counter: AtomicUsize,
+    pub(crate) forced_local_marking_counter: AtomicUsize,
 }
 
 impl GlobalState {
@@ -218,6 +232,17 @@ impl Default for GlobalState {
             malloc_bytes: AtomicUsize::new(0),
             live_bytes_in_last_gc: AtomicRefCell::new(HashMap::new()),
             used_pages_after_last_gc: AtomicUsize::new(0),
+            #[cfg(debug_assertions)]
+            objects: std::sync::Mutex::new(std::collections::HashSet::new()),
+            #[cfg(debug_assertions)]
+            global_objects_count: AtomicUsize::new(0),
+            #[cfg(debug_assertions)]
+            global_objects_precise_count: AtomicUsize::new(0),
+            is_stress_gc: AtomicBool::new(false),
+            stress_gc_id: AtomicUsize::new(0),
+            total_allocation_bytes: AtomicUsize::new(0),
+            forced_local_gc_counter: AtomicUsize::new(0),
+            forced_local_marking_counter: AtomicUsize::new(0),
         }
     }
 }

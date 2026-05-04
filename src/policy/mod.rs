@@ -39,3 +39,42 @@ pub mod vmspace;
 //     pub(crate) static ref THREAD_LOCAL_HEAP_IN_PAGES: std::sync::Mutex<std::collections::HashMap<Mutator, usize>> =
 //         std::sync::Mutex::new(std::collections::HashMap::new());
 // }
+
+// #[cfg(debug_assertions)]
+// use std::sync::atomic::AtomicUsize;
+
+#[cfg(debug_assertions)]
+use crate::util::ObjectReference;
+
+#[cfg(debug_assertions)]
+lazy_static! {
+//     // pub(crate) static ref GLOBAL_OBJECT_REMSET: std::sync::Mutex<std::collections::HashSet<ObjectReference>> =
+//     //     std::sync::Mutex::new(std::collections::HashSet::new());
+//     // pub(crate) static ref PRIVATE_OBJECTS_IN_PREV_GC: std::sync::Mutex<std::collections::HashSet<ObjectReference>> =
+//     //     std::sync::Mutex::new(std::collections::HashSet::new());
+//     // pub(crate) static ref PRIVATE_OBJECTS_IN_CURRENT_GC: std::sync::Mutex<std::collections::HashSet<ObjectReference>> =
+//     //     std::sync::Mutex::new(std::collections::HashSet::new());
+//     // pub(crate) static ref RUNTIME_OBJECT: std::sync::Mutex<std::collections::HashSet<ObjectReference>> =
+//     //     std::sync::Mutex::new(std::collections::HashSet::new());
+    pub(crate) static ref GLOBAL_OBJECTS_CONSERVATIVE: std::sync::Mutex<std::collections::HashMap<ObjectReference, ObjectReference>> =
+        std::sync::Mutex::new(std::collections::HashMap::new());
+
+//     // pub(crate) static ref GLOBAL_OBJECTS: std::sync::Mutex<std::collections::HashMap<ObjectReference, ObjectReference>> =
+//     //     std::sync::Mutex::new(std::collections::HashMap::new());
+
+//     // pub(crate) static ref REMSET_OBJECTS: std::sync::Mutex<std::collections::HashSet<ObjectReference>> =
+//     //     std::sync::Mutex::new(std::collections::HashSet::new());
+
+//     // pub(crate) static ref PRIVATE_OBJECTS: std::sync::Mutex<std::collections::HashSet<ObjectReference>> =
+//     //     std::sync::Mutex::new(std::collections::HashSet::new());
+
+//     // pub(crate) static ref STACK_ROOTS: std::sync::Mutex<std::collections::HashSet<Address>> =
+//     //     std::sync::Mutex::new(std::collections::HashSet::new());
+//     // pub(crate) static ref STACK_ROOTS_SANITY: std::sync::Mutex<std::collections::HashSet<Address>> =
+//     //     std::sync::Mutex::new(std::collections::HashSet::new());
+
+//     // pub(crate) static ref GLOBAL_ROOTS_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+//     // pub(crate) static ref GLOBAL_ROOTS_COUNTER_CONSERVATIVE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+//     // pub(crate) static ref PAGES_FREED_IN_LOCAL_GC: AtomicUsize = AtomicUsize::new(0);
+}

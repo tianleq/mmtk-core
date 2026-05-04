@@ -32,5 +32,7 @@ pub use worker::GCWorker;
 
 pub(crate) mod gc_work;
 #[cfg(feature = "thread_local_gc")]
+pub(crate) mod single_thread_gc_work;
+#[cfg(feature = "thread_local_gc")]
 pub(crate) mod thread_local_gc_work;
 pub use gc_work::ProcessEdgesWork;

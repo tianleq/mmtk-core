@@ -15,12 +15,22 @@ use crate::plan::ThreadlocalTracedObjectType;
 #[cfg(feature = "thread_local_gc")]
 use crate::policy::gc_work::PolicyThreadlocalTraceObject;
 #[cfg(feature = "thread_local_gc")]
+use crate::policy::gc_work::TraceKind;
+use crate::policy::gc_work::TRACE_KIND_PUBLIC;
+#[cfg(feature = "thread_local_gc")]
 use crate::policy::immix::block::Block;
 use crate::policy::immix::ImmixSpaceArgs;
+#[cfg(not(feature = "thread_local_gc"))]
 use crate::policy::immix::{TRACE_KIND_DEFRAG, TRACE_KIND_FAST};
 use crate::policy::space::Space;
+use crate::scheduler::gc_work::Prepare;
+use crate::scheduler::gc_work::Release;
+use crate::scheduler::gc_work::ScanStackSemantic;
+use crate::scheduler::gc_work::StopMutators;
 #[cfg(feature = "thread_local_gc")]
 use crate::scheduler::thread_local_gc_work::ThreadlocalPrepare;
+#[cfg(feature = "thread_local_gc")]
+use crate::scheduler::thread_local_gc_work::ACTIVE_LOCAL_GC_COUNTER;
 use crate::scheduler::*;
 use crate::util::alloc::allocators::AllocatorSelector;
 use crate::util::copy::*;
@@ -42,6 +52,7 @@ use atomic::Ordering;
 use enum_map::EnumMap;
 
 use mmtk_macros::{HasSpaces, PlanTraceObject};
+use portable_atomic::AtomicUsize;
 
 #[derive(HasSpaces, PlanTraceObject)]
 pub struct Immix<VM: VMBinding> {
@@ -52,7 +63,7 @@ pub struct Immix<VM: VMBinding> {
     #[parent]
     pub common: CommonPlan<VM>,
     last_gc_was_defrag: AtomicBool,
-    defrag_mutator: AtomicBool,
+    defrag_mutator: AtomicUsize,
 }
 
 /// The plan constraints for the immix plan.
@@ -65,8 +76,6 @@ pub const IMMIX_CONSTRAINTS: PlanConstraints = PlanConstraints {
     needs_prepare_mutator: true,
     ..PlanConstraints::default()
 };
-
-pub const DEFRAG_MUTATOR_THRESHOLD: usize = 32;
 
 impl<VM: VMBinding> Plan for Immix<VM> {
     fn collection_required(&self, space_full: bool, _space: Option<SpaceStats<Self::VM>>) -> bool {
@@ -92,11 +101,12 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         //     required
         // }
 
-        use crate::vm::ActivePlan;
+        use crate::{scheduler::thread_local_gc_work::THREAD_LOCAL_GC_PENDING, vm::ActivePlan};
 
         let mutator = VM::VMActivePlan::mutator(_tls);
 
-        mutator.local_allocation_size >= self.options().get_thread_local_heap_size()
+        mutator.thread_local_gc_status == THREAD_LOCAL_GC_PENDING
+            || mutator.local_allocation_size >= self.options().get_thread_local_heap_size()
     }
 
     fn last_collection_was_exhaustive(&self) -> bool {
@@ -121,11 +131,27 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     fn schedule_collection(&'static self, scheduler: &GCWorkScheduler<VM>) {
-        Self::schedule_immix_full_heap_collection::<
+        // if self.full_heap_gc_pending.load(Ordering::Acquire) {
+        //     self.current_pause
+        //         .store(Some(Pause::Full), Ordering::SeqCst);
+        //     Self::schedule_immix_full_heap_collection::<
+        //         Immix<VM>,
+        //         ImmixGCWorkContext<VM, TRACE_KIND_FAST>,
+        //         ImmixGCWorkContext<VM, TRACE_KIND_DEFRAG>,
+        //     >(self, &self.immix_space, scheduler);
+        // } else {
+        //     self.current_pause
+        //         .store(Some(Pause::Public), Ordering::SeqCst);
+        //     Self::schedule_immix_public_collection::<
+        //         Immix<VM>,
+        //         ImmixGCWorkContext<VM, TRACE_KIND_PUBLIC>,
+        //     >(self, &self.immix_space, scheduler);
+        // }
+
+        Self::schedule_immix_public_collection::<
             Immix<VM>,
-            ImmixGCWorkContext<VM, TRACE_KIND_FAST>,
-            ImmixGCWorkContext<VM, TRACE_KIND_DEFRAG>,
-        >(self, &self.immix_space, scheduler)
+            ImmixGCWorkContext<VM, TRACE_KIND_PUBLIC>,
+        >(self, &self.immix_space, scheduler);
     }
 
     #[cfg(feature = "thread_local_gc")]
@@ -134,13 +160,17 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         tls: VMMutatorThread,
         mmtk: &'static crate::MMTK<VM>,
     ) {
-        use crate::policy::immix::{TRACE_THREAD_LOCAL_COPY, TRACE_THREAD_LOCAL_FAST};
+        use crate::policy::immix::{TRACE_KIND_THREAD_LOCAL_COPY, TRACE_KIND_THREAD_LOCAL_FAST};
 
-        Self::schedule_and_do_immix_thread_local_collection::<
-            Immix<VM>,
-            ImmixGCWorkContext<VM, TRACE_THREAD_LOCAL_FAST>,
-            ImmixGCWorkContext<VM, TRACE_THREAD_LOCAL_COPY>,
-        >(tls, self, &self.immix_space, mmtk)
+        if cfg!(feature = "thread_local_gc_copying") {
+            Self::do_immix_thread_local_collection_impl::<Immix<VM>, TRACE_KIND_THREAD_LOCAL_COPY>(
+                tls, self, mmtk,
+            )
+        } else {
+            Self::do_immix_thread_local_collection_impl::<Immix<VM>, TRACE_KIND_THREAD_LOCAL_FAST>(
+                tls, self, mmtk,
+            )
+        }
     }
 
     #[cfg(feature = "thread_local_gc")]
@@ -164,8 +194,12 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                 PlanThreadlocalObjectGraphTraversalClosure<
                     VM,
                     Immix<VM>,
-                    { crate::policy::immix::TRACE_THREAD_LOCAL_DEFRAG },
+                    { crate::policy::immix::TRACE_KIND_THREAD_LOCAL_DEFRAG },
                 >,
+                {
+                    use crate::policy::gc_work::DEFAULT_TRACE;
+                    DEFAULT_TRACE
+                },
             >::new(_tls, _mmtk, Some(_worker))
             .execute();
             // cannot do release since finalizer has not been executed yet
@@ -174,10 +208,20 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     }
 
     #[cfg(feature = "thread_local_gc_copying")]
-    fn defrag_mutator_required(&self, tls: VMMutatorThread) -> bool {
+    fn defrag_mutator_required(
+        &self,
+        mmtk: &'static crate::MMTK<VM>,
+        tls: VMMutatorThread,
+    ) -> bool {
         use crate::vm::ActivePlan;
         use std::borrow::Borrow;
-        if !self.defrag_mutator.load(Ordering::Acquire) {
+        let number_of_workers = mmtk.scheduler.worker_group.worker_count();
+        let max_defrag_mutators = if *mmtk.options.max_concurrent_defrag_mutator != 0 {
+            usize::try_from(*mmtk.options.max_concurrent_defrag_mutator).unwrap()
+        } else {
+            number_of_workers
+        };
+        if self.defrag_mutator.load(Ordering::Acquire) >= number_of_workers {
             return false;
         }
         let mutator = VM::VMActivePlan::mutator(tls);
@@ -189,10 +233,16 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         }
         .downcast_ref::<crate::util::alloc::ImmixAllocator<VM>>()
         .unwrap();
-        if immix_allocator.local_reusable_blocks.len() >= DEFRAG_MUTATOR_THRESHOLD {
-            self.defrag_mutator
-                .compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok()
+        if immix_allocator.local_reusable_blocks.len()
+            >= thread_local_gc_work::DEFRAG_MUTATOR_THRESHOLD
+        {
+            let count = self.defrag_mutator.fetch_add(1, Ordering::SeqCst);
+            if count < max_defrag_mutators {
+                true
+            } else {
+                self.defrag_mutator.fetch_sub(1, Ordering::SeqCst);
+                false
+            }
 
             // true
         } else {
@@ -200,12 +250,55 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         }
     }
 
+    #[cfg(feature = "thread_local_gc")]
+    fn do_thread_local_marking(
+        &'static self,
+        tls: VMMutatorThread,
+        _mmtk: &'static crate::MMTK<VM>,
+    ) {
+        use crate::{policy::immix::line::Line, vm::ActivePlan};
+        use std::borrow::Borrow;
+
+        let mutator = VM::VMActivePlan::mutator(tls);
+        let allocators: &crate::util::alloc::allocators::Allocators<VM> =
+            mutator.allocators.borrow();
+        let immix_allocator = unsafe {
+            allocators.get_allocator(mutator.config.allocator_mapping[AllocationSemantics::Default])
+        }
+        .downcast_ref::<crate::util::alloc::ImmixAllocator<VM>>()
+        .unwrap();
+
+        let current_state = self.immix_space.line_mark_state.load(Ordering::Acquire);
+        let new_state = if current_state + 1 > Line::MAX_MARK_STATE {
+            Line::RESET_MARK_STATE
+        } else {
+            current_state + 1
+        };
+        debug_assert_eq!(current_state, mutator.state);
+        immix_allocator.mark_local_heap(current_state, new_state);
+
+        // local state needs to be updated so that future eager marking will
+        // not use a stale state
+        mutator.state = new_state;
+    }
+
     fn get_allocator_mapping(&self) -> &'static EnumMap<AllocationSemantics, AllocatorSelector> {
         &ALLOCATOR_MAPPING
     }
 
     fn prepare(&mut self, tls: VMWorkerThread) {
-        self.prepare_inner(tls, UnlogBitsOperation::NoOp)
+        self.prepare_inner(tls, UnlogBitsOperation::NoOp);
+        self.defrag_mutator.store(0, Ordering::Release);
+
+        // #[cfg(debug_assertions)]
+        // {
+        //     use crate::policy::{PRIVATE_OBJECTS_IN_CURRENT_GC, PRIVATE_OBJECTS_IN_PREV_GC};
+
+        //     PRIVATE_OBJECTS_IN_PREV_GC
+        //         .lock()
+        //         .unwrap()
+        //         .extend(PRIVATE_OBJECTS_IN_CURRENT_GC.lock().unwrap().drain());
+        // }
     }
 
     fn release(&mut self, tls: VMWorkerThread) {
@@ -215,7 +308,160 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     fn end_of_gc(&mut self, tls: VMWorkerThread) {
         self.last_gc_was_defrag
             .store(self.immix_space.end_of_gc(), Ordering::Relaxed);
+        #[cfg(feature = "thread_local_gc")]
+        ACTIVE_LOCAL_GC_COUNTER.store(0, Ordering::Relaxed);
         self.common.end_of_gc(tls);
+
+        #[cfg(debug_assertions)]
+        {
+            // use crate::policy::{
+            //     GLOBAL_OBJECTS, GLOBAL_OBJECTS_CONSERVATIVE, GLOBAL_ROOTS_COUNTER,
+            //     GLOBAL_ROOTS_COUNTER_CONSERVATIVE, PAGES_FREED_IN_LOCAL_GC, PRIVATE_OBJECTS,
+            // };
+
+            let mut conservative = crate::policy::GLOBAL_OBJECTS_CONSERVATIVE.lock().unwrap();
+            // let mut precise = GLOBAL_OBJECTS.lock().unwrap();
+            // let mut private = PRIVATE_OBJECTS.lock().unwrap();
+            // let mut remset = REMSET_OBJECTS.lock().unwrap();
+            // let stack_slots = STACK_ROOTS.lock().unwrap();
+            // let mut stack_slots_sanity = STACK_ROOTS_SANITY.lock().unwrap();
+
+            // println!(
+            //     "{} vs {} at the end of a global GC",
+            //     self.common
+            //         .base
+            //         .global_state
+            //         .global_objects_count
+            //         .load(Ordering::Acquire),
+            //     self.common
+            //         .base
+            //         .global_state
+            //         .global_objects_precise_count
+            //         .load(Ordering::Acquire)
+            // );
+
+            // println!(
+            //     "{} vs {} at the end of global GC, {} pages freed in local GC, {} vs {}",
+            //     conservative.len(),
+            //     precise.len(),
+            //     PAGES_FREED_IN_LOCAL_GC.load(Ordering::Acquire),
+            //     GLOBAL_ROOTS_COUNTER_CONSERVATIVE.load(Ordering::Acquire),
+            //     GLOBAL_ROOTS_COUNTER.load(Ordering::Acquire)
+            // );
+            // for s in stack_slots.difference(&stack_slots_sanity) {
+            //     println!("local GC stack slot: {:?}", s);
+            // }
+            // for s in stack_slots_sanity.difference(&stack_slots) {
+            //     println!("sanity GC stack slots: {:?}", s);
+            // }
+
+            // for o in remset.difference(&private) {
+            //     println!("private object: {:?} is kept alive", o);
+            // }
+            // if conservative.len() - precise.len() > 10000 {
+            //     use std::fs::OpenOptions;
+
+            //     let mut file = OpenOptions::new()
+            //         .write(true)
+            //         .create(true)
+            //         .truncate(true)
+            //         .open("/home/tianleq/objects-graph.txt")
+            //         .unwrap();
+            //     for v in conservative.iter() {
+            //         use std::io::Write;
+
+            //         file.write_all(format!("{} --> {}\n", v.1, v.0).as_bytes())
+            //             .unwrap();
+            //     }
+            //     {
+            //         let mut file = OpenOptions::new()
+            //             .write(true)
+            //             .create(true)
+            //             .truncate(true)
+            //             .open("/home/tianleq/extra-objects.txt")
+            //             .unwrap();
+            //         let mut extra = OpenOptions::new()
+            //             .write(true)
+            //             .create(true)
+            //             .truncate(true)
+            //             .open("/home/tianleq/unknown.txt")
+            //             .unwrap();
+            //         for v in conservative.iter() {
+            //             use std::io::Write;
+
+            //             use crate::util::metadata::public_bit::is_public;
+            //             if precise.contains_key(v.0) {
+            //                 continue;
+            //             }
+            //             file.write_all(format!("{} --> {}\n", v.1, v.0).as_bytes())
+            //                 .unwrap();
+            //             if !is_public(*v.1) {
+            //                 extra
+            //                     .write_all(format!("{} --> {}\n", v.1, v.0).as_bytes())
+            //                     .unwrap();
+            //             }
+            //         }
+            //     }
+            //     panic!("retention rate too high");
+            // }
+            conservative.clear();
+            // precise.clear();
+            // private.clear();
+            // remset.clear();
+            // GLOBAL_ROOTS_COUNTER.store(0, Ordering::Release);
+            // GLOBAL_ROOTS_COUNTER_CONSERVATIVE.store(0, Ordering::Release);
+            // stack_slots_sanity.clear();
+            self.common()
+                .base
+                .global_state
+                .objects
+                .lock()
+                .unwrap()
+                .clear();
+            self.common
+                .base
+                .global_state
+                .global_objects_count
+                .store(0, Ordering::Release);
+            self.common
+                .base
+                .global_state
+                .global_objects_precise_count
+                .store(0, Ordering::Release);
+
+            // {
+            //     use std::collections::HashSet;
+
+            //     let mut objects = self.immix_space.common().objects.lock().unwrap();
+            //     *objects = HashSet::new();
+            // }
+        }
+
+        {
+            use crate::vm::ActivePlan;
+
+            // At the end of each GC, accumulate allocation bytes in the global varaible.
+            for mutator in VM::VMActivePlan::mutators() {
+                let allocation_bytes = mutator.allocation_bytes;
+                mutator.allocation_bytes = 0;
+                self.common
+                    .base
+                    .global_state
+                    .total_allocation_bytes
+                    .fetch_add(allocation_bytes, Ordering::SeqCst);
+            }
+        }
+        // #[cfg(debug_assertions)]
+        // {
+        //     use crate::policy::{
+        //         immix::{DEBUG_PUBLIC_OBJECT_FORWARDING, DEBUG_PUBLIC_OBJECT_LEFT_IN_PLACE},
+        //         PRIVATE_OBJECTS_IN_PREV_GC,
+        //     };
+
+        //     DEBUG_PUBLIC_OBJECT_FORWARDING.lock().unwrap().clear();
+        //     DEBUG_PUBLIC_OBJECT_LEFT_IN_PLACE.lock().unwrap().clear();
+        //     PRIVATE_OBJECTS_IN_PREV_GC.lock().unwrap().clear();
+        // }
     }
 
     fn current_gc_may_move_object(&self) -> bool {
@@ -274,20 +520,19 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             );
         }
     }
+
     #[cfg(feature = "thread_local_gc")]
     fn get_number_of_reusable_blocks(&self) -> usize {
         self.immix_space.reusable_blocks.len()
     }
 
-    #[cfg(all(feature = "thread_local_gc", feature = "debug_publish_object"))]
-    fn get_object_owner(&self, _object: ObjectReference) -> Option<u32> {
-        if self.immix_space.in_space(_object) {
-            return Some(self.immix_space.get_object_owner(_object));
+    #[cfg(all(feature = "thread_local_gc", debug_assertions))]
+    fn get_object_owner(&self, object: ObjectReference) -> u32 {
+        if self.immix_space.in_space(object) {
+            self.immix_space.get_object_owner(object)
+        } else {
+            self.common.get_los().get_object_owner(object)
         }
-        if self.common.get_los().in_space(_object) {
-            return Some(self.common.get_los().get_object_owner(_object));
-        }
-        None
     }
 
     #[cfg(feature = "debug_publish_object")]
@@ -407,7 +652,7 @@ impl<VM: VMBinding> Immix<VM> {
             ),
             common: CommonPlan::new(plan_args),
             last_gc_was_defrag: AtomicBool::new(false),
-            defrag_mutator: AtomicBool::new(false),
+            defrag_mutator: AtomicUsize::new(0),
         };
 
         immix.verify_side_metadata_sanity();
@@ -417,12 +662,64 @@ impl<VM: VMBinding> Immix<VM> {
 
     /// Schedule a full heap immix collection. This method is used by immix/genimmix/stickyimmix
     /// to schedule a full heap collection. A plan must call set_collection_kind and set_gc_status before this method.
+    pub(crate) fn schedule_immix_public_collection<
+        PlanType: Plan<VM = VM>,
+        Context: GCWorkContext<VM = VM, PlanType = PlanType>,
+    >(
+        plan: &'static PlanType,
+        _immix_space: &ImmixSpace<VM>,
+        scheduler: &GCWorkScheduler<VM>,
+    ) {
+        use crate::plan::immix::gc_work::CreateProcessRemsetWork;
+
+        // Stop mutators
+
+        // #[cfg(debug_assertions)]
+        {
+            use crate::scheduler::thread_local_gc_work::ScheduleExecuteThreadlocalCollectionWork;
+            scheduler.work_buckets[WorkBucketStage::Unconstrained].add(
+                StopMutators::<Context>::new_with_args(ScanStackSemantic::RootsOnly),
+            );
+            #[cfg(debug_assertions)]
+            debug_assert!(plan.base().global_state.objects.lock().unwrap().is_empty());
+            // mutators have not reahced safepoint yet, so one cannot iterate through mutators here
+            // Instead, craete a work packet in Local bucket and do it there. All mutators are guaranteed
+            // to be safe at that point.
+            scheduler.work_buckets[WorkBucketStage::Local]
+                .set_sentinel(Box::new(ScheduleExecuteThreadlocalCollectionWork));
+        }
+
+        // Prepare global/collectors/mutators
+        scheduler.work_buckets[WorkBucketStage::Prepare].add(Prepare::<Context>::new(plan));
+        // Scan thread-local remember set
+        // cannnot create now as the remember set has not been updated yet
+        scheduler.work_buckets[WorkBucketStage::Prepare]
+            .add(CreateProcessRemsetWork::<VM, Self>::new());
+
+        #[cfg(debug_assertions)]
+        {
+            use crate::scheduler::single_thread_gc_work::STTrace;
+            // The following is for debug purpose
+            scheduler.work_buckets[WorkBucketStage::SecondRoots].add(STTrace::<
+                VM,
+                Self,
+                { crate::policy::gc_work::TRACE_KIND_VERIFY_PUBLIC },
+            >::new());
+        }
+
+        // PUblic GC can only release LOS objects
+        // Release global/collectors/mutators
+        scheduler.work_buckets[WorkBucketStage::Release].add(Release::<Context>::new(plan));
+    }
+
+    /// Schedule a full heap immix collection. This method is used by immix/genimmix/stickyimmix
+    /// to schedule a full heap collection. A plan must call set_collection_kind and set_gc_status before this method.
     pub(crate) fn schedule_immix_full_heap_collection<
         PlanType: Plan<VM = VM>,
         FastContext: GCWorkContext<VM = VM, PlanType = PlanType>,
         DefragContext: GCWorkContext<VM = VM, PlanType = PlanType>,
     >(
-        plan: &'static DefragContext::PlanType,
+        plan: &'static PlanType,
         immix_space: &ImmixSpace<VM>,
         scheduler: &GCWorkScheduler<VM>,
     ) {
@@ -441,6 +738,17 @@ impl<VM: VMBinding> Immix<VM> {
             scheduler.schedule_common_work::<DefragContext>(plan);
         } else {
             scheduler.schedule_common_work::<FastContext>(plan);
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            use crate::scheduler::single_thread_gc_work::STTrace;
+            // The following is for debug purpose
+            scheduler.work_buckets[WorkBucketStage::SecondRoots].add(STTrace::<
+                VM,
+                Self,
+                { crate::policy::gc_work::TRACE_KIND_VERIFY },
+            >::new());
         }
     }
 
@@ -476,85 +784,70 @@ impl<VM: VMBinding> Immix<VM> {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    pub(crate) fn schedule_and_do_immix_thread_local_collection<
-        PlanType: Plan<VM = VM>,
-        FastContext: 'static + GCWorkContext<VM = VM, PlanType = PlanType>,
-        DefragContext: 'static + GCWorkContext<VM = VM, PlanType = PlanType>,
-    >(
+    fn do_immix_thread_local_collection_impl<PlanType: Plan<VM = VM>, const KIND: TraceKind>(
         tls: VMMutatorThread,
         plan: &'static PlanType,
-        _immix_space: &ImmixSpace<VM>,
         mmtk: &'static crate::MMTK<VM>,
     ) {
-        use crate::policy::immix::{TRACE_THREAD_LOCAL_COPY, TRACE_THREAD_LOCAL_FAST};
         use crate::scheduler::thread_local_gc_work::{
             EndOfThreadLocalGC, PlanThreadlocalObjectGraphTraversalClosure, ScanMutator,
             ThreadlocalFinalization, ThreadlocalRelease,
         };
 
-        #[cfg(not(feature = "thread_local_gc_copying"))]
-        let in_defrag = false;
-        #[cfg(feature = "thread_local_gc_copying")]
-        let in_defrag = true;
-
-        if in_defrag {
-            // Prepare global/collectors/mutators
-            ThreadlocalPrepare::<VM>::new(tls).execute();
-
-            //Scan mutator
-            ScanMutator::<
-                VM,
-                PlanThreadlocalObjectGraphTraversalClosure<VM, Immix<VM>, TRACE_THREAD_LOCAL_COPY>,
-            >::new(tls, mmtk, None)
-            .execute();
-
-            // Finalization has to be done before Release as it may resurrect objects
-            if !*plan.base().options.no_finalizer {
-                // finalization
-                ThreadlocalFinalization::<
-                    VM,
-                    PlanThreadlocalObjectGraphTraversalClosure<
-                        VM,
-                        Immix<VM>,
-                        TRACE_THREAD_LOCAL_COPY,
-                    >,
-                >::new(tls, mmtk)
-                .do_finalization();
+        #[cfg(debug_assertions)]
+        {
+            use crate::policy::immix::TRACE_KIND_THREAD_LOCAL_COPY;
+            #[cfg(not(feature = "thread_local_gc_copying"))]
+            {
+                use crate::policy::immix::TRACE_KIND_THREAD_LOCAL_COPY;
+                debug_assert_eq!(KIND, TRACE_KIND_THREAD_LOCAL_FAST);
             }
 
-            ThreadlocalRelease::<VM>::new(tls).execute();
-            let mut end_of_thread_local_gc = EndOfThreadLocalGC { _tls: tls };
-
-            end_of_thread_local_gc.execute(mmtk);
-        } else {
-            // Prepare global/collectors/mutators
-            ThreadlocalPrepare::<VM>::new(tls).execute();
-
-            //Scan mutator
-            ScanMutator::<
-                VM,
-                PlanThreadlocalObjectGraphTraversalClosure<VM, Immix<VM>, TRACE_THREAD_LOCAL_FAST>,
-            >::new(tls, mmtk, None)
-            .execute();
-
-            // Finalization and then do release
-            if !*plan.base().options.no_finalizer {
-                // finalization
-                ThreadlocalFinalization::<
-                    VM,
-                    PlanThreadlocalObjectGraphTraversalClosure<
-                        VM,
-                        Immix<VM>,
-                        TRACE_THREAD_LOCAL_FAST,
-                    >,
-                >::new(tls, mmtk)
-                .do_finalization();
-            }
-            ThreadlocalRelease::<VM>::new(tls).execute();
-            let mut end_of_thread_local_gc = EndOfThreadLocalGC { _tls: tls };
-
-            end_of_thread_local_gc.execute(mmtk);
+            #[cfg(feature = "thread_local_gc_copying")]
+            debug_assert!(KIND == TRACE_KIND_THREAD_LOCAL_COPY);
         }
+
+        {
+            use crate::{policy::immix::line::Line, vm::ActivePlan};
+
+            let plan = mmtk
+                .get_plan()
+                .downcast_ref::<crate::plan::immix::Immix<VM>>()
+                .unwrap();
+            let mutator = VM::VMActivePlan::mutator(tls);
+            let line_mark_state = plan.immix_space.line_mark_state.load(Ordering::SeqCst);
+            mutator.state = if 1 + line_mark_state > Line::MAX_MARK_STATE {
+                Line::RESET_MARK_STATE
+            } else {
+                1 + line_mark_state
+            };
+        }
+
+        // Prepare global/collectors/mutators
+        ThreadlocalPrepare::<VM>::new(tls).execute();
+
+        //Scan mutator
+        ScanMutator::<
+            VM,
+            PlanThreadlocalObjectGraphTraversalClosure<VM, Immix<VM>, KIND>,
+            KIND,
+        >::new(tls, mmtk, None)
+        .execute();
+
+        // Finalization has to be done before Release as it may resurrect objects
+        if !*plan.base().options.no_finalizer {
+            // finalization
+            ThreadlocalFinalization::<
+                VM,
+                PlanThreadlocalObjectGraphTraversalClosure<VM, Immix<VM>, KIND>,
+            >::new(tls, mmtk)
+            .do_finalization();
+        }
+
+        ThreadlocalRelease::<VM>::new(tls).execute();
+        let mut end_of_thread_local_gc = EndOfThreadLocalGC { _tls: tls };
+
+        end_of_thread_local_gc.execute(mmtk);
     }
 }
 
@@ -584,37 +877,11 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for Immix<VM> {
         )
     }
 
-    #[cfg(not(feature = "debug_publish_object"))]
-    fn thread_local_trace_object<const KIND: crate::policy::gc_work::TraceKind>(
-        &self,
-        mutator: &mut Mutator<VM>,
-        object: ObjectReference,
-        worker: Option<*mut GCWorker<VM>>,
-    ) -> ThreadlocalTracedObjectType {
-        if self.immix_space.in_space(object) {
-            return <ImmixSpace<VM> as PolicyThreadlocalTraceObject<VM>>::thread_local_trace_object::<
-                KIND,
-            >(
-                &self.immix_space,
-                mutator,
-                object,
-                worker,
-                Some(CopySemantics::DefaultCopy),
-            );
-        }
-        <CommonPlan<VM> as PlanThreadlocalTraceObject<VM>>::thread_local_trace_object::<KIND>(
-            &self.common,
-            mutator,
-            object,
-            worker,
-        )
-    }
-
-    #[cfg(feature = "debug_publish_object")]
     fn thread_local_trace_object<const KIND: crate::policy::gc_work::TraceKind>(
         &self,
         mutator: &mut Mutator<VM>,
         source: ObjectReference,
+        slot: Option<VM::VMSlot>,
         object: ObjectReference,
         worker: Option<*mut GCWorker<VM>>,
     ) -> ThreadlocalTracedObjectType {
@@ -625,6 +892,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for Immix<VM> {
                 &self.immix_space,
                 mutator,
                 source,
+                slot,
                 object,
                 worker,
                 Some(CopySemantics::DefaultCopy),
@@ -634,6 +902,7 @@ impl<VM: VMBinding> PlanThreadlocalTraceObject<VM> for Immix<VM> {
             &self.common,
             mutator,
             source,
+            slot,
             object,
             worker,
         )

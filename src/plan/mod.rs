@@ -29,6 +29,8 @@ pub use global::Plan;
 pub(crate) use global::PlanTraceObject;
 #[cfg(feature = "thread_local_gc")]
 pub(crate) use global::{PlanThreadlocalTraceObject, ThreadlocalTracedObjectType};
+#[cfg(feature = "thread_local_gc")]
+pub(crate) use immix::gc_work::CollectMutatorRoots;
 
 mod mutator_context;
 pub use mutator_context::Mutator;
@@ -39,6 +41,7 @@ pub use plan_constraints::PlanConstraints;
 pub(crate) use plan_constraints::DEFAULT_PLAN_CONSTRAINTS;
 
 mod tracing;
+pub(crate) use tracing::SlotIterator;
 pub use tracing::{ObjectQueue, ObjectsClosure, VectorObjectQueue, VectorQueue};
 
 #[cfg(feature = "public_bit")]
@@ -51,7 +54,7 @@ mod sticky;
 
 mod compressor;
 mod concurrent;
-mod immix;
+pub(crate) mod immix;
 mod markcompact;
 mod marksweep;
 mod nogc;

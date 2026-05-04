@@ -202,41 +202,44 @@ impl<VM: VMBinding> LargeObjectAllocator<VM> {
 
     #[cfg(feature = "thread_local_gc")]
     pub fn release(&mut self) {
+        // Now it is a public GC, since all private objects are conservatively treated as alive
+        // nothing can be released (public objects have already been moved to the global treadmill)
+
         // This is a global gc, needs to remove dead objects from local los objects set
-        use crate::policy::sft::SFT;
-        let mut live_objects = vec![];
-        for object in self.local_los_objects.drain() {
-            debug_assert!(
-                !crate::util::metadata::public_bit::is_public(object),
-                "Public Object:{:?} found in local los set of mutator: {:?}",
-                object,
-                self.tls
-            );
+        // use crate::policy::sft::SFT;
+        // let mut live_objects = vec![];
+        // for object in self.local_los_objects.drain() {
+        //     debug_assert!(
+        //         !crate::util::metadata::public_bit::is_public(object),
+        //         "Public Object:{:?} found in local los set of mutator: {:?}",
+        //         object,
+        //         self.tls
+        //     );
 
-            if self.space.is_live(object) {
-                live_objects.push(object);
-            } else {
-                // local/private objects also need to be reclaimed in a global gc
+        //     if self.space.is_live(object) {
+        //         live_objects.push(object);
+        //     } else {
+        //         // local/private objects also need to be reclaimed in a global gc
 
-                self.space.thread_local_sweep_large_object(object);
-                #[cfg(feature = "debug_thread_local_gc_copying")]
-                {
-                    use crate::util::GLOBAL_GC_STATISTICS;
-                    use crate::vm::ObjectModel;
+        //         self.space.thread_local_sweep_large_object(object);
+        //         #[cfg(feature = "debug_thread_local_gc_copying")]
+        //         {
+        //             use crate::util::GLOBAL_GC_STATISTICS;
+        //             use crate::vm::ObjectModel;
 
-                    let size = VM::VMObjectModel::get_current_size(object);
-                    let maxbytes = allocator::get_maximum_aligned_size::<VM>(
-                        size,
-                        crate::util::constants::BYTES_IN_WORD,
-                    );
-                    let pages = crate::util::conversions::bytes_to_pages_up(maxbytes);
+        //             let size = VM::VMObjectModel::get_current_size(object);
+        //             let maxbytes = allocator::get_maximum_aligned_size::<VM>(
+        //                 size,
+        //                 crate::util::constants::BYTES_IN_WORD,
+        //             );
+        //             let pages = crate::util::conversions::bytes_to_pages_up(maxbytes);
 
-                    let mut guard = GLOBAL_GC_STATISTICS.lock().unwrap();
-                    guard.number_of_los_pages -= pages;
-                }
-            }
-        }
-        self.local_los_objects.extend(live_objects);
+        //             let mut guard = GLOBAL_GC_STATISTICS.lock().unwrap();
+        //             guard.number_of_los_pages -= pages;
+        //         }
+        //     }
+        // }
+        // self.local_los_objects.extend(live_objects);
     }
 
     #[cfg(feature = "thread_local_gc")]

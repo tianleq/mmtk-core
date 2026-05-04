@@ -723,6 +723,13 @@ impl ObjectReference {
     pub fn is_sane(self) -> bool {
         unsafe { SFT_MAP.get_unchecked(self.to_raw_address()) }.is_sane()
     }
+
+    pub fn iterate_fields<VM: VMBinding, F: FnMut(Option<ObjectReference>, VM::VMSlot)>(
+        self,
+        f: F,
+    ) {
+        crate::plan::SlotIterator::<VM>::iterate_fields(self, super::VMThread::UNINITIALIZED, f)
+    }
 }
 
 /// allows print Address as upper-case hex value

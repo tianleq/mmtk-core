@@ -2,12 +2,11 @@ use atomic::Ordering;
 
 use crate::policy::sft::SFT;
 use crate::policy::space::{CommonSpace, Space};
-use crate::util::address::Address;
 use crate::util::heap::{MonotonePageResource, PageResource};
 use crate::util::metadata::mark_bit::MarkState;
 
 use crate::util::object_enum::{self, ObjectEnumerator};
-use crate::util::{metadata, ObjectReference};
+use crate::util::{metadata, Address, ObjectReference};
 
 #[cfg(feature = "thread_local_gc")]
 use crate::plan::ThreadlocalTracedObjectType;
@@ -144,6 +143,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmortalSp
     fn trace_object<Q: ObjectQueue, const KIND: crate::policy::gc_work::TraceKind>(
         &self,
         queue: &mut Q,
+        _soruce: ObjectReference,
         object: ObjectReference,
         _copy: Option<CopySemantics>,
         _worker: &mut GCWorker<VM>,
@@ -157,27 +157,16 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmortalSp
 
 #[cfg(feature = "thread_local_gc")]
 impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for ImmortalSpace<VM> {
-    #[cfg(not(feature = "debug_publish_object"))]
-    fn thread_local_trace_object<const KIND: super::gc_work::TraceKind>(
-        &self,
-        _mutator: &mut crate::Mutator<VM>,
-        object: ObjectReference,
-        _worker: Option<*mut GCWorker<VM>>,
-        _copy: Option<CopySemantics>,
-    ) -> ThreadlocalTracedObjectType {
-        self.thread_local_trace_object(object)
-    }
-
-    #[cfg(feature = "debug_publish_object")]
     fn thread_local_trace_object<const KIND: super::gc_work::TraceKind>(
         &self,
         _mutator: &mut crate::Mutator<VM>,
         _source: ObjectReference,
+        _slot: Option<VM::VMSlot>,
         object: ObjectReference,
         _worker: Option<*mut GCWorker<VM>>,
         _copy: Option<CopySemantics>,
     ) -> ThreadlocalTracedObjectType {
-        self.thread_local_trace_object(object)
+        self.thread_local_trace_object(_mutator, _source, object)
     }
 
     fn thread_local_may_move_objects<const KIND: super::gc_work::TraceKind>() -> bool {
@@ -252,6 +241,8 @@ impl<VM: VMBinding> ImmortalSpace<VM> {
     #[cfg(feature = "thread_local_gc")]
     pub fn thread_local_trace_object(
         &self,
+        _mutator: &mut crate::Mutator<VM>,
+        _source: ObjectReference,
         object: ObjectReference,
     ) -> ThreadlocalTracedObjectType {
         #[cfg(feature = "vo_bit")]

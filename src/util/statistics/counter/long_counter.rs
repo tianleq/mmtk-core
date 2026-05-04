@@ -73,7 +73,7 @@ impl<T: Diffable> Counter for LongCounter<T> {
             Some(m) => {
                 let mut total = 0;
                 let mut p = !m as usize;
-                while p <= self.stats.get_phase() {
+                while p <= self.stats.get_phase() && p < self.count.len() {
                     total += self.count[p];
                     p += 2;
                 }
@@ -89,7 +89,7 @@ impl<T: Diffable> Counter for LongCounter<T> {
     fn print_min(&self, other: bool) {
         let mut p = !other as usize;
         let mut min = self.count[p];
-        while p < self.stats.get_phase() && p < self.count.len() {
+        while p < self.stats.get_phase() {
             if self.count[p] < min {
                 min = self.count[p];
                 p += 2;

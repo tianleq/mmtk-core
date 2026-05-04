@@ -97,7 +97,7 @@ name = "main"
 harness = false
 
 [features]
-default = ["builtin_env_logger", "log/release_max_level_off", "immortal_as_nonmoving"]
+default = ["builtin_env_logger", "log/release_max_level_off", "immortal_as_nonmoving", "object_pinning"]
 
 # Built-in env_logger.  This feature is enabled by default.
 # The user can disable this default feature to remove `env_logger` from the dependencies.
@@ -176,7 +176,7 @@ thread_local_gc = ["public_bit"]
 thread_local_gc_ibm_style = ["thread_local_gc", "immix_non_moving"]
 
 #Enable ibm style thread local gc
-thread_local_gc_copying = ["thread_local_gc"]
+thread_local_gc_copying = ["thread_local_gc", "object_pinning"]
 
 sparse_immix_block = ["thread_local_gc_copying"]
 

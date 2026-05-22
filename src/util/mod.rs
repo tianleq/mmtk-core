@@ -174,21 +174,21 @@ pub(crate) static GLOBAL_GC_STATISTICS: std::sync::Mutex<GCStatistics> =
     });
 
 pub(crate) static GLOBAL_GC_ID: AtomicU32 = AtomicU32::new(0);
-// pub(crate) static LOS_YIELD: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-// pub(crate) static FREE_BLOCKS_YIELD: std::sync::atomic::AtomicU32 =
-//     std::sync::atomic::AtomicU32::new(0);
-// pub(crate) static REUSABLE_BLOCKS_YIELD: std::sync::atomic::AtomicU32 =
-//     std::sync::atomic::AtomicU32::new(0);
-// pub(crate) static FREE_BLOCKS_YIELD_STATS: std::sync::Mutex<Vec<u32>> =
-//     std::sync::Mutex::new(Vec::new());
-// pub(crate) static REUSABLE_BLOCKS_YIELD_STATS: std::sync::Mutex<Vec<u32>> =
-//     std::sync::Mutex::new(Vec::new());
-// pub(crate) static LOS_YIELD_STATS: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
-// pub(crate) static LIVE_OBJECT_COUNT_IN_GC: std::sync::atomic::AtomicUsize =
-//     std::sync::atomic::AtomicUsize::new(0);
-// pub(crate) static LIVE_BYTES_IN_GC: std::sync::atomic::AtomicUsize =
-//     std::sync::atomic::AtomicUsize::new(0);
-// pub(crate) static PINNED_OBJECT_COUNT_IN_GC: std::sync::atomic::AtomicUsize =
-//     std::sync::atomic::AtomicUsize::new(0);
+pub(crate) static LOS_YIELD: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+pub(crate) static FREE_BLOCKS_YIELD: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+pub(crate) static REUSABLE_BLOCKS_YIELD: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+pub(crate) static FREE_BLOCKS_YIELD_STATS: std::sync::Mutex<Vec<u32>> =
+    std::sync::Mutex::new(Vec::new());
+pub(crate) static REUSABLE_BLOCKS_YIELD_STATS: std::sync::Mutex<Vec<u32>> =
+    std::sync::Mutex::new(Vec::new());
+pub(crate) static LOS_YIELD_STATS: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
+pub(crate) static LIVE_OBJECT_COUNT_IN_GC: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+pub(crate) static LIVE_BYTES_IN_GC: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+pub(crate) static PINNED_OBJECT_COUNT_IN_GC: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
 #[cfg(feature = "thread_local_gc_copying_stats")]
 pub(crate) static GLOBAL_REQUEST_ID: AtomicU32 = AtomicU32::new(0);

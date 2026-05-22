@@ -42,8 +42,6 @@ use crate::util::metadata::side_metadata::SideMetadataContext;
 use crate::util::ObjectReference;
 #[cfg(feature = "thread_local_gc")]
 use crate::util::VMMutatorThread;
-// use crate::util::LIVE_BYTES_IN_GC;
-// use crate::util::PINNED_OBJECT_COUNT_IN_GC;
 use crate::vm::VMBinding;
 #[cfg(feature = "thread_local_gc")]
 use crate::Mutator;
@@ -333,7 +331,9 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             //     GLOBAL_ROOTS_COUNTER_CONSERVATIVE, PAGES_FREED_IN_LOCAL_GC, PRIVATE_OBJECTS,
             // };
 
-            // use crate::util::LIVE_OBJECT_COUNT_IN_GC;
+            use crate::util::{
+                LIVE_BYTES_IN_GC, LIVE_OBJECT_COUNT_IN_GC, PINNED_OBJECT_COUNT_IN_GC,
+            };
 
             crate::policy::OBJECTS_CONSERVATIVE_MAP
                 .lock()
@@ -430,24 +430,24 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             // GLOBAL_ROOTS_COUNTER.store(0, Ordering::Release);
             // GLOBAL_ROOTS_COUNTER_CONSERVATIVE.store(0, Ordering::Release);
             // stack_slots_sanity.clear();
-            // let mut objects = self.common().base.global_state.objects.lock().unwrap();
-            // let c1 = objects.len();
-            // let c2 = LIVE_OBJECT_COUNT_IN_GC.swap(0, Ordering::SeqCst);
-            // println!("count | precise: {}, actual: {}", c1, c2);
-            // println!(
-            //     "bytes | precise: {}, actual: {}",
-            //     self.common
-            //         .base
-            //         .global_state
-            //         .live_objects_bytes_in_sanity
-            //         .swap(0, Ordering::SeqCst),
-            //     LIVE_BYTES_IN_GC.swap(0, Ordering::SeqCst)
-            // );
-            // println!(
-            //     "Pinned Ojbect: {}",
-            //     PINNED_OBJECT_COUNT_IN_GC.swap(0, Ordering::SeqCst)
-            // );
-            // objects.clear();
+            let mut objects = self.common().base.global_state.objects.lock().unwrap();
+            let c1 = objects.len();
+            let c2 = LIVE_OBJECT_COUNT_IN_GC.swap(0, Ordering::SeqCst);
+            println!("count | precise: {}, actual: {}", c1, c2);
+            println!(
+                "bytes | precise: {}, actual: {}",
+                self.common
+                    .base
+                    .global_state
+                    .live_objects_bytes_in_sanity
+                    .swap(0, Ordering::SeqCst),
+                LIVE_BYTES_IN_GC.swap(0, Ordering::SeqCst)
+            );
+            println!(
+                "Pinned Ojbect: {}",
+                PINNED_OBJECT_COUNT_IN_GC.swap(0, Ordering::SeqCst)
+            );
+            objects.clear();
 
             // {
             //     use std::collections::HashSet;

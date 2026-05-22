@@ -189,17 +189,17 @@ impl Stats {
 
     pub fn end_gc(&self) {
         if !self.get_gathering_stats() {
-            // #[cfg(feature = "thread_local_gc_copying")]
-            // {
-            //     // store blocks yield
+            #[cfg(feature = "thread_local_gc_copying")]
+            {
+                // store blocks yield
 
-            //     use crate::util::FREE_BLOCKS_YIELD;
-            //     use crate::util::LOS_YIELD;
-            //     use crate::util::REUSABLE_BLOCKS_YIELD;
-            //     REUSABLE_BLOCKS_YIELD.store(0, Ordering::Relaxed);
-            //     FREE_BLOCKS_YIELD.store(0, Ordering::Relaxed);
-            //     LOS_YIELD.store(0, Ordering::Relaxed);
-            // }
+                use crate::util::FREE_BLOCKS_YIELD;
+                use crate::util::LOS_YIELD;
+                use crate::util::REUSABLE_BLOCKS_YIELD;
+                REUSABLE_BLOCKS_YIELD.store(0, Ordering::Relaxed);
+                FREE_BLOCKS_YIELD.store(0, Ordering::Relaxed);
+                LOS_YIELD.store(0, Ordering::Relaxed);
+            }
             return;
         }
         let counters = self.counters.lock().unwrap();
@@ -207,30 +207,30 @@ impl Stats {
             counter.lock().unwrap().phase_change(self.get_phase());
         }
         self.shared.increment_phase();
-        // #[cfg(feature = "thread_local_gc_copying")]
-        // {
-        //     // store blocks yield
+        #[cfg(feature = "thread_local_gc_copying")]
+        {
+            // store blocks yield
 
-        //     use crate::util::FREE_BLOCKS_YIELD;
-        //     use crate::util::FREE_BLOCKS_YIELD_STATS;
-        //     use crate::util::LOS_YIELD;
-        //     use crate::util::LOS_YIELD_STATS;
-        //     use crate::util::REUSABLE_BLOCKS_YIELD;
-        //     use crate::util::REUSABLE_BLOCKS_YIELD_STATS;
+            use crate::util::FREE_BLOCKS_YIELD;
+            use crate::util::FREE_BLOCKS_YIELD_STATS;
+            use crate::util::LOS_YIELD;
+            use crate::util::LOS_YIELD_STATS;
+            use crate::util::REUSABLE_BLOCKS_YIELD;
+            use crate::util::REUSABLE_BLOCKS_YIELD_STATS;
 
-        //     FREE_BLOCKS_YIELD_STATS
-        //         .lock()
-        //         .unwrap()
-        //         .push(FREE_BLOCKS_YIELD.swap(0, Ordering::Relaxed));
-        //     REUSABLE_BLOCKS_YIELD_STATS
-        //         .lock()
-        //         .unwrap()
-        //         .push(REUSABLE_BLOCKS_YIELD.swap(0, Ordering::Relaxed));
-        //     LOS_YIELD_STATS
-        //         .lock()
-        //         .unwrap()
-        //         .push(LOS_YIELD.swap(0, Ordering::Relaxed));
-        // }
+            FREE_BLOCKS_YIELD_STATS
+                .lock()
+                .unwrap()
+                .push(FREE_BLOCKS_YIELD.swap(0, Ordering::Relaxed));
+            REUSABLE_BLOCKS_YIELD_STATS
+                .lock()
+                .unwrap()
+                .push(REUSABLE_BLOCKS_YIELD.swap(0, Ordering::Relaxed));
+            LOS_YIELD_STATS
+                .lock()
+                .unwrap()
+                .push(LOS_YIELD.swap(0, Ordering::Relaxed));
+        }
     }
 
     #[cfg(feature = "thread_local_gc")]
@@ -325,21 +325,21 @@ impl Stats {
     pub fn stop_all<VM: VMBinding>(&self, mmtk: &'static MMTK<VM>) {
         self.stop_all_counters();
         self.print_stats(mmtk);
-        // #[cfg(feature = "thread_local_gc_copying")]
-        // {
-        //     use crate::util::FREE_BLOCKS_YIELD_STATS;
-        //     use crate::util::LOS_YIELD_STATS;
-        //     use crate::util::REUSABLE_BLOCKS_YIELD_STATS;
-        //     let los = LOS_YIELD_STATS.lock().unwrap();
-        //     let free = FREE_BLOCKS_YIELD_STATS.lock().unwrap();
-        //     let reusable = REUSABLE_BLOCKS_YIELD_STATS.lock().unwrap();
-        //     assert_eq!(los.len(), free.len());
-        //     assert_eq!(reusable.len(), free.len());
-        //     println!("Global GC Yielding");
-        //     for (l, (f, r)) in los.iter().zip(free.iter().zip(reusable.iter())) {
-        //         println!("los: {}, free: {}, reusable: {}", l, f, r);
-        //     }
-        // }
+        #[cfg(feature = "thread_local_gc_copying")]
+        {
+            use crate::util::FREE_BLOCKS_YIELD_STATS;
+            use crate::util::LOS_YIELD_STATS;
+            use crate::util::REUSABLE_BLOCKS_YIELD_STATS;
+            let los = LOS_YIELD_STATS.lock().unwrap();
+            let free = FREE_BLOCKS_YIELD_STATS.lock().unwrap();
+            let reusable = REUSABLE_BLOCKS_YIELD_STATS.lock().unwrap();
+            assert_eq!(los.len(), free.len());
+            assert_eq!(reusable.len(), free.len());
+            println!("Global GC Yielding");
+            for (l, (f, r)) in los.iter().zip(free.iter().zip(reusable.iter())) {
+                println!("los: {}, free: {}, reusable: {}", l, f, r);
+            }
+        }
     }
 
     fn stop_all_counters(&self) {

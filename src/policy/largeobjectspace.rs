@@ -389,13 +389,13 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM>
             unreachable!()
         } else if KIND == TRACE_KIND_THREAD_LOCAL_IN_GC {
             let result = self.thread_local_trace_object(source, slot, object, mutator);
-            // if matches!(result, ThreadlocalTracedObjectType::ToBeScanned(_)) {
-            //     crate::util::LIVE_OBJECT_COUNT_IN_GC.fetch_add(1, Ordering::SeqCst);
-            //     crate::util::LIVE_BYTES_IN_GC.fetch_add(
-            //         VM::VMObjectModel::get_current_size(object),
-            //         Ordering::SeqCst,
-            //     );
-            // }
+            if matches!(result, ThreadlocalTracedObjectType::ToBeScanned(_)) {
+                crate::util::LIVE_OBJECT_COUNT_IN_GC.fetch_add(1, Ordering::SeqCst);
+                crate::util::LIVE_BYTES_IN_GC.fetch_add(
+                    VM::VMObjectModel::get_current_size(object),
+                    Ordering::SeqCst,
+                );
+            }
             result
         } else {
             self.thread_local_trace_object(source, slot, object, mutator)
@@ -561,22 +561,22 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
         match self.trace_object_impl(object) {
             ThreadlocalTracedObjectType::Scanned(_) => (),
             ThreadlocalTracedObjectType::ToBeScanned(object) => {
-                // use crate::{util::LIVE_BYTES_IN_GC, util::LIVE_OBJECT_COUNT_IN_GC};
+                use crate::{util::LIVE_BYTES_IN_GC, util::LIVE_OBJECT_COUNT_IN_GC};
 
-                // #[cfg(debug_assertions)]
-                // {
-                //     use crate::policy::OBJECTS_CONSERVATIVE_MAP;
+                #[cfg(debug_assertions)]
+                {
+                    use crate::policy::OBJECTS_CONSERVATIVE_MAP;
 
-                //     if is_public(object) {
-                //         OBJECTS_CONSERVATIVE_MAP
-                //             .lock()
-                //             .unwrap()
-                //             .insert(object, _source);
-                //     }
-                // }
-                // let size = VM::VMObjectModel::get_current_size(object);
-                // LIVE_OBJECT_COUNT_IN_GC.fetch_add(1, Ordering::SeqCst);
-                // LIVE_BYTES_IN_GC.fetch_add(size, Ordering::SeqCst);
+                    if is_public(object) {
+                        OBJECTS_CONSERVATIVE_MAP
+                            .lock()
+                            .unwrap()
+                            .insert(object, _source);
+                    }
+                }
+                let size = VM::VMObjectModel::get_current_size(object);
+                LIVE_OBJECT_COUNT_IN_GC.fetch_add(1, Ordering::SeqCst);
+                LIVE_BYTES_IN_GC.fetch_add(size, Ordering::SeqCst);
                 queue.enqueue(object)
             }
         }

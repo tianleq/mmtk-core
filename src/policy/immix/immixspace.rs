@@ -415,39 +415,39 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
                     self.trace_object_without_moving(queue, object)
                 };
 
-                // #[cfg(debug_assertions)]
-                // {
-                //     use crate::policy::OBJECTS_CONSERVATIVE_MAP;
-                //     let mut conservative = OBJECTS_CONSERVATIVE_MAP.lock().unwrap();
-                //     if !conservative.contains_key(&object) {
-                //         use crate::util::{LIVE_BYTES_IN_GC, LIVE_OBJECT_COUNT_IN_GC};
+                #[cfg(debug_assertions)]
+                {
+                    use crate::policy::OBJECTS_CONSERVATIVE_MAP;
+                    let mut conservative = OBJECTS_CONSERVATIVE_MAP.lock().unwrap();
+                    if !conservative.contains_key(&object) {
+                        use crate::util::{LIVE_BYTES_IN_GC, LIVE_OBJECT_COUNT_IN_GC};
 
-                //         let size = VM::VMObjectModel::get_current_size(object);
+                        let size = VM::VMObjectModel::get_current_size(object);
 
-                //         LIVE_OBJECT_COUNT_IN_GC.fetch_add(1, Ordering::SeqCst);
-                //         LIVE_BYTES_IN_GC.fetch_add(size, Ordering::SeqCst);
-                //     }
-                //     conservative.entry(object).or_insert(_source);
-                // }
+                        LIVE_OBJECT_COUNT_IN_GC.fetch_add(1, Ordering::SeqCst);
+                        LIVE_BYTES_IN_GC.fetch_add(size, Ordering::SeqCst);
+                    }
+                    conservative.entry(object).or_insert(_source);
+                }
 
                 object
             }
             #[cfg(not(debug_assertions))]
             {
-                // {
-                //     use crate::policy::OBJECTS_CONSERVATIVE_MAP;
-                //     use crate::util::LIVE_BYTES_IN_GC;
-                //     use crate::util::LIVE_OBJECT_COUNT_IN_GC;
-                //     let mut conservative = OBJECTS_CONSERVATIVE_MAP.lock().unwrap();
-                //     if !conservative.contains_key(&object) {
-                //         let size = VM::VMObjectModel::get_current_size(object);
+                {
+                    use crate::policy::OBJECTS_CONSERVATIVE_MAP;
+                    use crate::util::LIVE_BYTES_IN_GC;
+                    use crate::util::LIVE_OBJECT_COUNT_IN_GC;
+                    let mut conservative = OBJECTS_CONSERVATIVE_MAP.lock().unwrap();
+                    if !conservative.contains_key(&object) {
+                        let size = VM::VMObjectModel::get_current_size(object);
 
-                //         LIVE_OBJECT_COUNT_IN_GC.fetch_add(1, Ordering::SeqCst);
-                //         LIVE_BYTES_IN_GC.fetch_add(size, Ordering::SeqCst);
-                //     }
-                //     conservative.entry(object).or_insert(_source);
-                // }
-                // self.trace_object_without_moving(queue, object)
+                        LIVE_OBJECT_COUNT_IN_GC.fetch_add(1, Ordering::SeqCst);
+                        LIVE_BYTES_IN_GC.fetch_add(size, Ordering::SeqCst);
+                    }
+                    conservative.entry(object).or_insert(_source);
+                }
+
                 if Block::containing(object).is_defrag_source() {
                     self.trace_object_with_opportunistic_copy(
                         queue,
@@ -2177,13 +2177,13 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
                     object,
                     _copy.unwrap(),
                 );
-                // if matches!(result, ThreadlocalTracedObjectType::ToBeScanned(_)) {
-                //     crate::util::LIVE_OBJECT_COUNT_IN_GC.fetch_add(1, Ordering::SeqCst);
-                //     crate::util::LIVE_BYTES_IN_GC.fetch_add(
-                //         VM::VMObjectModel::get_current_size(object),
-                //         Ordering::SeqCst,
-                //     );
-                // }
+                if matches!(result, ThreadlocalTracedObjectType::ToBeScanned(_)) {
+                    crate::util::LIVE_OBJECT_COUNT_IN_GC.fetch_add(1, Ordering::SeqCst);
+                    crate::util::LIVE_BYTES_IN_GC.fetch_add(
+                        VM::VMObjectModel::get_current_size(object),
+                        Ordering::SeqCst,
+                    );
+                }
 
                 result
             }

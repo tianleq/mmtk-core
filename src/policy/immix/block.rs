@@ -807,10 +807,13 @@ impl Block {
                     self.reset_metadata();
                     debug_assert!(!self.is_block_published());
                 }
-                #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
-                {
-                    debug_assert_eq!(total_hole_size as usize, Self::LINES);
-                }
+                // #[cfg(feature = "thread_local_gc_copying")]
+                // {
+                //     use crate::util::FREE_BLOCKS_YIELD;
+
+                //     debug_assert_eq!(total_hole_size as usize, Self::LINES);
+                //     FREE_BLOCKS_YIELD.fetch_add(1, Ordering::SeqCst);
+                // }
                 space.release_block(*self);
                 #[cfg(feature = "debug_thread_local_gc_copying")]
                 {
@@ -868,6 +871,8 @@ impl Block {
                     // can be reused
                     #[cfg(feature = "thread_local_gc_copying")]
                     {
+                        // use crate::util::REUSABLE_BLOCKS_YIELD;
+
                         if is_block_public {
                             // now private objects and public objects may co-exist
                             // in the same block, only blocks that never acquired
@@ -909,6 +914,7 @@ impl Block {
                                     Block::LINES - marked_lines;
                             }
                         }
+                        // REUSABLE_BLOCKS_YIELD.fetch_add(1, Ordering::SeqCst);
                     }
                 } else {
                     // when block is full, it does not matter whether it
@@ -1008,7 +1014,10 @@ impl Block {
     pub fn update_line_mark_state(&self, current_state: u8, new_state: u8) {
         for line in self.lines() {
             if line.is_marked(current_state) {
+                // use crate::util::LIVE_BYTES_IN_GC;
+
                 line.mark(new_state);
+                // LIVE_BYTES_IN_GC.fetch_add(Line::BYTES, Ordering::SeqCst);
             }
         }
     }

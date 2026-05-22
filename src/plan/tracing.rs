@@ -301,11 +301,13 @@ impl<VM: crate::vm::VMBinding> PublishObjectClosure<VM> {
                 );
 
                 if VM::VMActivePlan::is_mutator(tls.0) {
-                    // All newly published objects need to pushed into the remset
+                    // All newly published objects need to be pushed into the remset
                     // also pin those objects so that even if the object is still pointed by
                     // some other private object, that private object will never contain
                     // a stale pointer
-                    VM::VMActivePlan::mutator(tls).object_remset.push(object);
+                    VM::VMActivePlan::mutator(tls)
+                        .fresh_public_object_remset
+                        .push(object);
                     crate::memory_manager::pin_object(object);
                 }
 

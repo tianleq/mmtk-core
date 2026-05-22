@@ -34,7 +34,9 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
         // Assumption here is objects published by Non-Java thread are globally reachable
         // So only keep track of objects published by Java thread
         if VM::VMActivePlan::is_mutator(self.tls.0) {
-            VM::VMActivePlan::mutator(self.tls).slot_remset.push(source);
+            VM::VMActivePlan::mutator(self.tls)
+                .source_object_remset
+                .push(source);
         } else {
             // This should not be necessary, non-java thread should be part of VM specific roots
             // so all such public objects should be correctly forwarded if necessary
@@ -73,7 +75,7 @@ impl<VM: VMBinding> PublicObjectMarkingBarrierSemantics<VM> {
         // Assumption here is objects published by Non-Java thread are globally reachable
         // So only keep track of objects published by Java thread
         VM::VMActivePlan::mutator(self.tls)
-            .object_remset
+            .fresh_public_object_remset
             .push(value);
 
         // pin the object so that even if this object is still pointed by

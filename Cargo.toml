@@ -279,3 +279,16 @@ marksweep_as_nonmoving = []
 
 # If there are more groups, they should be inserted above this line
 # Group:end
+
+[profile.release]
+opt-level = 0
+debug = true
+split-debuginfo = '...'  # Platform-specific.
+strip = "none"
+debug-assertions = true
+overflow-checks = true
+lto = false
+panic = 'unwind'
+incremental = true
+codegen-units = 256
+rpath = false

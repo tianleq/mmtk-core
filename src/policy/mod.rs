@@ -43,10 +43,8 @@ pub mod vmspace;
 // #[cfg(debug_assertions)]
 // use std::sync::atomic::AtomicUsize;
 
-#[cfg(debug_assertions)]
 use crate::util::ObjectReference;
 
-#[cfg(debug_assertions)]
 lazy_static! {
 //     // pub(crate) static ref GLOBAL_OBJECT_REMSET: std::sync::Mutex<std::collections::HashSet<ObjectReference>> =
 //     //     std::sync::Mutex::new(std::collections::HashSet::new());
@@ -56,7 +54,7 @@ lazy_static! {
 //     //     std::sync::Mutex::new(std::collections::HashSet::new());
 //     // pub(crate) static ref RUNTIME_OBJECT: std::sync::Mutex<std::collections::HashSet<ObjectReference>> =
 //     //     std::sync::Mutex::new(std::collections::HashSet::new());
-    pub(crate) static ref GLOBAL_OBJECTS_CONSERVATIVE: std::sync::Mutex<std::collections::HashMap<ObjectReference, ObjectReference>> =
+    pub(crate) static ref OBJECTS_CONSERVATIVE_MAP: std::sync::Mutex<std::collections::HashMap<ObjectReference, ObjectReference>> =
         std::sync::Mutex::new(std::collections::HashMap::new());
 
 //     // pub(crate) static ref GLOBAL_OBJECTS: std::sync::Mutex<std::collections::HashMap<ObjectReference, ObjectReference>> =

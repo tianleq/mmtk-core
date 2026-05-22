@@ -119,19 +119,22 @@ pub fn immix_mutator_thread_local_prepare<VM: VMBinding>(mutator: &mut Mutator<V
     los_allocator.thread_local_prepare();
 
     // clear the remember set, it will be rebuilt during local GC
-    mutator.slot_remset.clear();
-    // clear the object remset as it is not needed once a local GC rebuild slot remset
-    // objects in the remset can be unpinned now, in the following local GC, slot remset will be rebuilt
-    mutator.object_remset.drain(..).for_each(|object| {
-        debug_assert!(
-            crate::memory_manager::is_pinned(object),
-            "mutator: {},  object: {:?} should be pinned",
-            mutator.mutator_id,
-            object
-        );
-        crate::memory_manager::unpin_object(object);
-    });
-    debug_assert_eq!(mutator.object_remset.len(), 0);
+    mutator.source_object_remset.clear();
+    // clear the public object remset as it is not needed once a local GC rebuilds the source object remset
+    // those public objects in the remset can be unpinned now
+    mutator
+        .fresh_public_object_remset
+        .drain(..)
+        .for_each(|object| {
+            debug_assert!(
+                crate::memory_manager::is_pinned(object),
+                "mutator: {},  object: {:?} should be pinned",
+                mutator.mutator_id,
+                object
+            );
+            crate::memory_manager::unpin_object(object);
+        });
+    debug_assert_eq!(mutator.fresh_public_object_remset.len(), 0);
 }
 
 #[cfg(feature = "thread_local_gc")]

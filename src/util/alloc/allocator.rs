@@ -504,10 +504,23 @@ pub trait Allocator<VM: VMBinding>: Downcast {
                             self.get_thread_local_buffer_granularity(),
                         )
                     };
-                    let _allocation_bytes = self
-                        .get_context()
-                        .state
-                        .increase_allocation_bytes_by(allocated_size);
+                    let _allocation_bytes;
+                    if cfg!(feature = "thread_local_gc_copying") {
+                        if self.should_increase_allocation_bytes() {
+                            _allocation_bytes = self
+                                .get_context()
+                                .state
+                                .increase_allocation_bytes_by(allocated_size);
+                        } else {
+                            _allocation_bytes = 0;
+                        }
+                    } else {
+                        _allocation_bytes = self
+                            .get_context()
+                            .state
+                            .increase_allocation_bytes_by(allocated_size);
+                    }
+
                     {
                         let mutator = VM::VMActivePlan::mutator(VMMutatorThread(self.get_tls()));
                         mutator.allocation_bytes += allocated_size;
@@ -684,6 +697,11 @@ pub trait Allocator<VM: VMBinding>: Downcast {
     #[cfg(feature = "thread_local_gc_copying")]
     fn local_heap_in_pages(&self) -> usize {
         unreachable!();
+    }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    fn should_increase_allocation_bytes(&self) -> bool {
+        true
     }
 }
 

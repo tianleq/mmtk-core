@@ -48,6 +48,7 @@ pub(crate) const TRACE_KIND_DEFRAG: TraceKind = 1;
 pub(crate) const TRACE_KIND_THREAD_LOCAL_FAST: TraceKind = 2;
 pub(crate) const TRACE_KIND_THREAD_LOCAL_COPY: TraceKind = 3;
 pub(crate) const TRACE_KIND_THREAD_LOCAL_DEFRAG: TraceKind = 4;
+pub(crate) const TRACE_KIND_THREAD_LOCAL_IN_GC: TraceKind = 5;
 
 pub struct ImmixSpace<VM: VMBinding> {
     common: CommonSpace<VM>,
@@ -351,27 +352,19 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
                     // // keep track of private object visited during verify trace
                     // PRIVATE_OBJECTS_IN_CURRENT_GC.lock().unwrap().insert(object);
                 }
-                let mut objects = worker.mmtk.state.objects.lock().unwrap();
-                if !objects.contains(&object) {
-                    queue.enqueue(object);
-                    objects.insert(object);
-                    if is_public(object) {
-                        // use crate::policy::GLOBAL_OBJECTS;
-
-                        #[cfg(debug_assertions)]
-                        // GLOBAL_OBJECTS.lock().unwrap().insert(object, _source);
-                        self.common
-                            .global_state
-                            .global_objects_precise_count
-                            .fetch_add(1, Ordering::SeqCst);
-                    } else {
-                        // use crate::policy::PRIVATE_OBJECTS;
-
-                        // PRIVATE_OBJECTS.lock().unwrap().insert(object);
-                    }
-                }
             }
-
+            let mut objects = worker.mmtk.state.objects.lock().unwrap();
+            if !objects.contains(&object) {
+                queue.enqueue(object);
+                objects.insert(object);
+                self.common
+                    .global_state
+                    .live_objects_bytes_in_sanity
+                    .fetch_add(
+                        VM::VMObjectModel::get_current_size(object),
+                        Ordering::SeqCst,
+                    );
+            }
             object
         } else if KIND == TRACE_KIND_VERIFY {
             // #[cfg(debug_assertions)]
@@ -422,27 +415,38 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
                     self.trace_object_without_moving(queue, object)
                 };
 
-                #[cfg(debug_assertions)]
-                {
-                    use crate::policy::GLOBAL_OBJECTS_CONSERVATIVE;
-                    let mut conservative = GLOBAL_OBJECTS_CONSERVATIVE.lock().unwrap();
-                    if !conservative.contains_key(&object) {
-                        self.common
-                            .global_state
-                            .global_objects_count
-                            .fetch_add(1, Ordering::SeqCst);
-                    }
-                    conservative.entry(object).or_insert(_source);
-                    // self.common
-                    //     .global_state
-                    //     .global_objects_count
-                    //     .fetch_add(1, Ordering::SeqCst);
-                }
+                // #[cfg(debug_assertions)]
+                // {
+                //     use crate::policy::OBJECTS_CONSERVATIVE_MAP;
+                //     let mut conservative = OBJECTS_CONSERVATIVE_MAP.lock().unwrap();
+                //     if !conservative.contains_key(&object) {
+                //         use crate::util::{LIVE_BYTES_IN_GC, LIVE_OBJECT_COUNT_IN_GC};
+
+                //         let size = VM::VMObjectModel::get_current_size(object);
+
+                //         LIVE_OBJECT_COUNT_IN_GC.fetch_add(1, Ordering::SeqCst);
+                //         LIVE_BYTES_IN_GC.fetch_add(size, Ordering::SeqCst);
+                //     }
+                //     conservative.entry(object).or_insert(_source);
+                // }
 
                 object
             }
             #[cfg(not(debug_assertions))]
             {
+                // {
+                //     use crate::policy::OBJECTS_CONSERVATIVE_MAP;
+                //     use crate::util::LIVE_BYTES_IN_GC;
+                //     use crate::util::LIVE_OBJECT_COUNT_IN_GC;
+                //     let mut conservative = OBJECTS_CONSERVATIVE_MAP.lock().unwrap();
+                //     if !conservative.contains_key(&object) {
+                //         let size = VM::VMObjectModel::get_current_size(object);
+
+                //         LIVE_OBJECT_COUNT_IN_GC.fetch_add(1, Ordering::SeqCst);
+                //         LIVE_BYTES_IN_GC.fetch_add(size, Ordering::SeqCst);
+                //     }
+                //     conservative.entry(object).or_insert(_source);
+                // }
                 // self.trace_object_without_moving(queue, object)
                 if Block::containing(object).is_defrag_source() {
                     self.trace_object_with_opportunistic_copy(
@@ -2130,7 +2134,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
                 // found a private --> public (root slot will not enter this branch since source == object when it is a root)
                 // slot will never be None here
                 // mutator.slot_remset.push(_slot.unwrap());
-                mutator.slot_remset.push(source);
+                mutator.source_object_remset.push(source);
             }
             return ThreadlocalTracedObjectType::Scanned(object);
         }
@@ -2165,6 +2169,26 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
             }
             #[cfg(not(feature = "thread_local_gc_copying"))]
             unreachable!()
+        } else if KIND == TRACE_KIND_THREAD_LOCAL_IN_GC {
+            #[cfg(feature = "thread_local_gc_copying")]
+            {
+                let result = self.thread_local_trace_object_with_opportunistic_copy(
+                    mutator,
+                    object,
+                    _copy.unwrap(),
+                );
+                // if matches!(result, ThreadlocalTracedObjectType::ToBeScanned(_)) {
+                //     crate::util::LIVE_OBJECT_COUNT_IN_GC.fetch_add(1, Ordering::SeqCst);
+                //     crate::util::LIVE_BYTES_IN_GC.fetch_add(
+                //         VM::VMObjectModel::get_current_size(object),
+                //         Ordering::SeqCst,
+                //     );
+                // }
+
+                result
+            }
+            #[cfg(not(feature = "thread_local_gc_copying"))]
+            unreachable!()
         } else {
             unreachable!()
         }
@@ -2181,7 +2205,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
             #[cfg(debug_assertions)]
             {
                 debug_assert!(self.in_space(object));
-                if KIND == TRACE_KIND_THREAD_LOCAL_COPY {
+                if KIND == TRACE_KIND_THREAD_LOCAL_COPY || KIND == TRACE_KIND_THREAD_LOCAL_IN_GC {
                     // local gc will never mark a public object
                     debug_assert!(!crate::util::metadata::public_bit::is_public(object));
                 } else if KIND == TRACE_KIND_THREAD_LOCAL_DEFRAG {

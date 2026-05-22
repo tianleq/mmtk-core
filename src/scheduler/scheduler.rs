@@ -630,12 +630,11 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                     }
                 }
             }
-            {
-                use std::sync::atomic::Ordering;
-                mmtk.state.is_stress_gc.store(false, Ordering::SeqCst);
-            }
         }
-
+        {
+            use std::sync::atomic::Ordering;
+            mmtk.state.is_stress_gc.store(false, Ordering::SeqCst);
+        }
         mmtk.state
             .set_used_pages_after_last_gc(mmtk.get_plan().get_used_pages());
 

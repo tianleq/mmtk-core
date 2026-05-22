@@ -1102,6 +1102,15 @@ impl<VM: VMBinding> Allocator<VM> for ImmixAllocator<VM> {
     fn alloc_slow_cold(&mut self, size: usize, align: usize, offset: usize) -> Address {
         self.alloc_impl(size, align, offset, false)
     }
+
+    #[cfg(feature = "thread_local_gc_copying")]
+    fn should_increase_allocation_bytes(&self) -> bool {
+        use crate::util::VMMutatorThread;
+
+        debug_assert!(VM::VMActivePlan::is_mutator(self.tls));
+        VM::VMActivePlan::mutator(VMMutatorThread(self.tls)).thread_local_gc_status
+            != crate::scheduler::thread_local_gc_work::THREAD_LOCAL_GC_ACTIVE
+    }
 }
 
 impl<VM: VMBinding> ImmixAllocator<VM> {

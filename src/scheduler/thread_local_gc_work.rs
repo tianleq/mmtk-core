@@ -206,6 +206,7 @@ impl<VM: VMBinding> scheduler::GCWork<VM> for ExecuteThreadlocalCollectionWork {
             mmtk,
             mutator_tls: self.mutator_tls,
             start_time: std::time::Instant::now(),
+            in_stw_gc: true,
         }
         .execute();
         {
@@ -228,6 +229,7 @@ pub struct ExecuteThreadlocalCollection<VM: VMBinding> {
     pub mmtk: &'static MMTK<VM>,
     pub mutator_tls: VMMutatorThread,
     pub start_time: std::time::Instant,
+    pub in_stw_gc: bool,
 }
 
 impl<VM: VMBinding> ExecuteThreadlocalCollection<VM> {
@@ -243,9 +245,15 @@ impl<VM: VMBinding> ExecuteThreadlocalCollection<VM> {
             .gc_trigger
             .policy
             .on_thread_local_gc_start(self.mmtk, mutator);
-        self.mmtk
-            .get_plan()
-            .do_thread_local_collection(self.mutator_tls, self.mmtk);
+        if self.in_stw_gc {
+            self.mmtk
+                .get_plan()
+                .do_thread_local_collection_in_gc(self.mutator_tls, self.mmtk);
+        } else {
+            self.mmtk
+                .get_plan()
+                .do_thread_local_collection(self.mutator_tls, self.mmtk);
+        }
 
         let elapsed = self.start_time.elapsed();
         mutator.thread_local_gc_status = THREAD_LOCAL_GC_INACTIVE;

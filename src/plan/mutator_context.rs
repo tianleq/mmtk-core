@@ -218,9 +218,9 @@ impl<VM: VMBinding> MutatorBuilder<VM> {
             #[cfg(feature = "debug_thread_local_gc_copying")]
             stats: Box::new(crate::util::LocalGCStatistics::default()),
             #[cfg(feature = "thread_local_gc_copying")]
-            slot_remset: Box::new(Vec::new()),
+            source_object_remset: Box::new(Vec::new()),
             #[cfg(feature = "thread_local_gc_copying")]
-            object_remset: Box::new(Vec::new()),
+            fresh_public_object_remset: Box::new(Vec::new()),
             #[cfg(feature = "thread_local_gc_copying")]
             stack_slots: Box::new(Vec::new()),
             allocation_bytes: 0,
@@ -263,12 +263,11 @@ pub struct Mutator<VM: VMBinding> {
     #[cfg(feature = "thread_local_gc_copying")]
     pub(crate) local_allocation_size: usize,
     #[cfg(feature = "thread_local_gc_copying")]
-    // pub(crate) slot_remset: Box<Vec<VM::VMSlot>>,
     #[allow(clippy::box_collection)]
-    pub(crate) slot_remset: Box<Vec<ObjectReference>>,
+    pub(crate) source_object_remset: Box<Vec<ObjectReference>>,
     #[cfg(feature = "thread_local_gc_copying")]
     #[allow(clippy::box_collection)]
-    pub(crate) object_remset: Box<Vec<ObjectReference>>,
+    pub(crate) fresh_public_object_remset: Box<Vec<ObjectReference>>,
     #[cfg(feature = "thread_local_gc_copying")]
     #[allow(clippy::box_collection)]
     pub(crate) stack_slots: Box<Vec<VM::VMSlot>>,

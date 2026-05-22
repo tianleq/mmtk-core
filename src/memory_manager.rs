@@ -1049,7 +1049,7 @@ pub fn mmtk_publish_object<VM: VMBinding>(
         _mmtk_set_public_bit(tls, _mmtk, object);
         if VM::VMActivePlan::is_mutator(tls.0) {
             // Newly published objects need to be pinned and pushed to the remset
-            VM::VMActivePlan::mutator(tls).object_remset.push(object);
+            VM::VMActivePlan::mutator(tls).fresh_public_object_remset.push(object);
             pin_object(object);
         } else {
             use crate::vm::ObjectModel;

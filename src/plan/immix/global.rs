@@ -714,16 +714,16 @@ impl<VM: VMBinding> Immix<VM> {
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(CreateProcessRemsetWork::<VM, Self>::new());
 
-        // #[cfg(debug_assertions)]
-        // {
-        //     use crate::scheduler::single_thread_gc_work::STTrace;
-        //     // The following is for debug purpose
-        //     scheduler.work_buckets[WorkBucketStage::SecondRoots].add(STTrace::<
-        //         VM,
-        //         Self,
-        //         { crate::policy::gc_work::TRACE_KIND_VERIFY_PUBLIC },
-        //     >::new());
-        // }
+        #[cfg(debug_assertions)]
+        {
+            use crate::scheduler::single_thread_gc_work::STTrace;
+            // The following is for debug purpose
+            scheduler.work_buckets[WorkBucketStage::SecondRoots].add(STTrace::<
+                VM,
+                Self,
+                { crate::policy::gc_work::TRACE_KIND_VERIFY_PUBLIC },
+            >::new());
+        }
 
         // PUblic GC can only release LOS objects
         // Release global/collectors/mutators

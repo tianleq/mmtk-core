@@ -707,11 +707,11 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
             let pages = self
                 .pr
                 .release_pages(get_super_page(object.to_object_start::<VM>()));
-            // #[cfg(feature = "thread_local_gc")]
-            // {
-            //     use crate::util::LOS_YIELD;
-            //     LOS_YIELD.fetch_add(pages as u32, Ordering::SeqCst);
-            // }
+            #[cfg(feature = "thread_local_gc")]
+            {
+                use crate::util::LOS_YIELD;
+                LOS_YIELD.fetch_add(pages as u32, Ordering::SeqCst);
+            }
         };
         if sweep_nursery {
             for object in self.treadmill.collect_nursery() {

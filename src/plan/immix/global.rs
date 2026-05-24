@@ -714,7 +714,7 @@ impl<VM: VMBinding> Immix<VM> {
         scheduler.work_buckets[WorkBucketStage::Prepare]
             .add(CreateProcessRemsetWork::<VM, Self>::new());
 
-        #[cfg(debug_assertions)]
+        // #[cfg(debug_assertions)]
         {
             use crate::scheduler::single_thread_gc_work::STTrace;
             // The following is for debug purpose

@@ -279,3 +279,5 @@ marksweep_as_nonmoving = []
 
 # If there are more groups, they should be inserted above this line
 # Group:end
+
+openjdk_debug_build = []

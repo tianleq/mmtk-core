@@ -65,6 +65,9 @@ pub struct GlobalState {
     pub(crate) total_allocation_bytes: AtomicUsize,
     pub(crate) forced_local_gc_counter: AtomicUsize,
     pub(crate) forced_local_marking_counter: AtomicUsize,
+    pub(crate) live_objects: AtomicUsize,
+    pub(crate) live_bytes: AtomicUsize,
+    pub(crate) live_lines: AtomicUsize,
 }
 
 impl GlobalState {
@@ -243,6 +246,9 @@ impl Default for GlobalState {
             total_allocation_bytes: AtomicUsize::new(0),
             forced_local_gc_counter: AtomicUsize::new(0),
             forced_local_marking_counter: AtomicUsize::new(0),
+            live_objects: AtomicUsize::new(0),
+            live_bytes: AtomicUsize::new(0),
+            live_lines: AtomicUsize::new(0),
         }
     }
 }

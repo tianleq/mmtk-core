@@ -440,15 +440,25 @@ impl<VM: VMBinding> GCTriggerPolicy<VM> for FixedHeapSizeTrigger {
         #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
         {
             use crate::policy::immix::GLOBAL_BLOCK_SET;
-            crate::util::GLOBAL_GC_ID.fetch_add(1, Ordering::SeqCst);
             GLOBAL_BLOCK_SET.lock().unwrap().clear();
 
             // PAGES_FREED_IN_LOCAL_GC.store(0, Ordering::Release);
         }
+        crate::util::GLOBAL_GC_ID.fetch_add(1, Ordering::SeqCst);
         {
             if _mmtk.state.is_stress_gc.load(Ordering::SeqCst) {
                 _mmtk.state.stress_gc_id.fetch_add(1, Ordering::SeqCst);
             }
+        }
+
+        {
+            crate::policy::immix::IMMIX_OBJECT_INFO_LIST
+                .lock()
+                .unwrap()
+                .clear();
+            _mmtk.state.live_objects.store(0, Ordering::Release);
+            _mmtk.state.live_bytes.store(0, Ordering::Release);
+            _mmtk.state.live_lines.store(0, Ordering::Release);
         }
     }
 

@@ -1,6 +1,7 @@
 use super::defrag::Histogram;
 use super::line::Line;
 use super::ImmixSpace;
+use crate::policy::immix::BlockDetailInfo;
 use crate::util::constants::*;
 use crate::util::heap::blockpageresource::BlockPool;
 use crate::util::heap::chunk_map::Chunk;
@@ -446,6 +447,7 @@ impl Block {
         mark_histogram: &mut Histogram,
         local_line_mark_state: u8,
         global_line_mark_state: u8,
+        in_gc: bool,
     ) -> bool {
         if super::BLOCK_ONLY {
             match self.get_state() {
@@ -473,7 +475,10 @@ impl Block {
                 _ => unreachable!(),
             }
         } else {
+            assert_ne!(local_line_mark_state, global_line_mark_state);
             // Calculate number of marked lines and holes.
+
+            use crate::policy::immix::BLOCK_DETAIL_INFO_LIST;
             let mut marked_lines = 0;
             let mut holes = 0;
             let mut prev_line_is_marked = true;
@@ -485,8 +490,11 @@ impl Block {
 
             #[cfg(debug_assertions)]
             let mut private_lines_marked: u8 = 0;
-
-            for line in self.lines() {
+            let mut detail_info = BlockDetailInfo {
+                block: *self,
+                free: [true; 128],
+            };
+            for (idx, line) in self.lines().enumerate() {
                 #[cfg(debug_assertions)]
                 {
                     #[cfg(feature = "thread_local_gc_copying")]
@@ -549,6 +557,7 @@ impl Block {
                     {
                         private_lines_marked += 1;
                     }
+                    detail_info.free[idx] = false;
                 } else {
                     if prev_line_is_marked {
                         holes += 1;
@@ -572,6 +581,10 @@ impl Block {
 
             if hole_size >= Self::LARGE_HOLE_THRESHOLD {
                 total_hole_size += hole_size;
+            }
+            if in_gc {
+                let mut info = BLOCK_DETAIL_INFO_LIST.lock().unwrap();
+                info.push(detail_info);
             }
 
             if marked_lines == 0 {
@@ -735,8 +748,13 @@ impl Block {
             #[cfg(feature = "thread_local_gc_copying")]
             let mut private_line_marked = false;
 
-            for line in self.lines() {
+            let mut detail_info = BlockDetailInfo {
+                block: *self,
+                free: [true; 128],
+            };
+            for (line_idx, line) in self.lines().enumerate() {
                 if line.is_marked(line_mark_state) {
+                    detail_info.free[line_idx] = false;
                     marked_lines += 1;
                     prev_line_is_marked = true;
 
@@ -784,7 +802,7 @@ impl Block {
                     if let MetadataSpec::OnSide(side) = *VM::VMObjectModel::LOCAL_PINNING_BIT_SPEC {
                         side.bzero_metadata(line.start(), Line::BYTES);
                     }
-
+                    crate::util::memory::set(line.start(), 0xAB, Line::BYTES);
                     prev_line_is_marked = false;
                 }
             }
@@ -794,8 +812,10 @@ impl Block {
                     total_hole_size += hole_size;
                 }
                 // total_hole_size = std::cmp::max(total_hole_size, hole_size);
+                let mut detail_info_list = super::BLOCK_DETAIL_INFO_LIST.lock().unwrap();
+                detail_info_list.push(detail_info);
             }
-
+            let mut info = super::BLOCK_UTILIZATION_INFO_LIST.lock().unwrap();
             if marked_lines == 0 {
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_region_swept::<VM, _>(self, false);
@@ -806,6 +826,13 @@ impl Block {
                     self.clear_owner();
                     self.reset_metadata();
                     debug_assert!(!self.is_block_published());
+
+                    info.push(crate::policy::immix::BlockUtilizationInfo {
+                        block: *self,
+                        holes: 1,
+                        free: Self::LINES as u8,
+                        occuppied: 0,
+                    });
                 }
                 #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
                 {
@@ -910,6 +937,12 @@ impl Block {
                             }
                         }
                     }
+                    info.push(super::BlockUtilizationInfo {
+                        block: *self,
+                        holes: holes as u8,
+                        free: (Block::LINES - marked_lines) as u8,
+                        occuppied: marked_lines as u8,
+                    });
                 } else {
                     // when block is full, it does not matter whether it
                     // coantains a mix of private and public objects
@@ -918,7 +951,12 @@ impl Block {
                     // two cases:
                     // 1. block is allocated by collector and contains public object only (block will not be visible until next global gc)
                     // 2. block is dirty, which means it contains a mix of public and private object (block is visible during local and global gc)
-
+                    info.push(super::BlockUtilizationInfo {
+                        block: *self,
+                        holes: 0,
+                        free: 0,
+                        occuppied: marked_lines as u8,
+                    });
                     // Clear mark state.
                     self.set_state(BlockState::Unmarked);
                 }

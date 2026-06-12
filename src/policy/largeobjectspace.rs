@@ -8,6 +8,8 @@ use crate::policy::gc_work::TRACE_KIND_PUBLIC;
 use crate::policy::gc_work::TRACE_KIND_UPDATE;
 use crate::policy::gc_work::TRACE_KIND_VERIFY;
 use crate::policy::gc_work::TRACE_KIND_VERIFY_PUBLIC;
+#[cfg(feature = "thread_local_gc")]
+use crate::policy::immix::TRACE_KIND_THREAD_LOCAL_IN_GLOBAL_GC;
 use crate::policy::sft::GCWorkerMutRef;
 use crate::policy::sft::SFT;
 use crate::policy::space::{CommonSpace, Space};
@@ -390,7 +392,24 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM>
             #[cfg(not(feature = "thread_local_gc_copying"))]
             unreachable!()
         } else {
-            self.thread_local_trace_object(source, slot, object, mutator)
+            let result = self.thread_local_trace_object(source, slot, object, mutator);
+            match result {
+                ThreadlocalTracedObjectType::Scanned(_) => (),
+                ThreadlocalTracedObjectType::ToBeScanned(o) => {
+                    if KIND == TRACE_KIND_THREAD_LOCAL_IN_GLOBAL_GC {
+                        self.common()
+                            .global_state
+                            .live_objects
+                            .fetch_add(1, Ordering::SeqCst);
+                        self.common()
+                            .global_state
+                            .live_bytes
+                            .fetch_add(VM::VMObjectModel::get_current_size(o), Ordering::SeqCst);
+                    }
+                }
+            }
+
+            result
         }
     }
 
@@ -608,7 +627,14 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
                     VM::VMObjectModel::GLOBAL_LOG_BIT_SPEC
                         .mark_as_unlogged::<VM>(object, Ordering::SeqCst);
                 }
-
+                self.common()
+                    .global_state
+                    .live_objects
+                    .fetch_add(1, Ordering::SeqCst);
+                self.common().global_state.live_bytes.fetch_add(
+                    VM::VMObjectModel::get_current_size(object),
+                    Ordering::SeqCst,
+                );
                 // queue.enqueue(object);
                 return ThreadlocalTracedObjectType::ToBeScanned(object);
             } else {

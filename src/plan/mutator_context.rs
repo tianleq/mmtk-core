@@ -93,7 +93,7 @@ pub struct MutatorConfig<VM: VMBinding> {
     pub thread_local_prepare_func: &'static (dyn Fn(&mut Mutator<VM>) + Send + Sync),
     #[cfg(feature = "thread_local_gc")]
     /// Plan-specific code for mutator thread_local_release. 
-    pub thread_local_release_func: &'static (dyn Fn(&mut Mutator<VM>) + Send + Sync),
+    pub thread_local_release_func: &'static (dyn Fn(&mut Mutator<VM>, bool) + Send + Sync),
     #[cfg(feature = "thread_local_gc_copying")]
     /// Plan-specific code for mutator thread-local copy alloc. 
     pub thread_local_alloc_copy_func: ThreadlocalAllocCopyFn<VM>,
@@ -451,8 +451,8 @@ impl<VM: VMBinding> MutatorContext<VM> for Mutator<VM> {
     }
 
     #[cfg(feature = "thread_local_gc")]
-    fn thread_local_release(&mut self) {
-        (*self.config.thread_local_release_func)(self)
+    fn thread_local_release(&mut self, in_gc: bool) {
+        (*self.config.thread_local_release_func)(self, in_gc)
     }
 }
 
@@ -777,7 +777,7 @@ pub trait MutatorContext<VM: VMBinding>: Send + 'static {
     fn thread_local_prepare(&mut self);
 
     #[cfg(feature = "thread_local_gc")]
-    fn thread_local_release(&mut self);
+    fn thread_local_release(&mut self, in_gc: bool);
 }
 
 /// This is used for plans to indicate the number of allocators reserved for the plan.
@@ -984,7 +984,7 @@ pub(crate) fn create_space_mapping<VM: VMBinding>(
 pub fn generic_thread_local_prepare<VM: VMBinding>(_mutator: &mut Mutator<VM>) {}
 
 #[cfg(feature = "thread_local_gc")]
-pub fn generic_thread_local_release<VM: VMBinding>(_mutator: &mut Mutator<VM>) {}
+pub fn generic_thread_local_release<VM: VMBinding>(_mutator: &mut Mutator<VM>, _: bool) {}
 
 #[cfg(feature = "thread_local_gc_copying")]
 pub fn generic_thread_local_alloc_copy<VM: VMBinding>(

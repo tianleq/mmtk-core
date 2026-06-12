@@ -20,6 +20,7 @@ use crate::policy::gc_work::TRACE_KIND_PUBLIC;
 #[cfg(feature = "thread_local_gc")]
 use crate::policy::immix::block::Block;
 use crate::policy::immix::ImmixSpaceArgs;
+use crate::policy::immix::IMMIX_OBJECT_INFO_LIST;
 #[cfg(not(feature = "thread_local_gc"))]
 use crate::policy::immix::{TRACE_KIND_DEFRAG, TRACE_KIND_FAST};
 use crate::policy::space::Space;
@@ -36,16 +37,19 @@ use crate::util::alloc::allocators::AllocatorSelector;
 use crate::util::copy::*;
 use crate::util::heap::gc_trigger::SpaceStats;
 use crate::util::heap::VMRequest;
+use crate::util::linear_scan::Region;
 use crate::util::metadata::log_bit::UnlogBitsOperation;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 #[cfg(any(feature = "debug_publish_object", feature = "thread_local_gc"))]
 use crate::util::ObjectReference;
 #[cfg(feature = "thread_local_gc")]
 use crate::util::VMMutatorThread;
+use crate::util::GLOBAL_GC_ID;
 use crate::vm::VMBinding;
 #[cfg(feature = "thread_local_gc")]
 use crate::Mutator;
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
+use std::io::Write;
 use std::sync::atomic::AtomicBool;
 
 use atomic::Ordering;
@@ -152,6 +156,19 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             Immix<VM>,
             ImmixGCWorkContext<VM, TRACE_KIND_PUBLIC>,
         >(self, &self.immix_space, scheduler);
+    }
+
+    #[cfg(feature = "thread_local_gc")]
+    fn force_thread_local_collection(
+        &'static self,
+        tls: VMMutatorThread,
+        mmtk: &'static crate::MMTK<VM>,
+    ) {
+        use crate::policy::immix::TRACE_KIND_THREAD_LOCAL_IN_GLOBAL_GC;
+
+        Self::do_immix_thread_local_collection_impl::<Immix<VM>, TRACE_KIND_THREAD_LOCAL_IN_GLOBAL_GC>(
+            tls, self, mmtk,
+        )
     }
 
     #[cfg(feature = "thread_local_gc")]
@@ -438,6 +455,65 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         }
 
         {
+            let id = GLOBAL_GC_ID.load(Ordering::Relaxed);
+            let mut info = IMMIX_OBJECT_INFO_LIST.lock().unwrap();
+            if id > 30 {
+                {
+                    // print out the log file
+                    let mut file = std::fs::OpenOptions::new()
+                        .write(true)
+                        .create(true)
+                        .truncate(true)
+                        .open(format!("/home/tianleq/stats/immix-object-info-GC-{id}.txt"))
+                        .unwrap();
+                    for v in info.iter() {
+                        file.write_all(
+                            format!(
+                                "{},{},{},{},{},{},{},{},{}\n",
+                                v.from,
+                                v.to,
+                                v.block,
+                                v.len,
+                                v.start_line,
+                                v.end_line,
+                                v.straddle,
+                                v.public,
+                                v.pinned
+                            )
+                            .as_bytes(),
+                        )
+                        .unwrap();
+                    }
+                }
+                {
+                    // print out the log file
+                    let mut file = std::fs::OpenOptions::new()
+                        .write(true)
+                        .create(true)
+                        .truncate(true)
+                        .open(format!(
+                            "/home/tianleq/stats/immix-block-utilization-info-GC-{id}.txt"
+                        ))
+                        .unwrap();
+                    let mut info = crate::policy::immix::BLOCK_DETAIL_INFO_LIST.lock().unwrap();
+
+                    for b in info.iter() {
+                        for (line_idx, line) in b.block.lines().enumerate() {
+                            let status = if b.free[line_idx] { "free" } else { "occupied" };
+                            file.write_all(
+                                format!("{},{},{}\n", b.block.start(), line.start(), status)
+                                    .as_bytes(),
+                            )
+                            .unwrap();
+                        }
+                    }
+                    info.clear();
+                }
+            }
+            info.clear();
+        }
+
+        {
             use crate::vm::ActivePlan;
 
             // At the end of each GC, accumulate allocation bytes in the global varaible.
@@ -450,6 +526,24 @@ impl<VM: VMBinding> Plan for Immix<VM> {
                     .total_allocation_bytes
                     .fetch_add(allocation_bytes, Ordering::SeqCst);
             }
+            println!(
+                "live objects: {}, live bytes: {}, live lines: {}",
+                self.immix_space
+                    .common()
+                    .global_state
+                    .live_objects
+                    .load(Ordering::Acquire),
+                self.immix_space
+                    .common()
+                    .global_state
+                    .live_bytes
+                    .load(Ordering::Acquire),
+                self.immix_space
+                    .common()
+                    .global_state
+                    .live_lines
+                    .load(Ordering::Acquire),
+            );
         }
         // #[cfg(debug_assertions)]
         // {
@@ -789,23 +883,13 @@ impl<VM: VMBinding> Immix<VM> {
         plan: &'static PlanType,
         mmtk: &'static crate::MMTK<VM>,
     ) {
-        use crate::scheduler::thread_local_gc_work::{
-            EndOfThreadLocalGC, PlanThreadlocalObjectGraphTraversalClosure, ScanMutator,
-            ThreadlocalFinalization, ThreadlocalRelease,
+        use crate::{
+            policy::immix::TRACE_KIND_THREAD_LOCAL_IN_GLOBAL_GC,
+            scheduler::thread_local_gc_work::{
+                EndOfThreadLocalGC, PlanThreadlocalObjectGraphTraversalClosure, ScanMutator,
+                ThreadlocalFinalization, ThreadlocalRelease,
+            },
         };
-
-        #[cfg(debug_assertions)]
-        {
-            use crate::policy::immix::TRACE_KIND_THREAD_LOCAL_COPY;
-            #[cfg(not(feature = "thread_local_gc_copying"))]
-            {
-                use crate::policy::immix::TRACE_KIND_THREAD_LOCAL_COPY;
-                debug_assert_eq!(KIND, TRACE_KIND_THREAD_LOCAL_FAST);
-            }
-
-            #[cfg(feature = "thread_local_gc_copying")]
-            debug_assert!(KIND == TRACE_KIND_THREAD_LOCAL_COPY);
-        }
 
         {
             use crate::{policy::immix::line::Line, vm::ActivePlan};
@@ -843,8 +927,12 @@ impl<VM: VMBinding> Immix<VM> {
             >::new(tls, mmtk)
             .do_finalization();
         }
+        if KIND == TRACE_KIND_THREAD_LOCAL_IN_GLOBAL_GC {
+            ThreadlocalRelease::<VM>::new(tls).execute_by_gc_worker();
+        } else {
+            ThreadlocalRelease::<VM>::new(tls).execute();
+        }
 
-        ThreadlocalRelease::<VM>::new(tls).execute();
         let mut end_of_thread_local_gc = EndOfThreadLocalGC { _tls: tls };
 
         end_of_thread_local_gc.execute(mmtk);

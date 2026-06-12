@@ -135,7 +135,7 @@ pub fn immix_mutator_thread_local_prepare<VM: VMBinding>(mutator: &mut Mutator<V
 }
 
 #[cfg(feature = "thread_local_gc")]
-pub fn immix_mutator_thread_local_release<VM: VMBinding>(mutator: &mut Mutator<VM>) {
+pub fn immix_mutator_thread_local_release<VM: VMBinding>(mutator: &mut Mutator<VM>, in_gc: bool) {
     use crate::util::alloc::LargeObjectAllocator;
     let allocators: &mut Allocators<VM> = mutator.allocators.borrow_mut();
 
@@ -145,7 +145,7 @@ pub fn immix_mutator_thread_local_release<VM: VMBinding>(mutator: &mut Mutator<V
     .downcast_mut::<ImmixAllocator<VM>>()
     .unwrap();
     immix_allocator.reset();
-    immix_allocator.thread_local_release();
+    immix_allocator.thread_local_release(in_gc);
     let los_allocator: &mut LargeObjectAllocator<VM> = unsafe {
         allocators.get_allocator_mut(mutator.config.allocator_mapping[AllocationSemantics::Los])
     }

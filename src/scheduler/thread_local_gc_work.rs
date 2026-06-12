@@ -207,7 +207,7 @@ impl<VM: VMBinding> scheduler::GCWork<VM> for ExecuteThreadlocalCollectionWork {
             mutator_tls: self.mutator_tls,
             start_time: std::time::Instant::now(),
         }
-        .execute();
+        .execute_by_gc_worker();
         {
             let plan = mmtk
                 .get_plan()
@@ -231,6 +231,48 @@ pub struct ExecuteThreadlocalCollection<VM: VMBinding> {
 }
 
 impl<VM: VMBinding> ExecuteThreadlocalCollection<VM> {
+    pub fn execute_by_gc_worker(&mut self) {
+        let mutator = VM::VMActivePlan::mutator(self.mutator_tls);
+        mutator.thread_local_gc_status = THREAD_LOCAL_GC_ACTIVE;
+        // record before local GC starts so that evacuation does not increase its value
+        let allocation_bytes = mutator.allocation_bytes;
+        info!(
+            "Start of Thread local GC {:?} in global GC",
+            mutator.mutator_id,
+        );
+
+        // A hook of local gc, no-op at the moment
+        self.mmtk
+            .gc_trigger
+            .policy
+            .on_thread_local_gc_start(self.mmtk, mutator);
+        self.mmtk
+            .get_plan()
+            .force_thread_local_collection(self.mutator_tls, self.mmtk);
+
+        let elapsed = self.start_time.elapsed();
+        mutator.thread_local_gc_status = THREAD_LOCAL_GC_INACTIVE;
+        info!(
+            "End of Thread local GC {} in global GC ({}/{} pages, took {} ms)",
+            mutator.mutator_id,
+            self.mmtk.get_plan().get_reserved_pages(),
+            self.mmtk.get_plan().get_total_pages(),
+            elapsed.as_millis()
+        );
+        self.mmtk
+            .gc_trigger
+            .policy
+            .on_thread_local_gc_end(self.mmtk, mutator);
+        #[cfg(feature = "debug_thread_local_gc_copying")]
+        {
+            mutator.reset_stats();
+        }
+        mutator.local_allocation_size = 0;
+        mutator.allocation_bytes = allocation_bytes;
+        // local gc has finished,
+        ACTIVE_LOCAL_GC_COUNTER.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
     pub fn execute(&mut self) {
         let mutator = VM::VMActivePlan::mutator(self.mutator_tls);
         mutator.thread_local_gc_status = THREAD_LOCAL_GC_ACTIVE;
@@ -340,7 +382,16 @@ impl<VM: VMBinding> ThreadlocalRelease<VM> {
         // self.plan.base().gc_trigger.policy.on_gc_release(mmtk);
 
         trace!("Thread local Release Mutator");
-        mutator.thread_local_release();
+        mutator.thread_local_release(false);
+    }
+
+    pub fn execute_by_gc_worker(&mut self) {
+        trace!("Thread local Release by GC worker");
+        let mutator = VM::VMActivePlan::mutator(self.tls);
+        // self.plan.base().gc_trigger.policy.on_gc_release(mmtk);
+
+        trace!("Thread local Release Mutator by GC worker");
+        mutator.thread_local_release(true);
     }
 }
 

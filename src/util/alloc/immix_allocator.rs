@@ -554,7 +554,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
     #[cfg(feature = "thread_local_gc")]
     /// This is the sweeping blocks work
-    pub fn thread_local_release(&mut self) {
+    pub fn thread_local_release(&mut self, in_gc: bool) {
         #[cfg(feature = "thread_local_gc_copying")]
         {
             self.copy = false;
@@ -589,6 +589,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 mark_hisogram,
                 local_line_mark_state,
                 global_line_mark_state,
+                in_gc,
             ) {
                 // release free blocks for now, may cache those blocks locally
                 #[cfg(debug_assertions)]

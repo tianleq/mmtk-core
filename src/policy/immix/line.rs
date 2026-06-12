@@ -293,4 +293,17 @@ impl Line {
     pub fn get_mark_state(&self) -> u8 {
         unsafe { Self::MARK_TABLE.load::<u8>(self.start()) }
     }
+
+    #[cfg(feature = "thread_local_gc")]
+    pub fn get_lines_occupied_by_object<VM: VMBinding>(object: ObjectReference) -> usize {
+        let start = object.to_object_start::<VM>();
+        let end = start + VM::VMObjectModel::get_current_size(object);
+        let start_line = Line::from_unaligned_address(start);
+        let mut end_line = Line::from_unaligned_address(end);
+        if !Line::is_aligned(end) {
+            end_line = end_line.next();
+        }
+        let iter = RegionIterator::<Line>::new(start_line, end_line);
+        iter.count()
+    }
 }

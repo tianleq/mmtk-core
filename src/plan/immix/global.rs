@@ -457,7 +457,7 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         {
             let id = GLOBAL_GC_ID.load(Ordering::Relaxed);
             let mut info = IMMIX_OBJECT_INFO_LIST.lock().unwrap();
-            if id > 30 {
+            if id > 100 {
                 {
                     // print out the log file
                     let mut file = std::fs::OpenOptions::new()

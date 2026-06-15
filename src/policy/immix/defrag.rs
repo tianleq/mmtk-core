@@ -97,8 +97,8 @@ impl Defrag {
 
     /// Check if the defrag space is exhausted.
     pub fn space_exhausted(&self) -> bool {
-        // self.defrag_space_exhausted.load(Ordering::Acquire)
-        false
+        self.defrag_space_exhausted.load(Ordering::Acquire)
+        // false
     }
 
     /// Update available_clean_pages_for_defrag counter when a clean block is allocated.

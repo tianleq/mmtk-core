@@ -20,7 +20,6 @@ use crate::policy::gc_work::TRACE_KIND_PUBLIC;
 #[cfg(feature = "thread_local_gc")]
 use crate::policy::immix::block::Block;
 use crate::policy::immix::ImmixSpaceArgs;
-use crate::policy::immix::IMMIX_OBJECT_INFO_LIST;
 #[cfg(not(feature = "thread_local_gc"))]
 use crate::policy::immix::{TRACE_KIND_DEFRAG, TRACE_KIND_FAST};
 use crate::policy::space::Space;
@@ -37,19 +36,16 @@ use crate::util::alloc::allocators::AllocatorSelector;
 use crate::util::copy::*;
 use crate::util::heap::gc_trigger::SpaceStats;
 use crate::util::heap::VMRequest;
-use crate::util::linear_scan::Region;
 use crate::util::metadata::log_bit::UnlogBitsOperation;
 use crate::util::metadata::side_metadata::SideMetadataContext;
 #[cfg(any(feature = "debug_publish_object", feature = "thread_local_gc"))]
 use crate::util::ObjectReference;
 #[cfg(feature = "thread_local_gc")]
 use crate::util::VMMutatorThread;
-use crate::util::GLOBAL_GC_ID;
 use crate::vm::VMBinding;
 #[cfg(feature = "thread_local_gc")]
 use crate::Mutator;
 use crate::{policy::immix::ImmixSpace, util::opaque_pointer::VMWorkerThread};
-use std::io::Write;
 use std::sync::atomic::AtomicBool;
 
 use atomic::Ordering;
@@ -454,97 +450,97 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             // }
         }
 
-        {
-            let id = GLOBAL_GC_ID.load(Ordering::Relaxed);
-            let mut info = IMMIX_OBJECT_INFO_LIST.lock().unwrap();
-            if id > 100 {
-                {
-                    // print out the log file
-                    let mut file = std::fs::OpenOptions::new()
-                        .write(true)
-                        .create(true)
-                        .truncate(true)
-                        .open(format!("/home/tianleq/stats/immix-object-info-GC-{id}.txt"))
-                        .unwrap();
-                    for v in info.iter() {
-                        file.write_all(
-                            format!(
-                                "{},{},{},{},{},{},{},{},{}\n",
-                                v.from,
-                                v.to,
-                                v.block,
-                                v.len,
-                                v.start_line,
-                                v.end_line,
-                                v.straddle,
-                                v.public,
-                                v.pinned
-                            )
-                            .as_bytes(),
-                        )
-                        .unwrap();
-                    }
-                }
-                {
-                    // print out the log file
-                    let mut file = std::fs::OpenOptions::new()
-                        .write(true)
-                        .create(true)
-                        .truncate(true)
-                        .open(format!(
-                            "/home/tianleq/stats/immix-block-utilization-info-GC-{id}.txt"
-                        ))
-                        .unwrap();
-                    let mut info = crate::policy::immix::BLOCK_DETAIL_INFO_LIST.lock().unwrap();
+        // {
+        //     let id = crate::util::GLOBAL_GC_ID.load(Ordering::Relaxed);
+        //     let mut info = IMMIX_OBJECT_INFO_LIST.lock().unwrap();
+        //     if id > 100 {
+        //         {
+        //             // print out the log file
+        //             let mut file = std::fs::OpenOptions::new()
+        //                 .write(true)
+        //                 .create(true)
+        //                 .truncate(true)
+        //                 .open(format!("/home/tianleq/stats/immix-object-info-GC-{id}.txt"))
+        //                 .unwrap();
+        //             for v in info.iter() {
+        //                 file.write_all(
+        //                     format!(
+        //                         "{},{},{},{},{},{},{},{},{}\n",
+        //                         v.from,
+        //                         v.to,
+        //                         v.block,
+        //                         v.len,
+        //                         v.start_line,
+        //                         v.end_line,
+        //                         v.straddle,
+        //                         v.public,
+        //                         v.pinned
+        //                     )
+        //                     .as_bytes(),
+        //                 )
+        //                 .unwrap();
+        //             }
+        //         }
+        //         {
+        //             // print out the log file
+        //             let mut file = std::fs::OpenOptions::new()
+        //                 .write(true)
+        //                 .create(true)
+        //                 .truncate(true)
+        //                 .open(format!(
+        //                     "/home/tianleq/stats/immix-block-utilization-info-GC-{id}.txt"
+        //                 ))
+        //                 .unwrap();
+        //             let mut info = crate::policy::immix::BLOCK_DETAIL_INFO_LIST.lock().unwrap();
 
-                    for b in info.iter() {
-                        for (line_idx, line) in b.block.lines().enumerate() {
-                            let status = if b.free[line_idx] { "free" } else { "occupied" };
-                            file.write_all(
-                                format!("{},{},{}\n", b.block.start(), line.start(), status)
-                                    .as_bytes(),
-                            )
-                            .unwrap();
-                        }
-                    }
-                    info.clear();
-                }
-            }
-            info.clear();
-        }
+        //             for b in info.iter() {
+        //                 for (line_idx, line) in b.block.lines().enumerate() {
+        //                     let status = if b.free[line_idx] { "free" } else { "occupied" };
+        //                     file.write_all(
+        //                         format!("{},{},{}\n", b.block.start(), line.start(), status)
+        //                             .as_bytes(),
+        //                     )
+        //                     .unwrap();
+        //                 }
+        //             }
+        //             info.clear();
+        //         }
+        //     }
+        //     info.clear();
+        // }
 
-        {
-            use crate::vm::ActivePlan;
+        // {
+        //     use crate::vm::ActivePlan;
 
-            // At the end of each GC, accumulate allocation bytes in the global varaible.
-            for mutator in VM::VMActivePlan::mutators() {
-                let allocation_bytes = mutator.allocation_bytes;
-                mutator.allocation_bytes = 0;
-                self.common
-                    .base
-                    .global_state
-                    .total_allocation_bytes
-                    .fetch_add(allocation_bytes, Ordering::SeqCst);
-            }
-            println!(
-                "live objects: {}, live bytes: {}, live lines: {}",
-                self.immix_space
-                    .common()
-                    .global_state
-                    .live_objects
-                    .load(Ordering::Acquire),
-                self.immix_space
-                    .common()
-                    .global_state
-                    .live_bytes
-                    .load(Ordering::Acquire),
-                self.immix_space
-                    .common()
-                    .global_state
-                    .live_lines
-                    .load(Ordering::Acquire),
-            );
-        }
+        //     // At the end of each GC, accumulate allocation bytes in the global varaible.
+        //     for mutator in VM::VMActivePlan::mutators() {
+        //         let allocation_bytes = mutator.allocation_bytes;
+        //         mutator.allocation_bytes = 0;
+        //         self.common
+        //             .base
+        //             .global_state
+        //             .total_allocation_bytes
+        //             .fetch_add(allocation_bytes, Ordering::SeqCst);
+        //     }
+        //     println!(
+        //         "live objects: {}, live bytes: {}, live lines: {}",
+        //         self.immix_space
+        //             .common()
+        //             .global_state
+        //             .live_objects
+        //             .load(Ordering::Acquire),
+        //         self.immix_space
+        //             .common()
+        //             .global_state
+        //             .live_bytes
+        //             .load(Ordering::Acquire),
+        //         self.immix_space
+        //             .common()
+        //             .global_state
+        //             .live_lines
+        //             .load(Ordering::Acquire),
+        //     );
+        // }
         // #[cfg(debug_assertions)]
         // {
         //     use crate::policy::{

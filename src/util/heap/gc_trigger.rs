@@ -451,15 +451,15 @@ impl<VM: VMBinding> GCTriggerPolicy<VM> for FixedHeapSizeTrigger {
             }
         }
 
-        {
-            crate::policy::immix::IMMIX_OBJECT_INFO_LIST
-                .lock()
-                .unwrap()
-                .clear();
-            _mmtk.state.live_objects.store(0, Ordering::Release);
-            _mmtk.state.live_bytes.store(0, Ordering::Release);
-            _mmtk.state.live_lines.store(0, Ordering::Release);
-        }
+        // {
+        //     crate::policy::immix::IMMIX_OBJECT_INFO_LIST
+        //         .lock()
+        //         .unwrap()
+        //         .clear();
+        //     _mmtk.state.live_objects.store(0, Ordering::Release);
+        //     _mmtk.state.live_bytes.store(0, Ordering::Release);
+        //     _mmtk.state.live_lines.store(0, Ordering::Release);
+        // }
     }
 
     fn on_gc_end(&self, _mmtk: &'static MMTK<VM>) {

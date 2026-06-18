@@ -8,7 +8,6 @@ use crate::policy::gc_work::{
     TraceKind, DEFAULT_TRACE, TRACE_KIND_PUBLIC, TRACE_KIND_TRANSITIVE_PIN, TRACE_KIND_UPDATE,
     TRACE_KIND_VERIFY, TRACE_KIND_VERIFY_PUBLIC,
 };
-use crate::policy::immix::{ImmixObjectInfo, IMMIX_OBJECT_INFO_LIST};
 use crate::policy::sft::GCWorkerMutRef;
 use crate::policy::sft::SFT;
 use crate::policy::sft_map::SFTMap;
@@ -1083,37 +1082,37 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             } else {
                 block.set_state(BlockState::Marked);
             }
-            {
-                let len = VM::VMObjectModel::get_current_size(object);
-                let from = object.to_object_start::<VM>();
-                let to = from;
-                let start_line = Line::from_unaligned_address(to).start();
-                let end_line = Line::from_unaligned_address(to + len).start();
-                let info = ImmixObjectInfo {
-                    from,
-                    to,
-                    block: block.start(),
-                    len,
-                    start_line,
-                    end_line,
-                    straddle: start_line != end_line,
-                    public: is_public(object),
-                    pinned: crate::memory_manager::is_pinned(object),
-                };
-                IMMIX_OBJECT_INFO_LIST.lock().unwrap().push(info);
-                self.common()
-                    .global_state
-                    .live_objects
-                    .fetch_add(1, Ordering::SeqCst);
-                self.common().global_state.live_bytes.fetch_add(
-                    VM::VMObjectModel::get_current_size(object),
-                    Ordering::SeqCst,
-                );
-                self.common().global_state.live_lines.fetch_add(
-                    Line::get_lines_occupied_by_object::<VM>(object),
-                    Ordering::SeqCst,
-                );
-            }
+            // {
+            //     let len = VM::VMObjectModel::get_current_size(object);
+            //     let from = object.to_object_start::<VM>();
+            //     let to = from;
+            //     let start_line = Line::from_unaligned_address(to).start();
+            //     let end_line = Line::from_unaligned_address(to + len).start();
+            //     let info = ImmixObjectInfo {
+            //         from,
+            //         to,
+            //         block: block.start(),
+            //         len,
+            //         start_line,
+            //         end_line,
+            //         straddle: start_line != end_line,
+            //         public: is_public(object),
+            //         pinned: crate::memory_manager::is_pinned(object),
+            //     };
+            //     IMMIX_OBJECT_INFO_LIST.lock().unwrap().push(info);
+            //     self.common()
+            //         .global_state
+            //         .live_objects
+            //         .fetch_add(1, Ordering::SeqCst);
+            //     self.common().global_state.live_bytes.fetch_add(
+            //         VM::VMObjectModel::get_current_size(object),
+            //         Ordering::SeqCst,
+            //     );
+            //     self.common().global_state.live_lines.fetch_add(
+            //         Line::get_lines_occupied_by_object::<VM>(object),
+            //         Ordering::SeqCst,
+            //     );
+            // }
             // Visit node
             queue.enqueue(object);
             self.unlog_object_if_needed(object);
@@ -1376,38 +1375,38 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             //     Block::containing(object).is_defrag_source(),
             // ));
             // println!("scan new_object: {:?}, object: {:?}", new_object, object);
-            {
-                let len = VM::VMObjectModel::get_current_size(new_object);
-                let from = object.to_object_start::<VM>();
-                let to = new_object.to_object_start::<VM>();
-                let block = Block::from_unaligned_address(to);
-                let start_line = Line::from_unaligned_address(to).start();
-                let end_line = Line::from_unaligned_address(to + len).start();
-                let info = ImmixObjectInfo {
-                    from,
-                    to,
-                    block: block.start(),
-                    len,
-                    start_line,
-                    end_line,
-                    straddle: start_line != end_line,
-                    public: is_public(new_object),
-                    pinned: crate::memory_manager::is_pinned(new_object),
-                };
-                IMMIX_OBJECT_INFO_LIST.lock().unwrap().push(info);
-                self.common()
-                    .global_state
-                    .live_objects
-                    .fetch_add(1, Ordering::SeqCst);
-                self.common().global_state.live_bytes.fetch_add(
-                    VM::VMObjectModel::get_current_size(new_object),
-                    Ordering::SeqCst,
-                );
-                self.common().global_state.live_lines.fetch_add(
-                    Line::get_lines_occupied_by_object::<VM>(new_object),
-                    Ordering::SeqCst,
-                );
-            }
+            // {
+            //     let len = VM::VMObjectModel::get_current_size(new_object);
+            //     let from = object.to_object_start::<VM>();
+            //     let to = new_object.to_object_start::<VM>();
+            //     let block = Block::from_unaligned_address(to);
+            //     let start_line = Line::from_unaligned_address(to).start();
+            //     let end_line = Line::from_unaligned_address(to + len).start();
+            //     let info = ImmixObjectInfo {
+            //         from,
+            //         to,
+            //         block: block.start(),
+            //         len,
+            //         start_line,
+            //         end_line,
+            //         straddle: start_line != end_line,
+            //         public: is_public(new_object),
+            //         pinned: crate::memory_manager::is_pinned(new_object),
+            //     };
+            //     IMMIX_OBJECT_INFO_LIST.lock().unwrap().push(info);
+            //     self.common()
+            //         .global_state
+            //         .live_objects
+            //         .fetch_add(1, Ordering::SeqCst);
+            //     self.common().global_state.live_bytes.fetch_add(
+            //         VM::VMObjectModel::get_current_size(new_object),
+            //         Ordering::SeqCst,
+            //     );
+            //     self.common().global_state.live_lines.fetch_add(
+            //         Line::get_lines_occupied_by_object::<VM>(new_object),
+            //         Ordering::SeqCst,
+            //     );
+            // }
             queue.enqueue(new_object);
             debug_assert!(new_object.is_live());
             self.unlog_object_if_needed(new_object);
@@ -2214,45 +2213,45 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
                     object,
                     _copy.unwrap(),
                 );
-                if KIND == TRACE_KIND_THREAD_LOCAL_IN_GLOBAL_GC {
-                    match result {
-                        ThreadlocalTracedObjectType::Scanned(_) => (),
-                        ThreadlocalTracedObjectType::ToBeScanned(new_object) => {
-                            self.common()
-                                .global_state
-                                .live_objects
-                                .fetch_add(1, Ordering::SeqCst);
+                // if KIND == TRACE_KIND_THREAD_LOCAL_IN_GLOBAL_GC {
+                //     match result {
+                //         ThreadlocalTracedObjectType::Scanned(_) => (),
+                //         ThreadlocalTracedObjectType::ToBeScanned(new_object) => {
+                //             self.common()
+                //                 .global_state
+                //                 .live_objects
+                //                 .fetch_add(1, Ordering::SeqCst);
 
-                            self.common().global_state.live_bytes.fetch_add(
-                                VM::VMObjectModel::get_current_size(new_object),
-                                Ordering::SeqCst,
-                            );
+                //             self.common().global_state.live_bytes.fetch_add(
+                //                 VM::VMObjectModel::get_current_size(new_object),
+                //                 Ordering::SeqCst,
+                //             );
 
-                            self.common().global_state.live_lines.fetch_add(
-                                Line::get_lines_occupied_by_object::<VM>(new_object),
-                                Ordering::SeqCst,
-                            );
-                            let len = VM::VMObjectModel::get_current_size(new_object);
-                            let from = object.to_object_start::<VM>();
-                            let to = new_object.to_object_start::<VM>();
-                            let block = Block::from_unaligned_address(to);
-                            let start_line = Line::from_unaligned_address(to).start();
-                            let end_line = Line::from_unaligned_address(to + len).start();
-                            let info = ImmixObjectInfo {
-                                from,
-                                to,
-                                block: block.start(),
-                                len,
-                                start_line,
-                                end_line,
-                                straddle: start_line != end_line,
-                                public: is_public(object),
-                                pinned: crate::memory_manager::is_pinned(object),
-                            };
-                            IMMIX_OBJECT_INFO_LIST.lock().unwrap().push(info);
-                        }
-                    }
-                }
+                //             self.common().global_state.live_lines.fetch_add(
+                //                 Line::get_lines_occupied_by_object::<VM>(new_object),
+                //                 Ordering::SeqCst,
+                //             );
+                //             let len = VM::VMObjectModel::get_current_size(new_object);
+                //             let from = object.to_object_start::<VM>();
+                //             let to = new_object.to_object_start::<VM>();
+                //             let block = Block::from_unaligned_address(to);
+                //             let start_line = Line::from_unaligned_address(to).start();
+                //             let end_line = Line::from_unaligned_address(to + len).start();
+                //             let info = ImmixObjectInfo {
+                //                 from,
+                //                 to,
+                //                 block: block.start(),
+                //                 len,
+                //                 start_line,
+                //                 end_line,
+                //                 straddle: start_line != end_line,
+                //                 public: is_public(object),
+                //                 pinned: crate::memory_manager::is_pinned(object),
+                //             };
+                //             IMMIX_OBJECT_INFO_LIST.lock().unwrap().push(info);
+                //         }
+                //     }
+                // }
 
                 result
             }
@@ -2547,25 +2546,25 @@ impl<VM: VMBinding> GCWork<VM> for SweepChunk<VM> {
             }
         }
 
-        {
-            let mut detail_info_list = super::BLOCK_DETAIL_INFO_LIST.lock().unwrap();
-            for block in self
-                .chunk
-                .iter_region::<Block>()
-                .filter(|block| block.get_state() == BlockState::Unallocated)
-            {
-                let mut detail_info = crate::policy::immix::BlockDetailInfo {
-                    block,
-                    free: [true; 128],
-                };
-                for (idx, line) in block.lines().enumerate() {
-                    if line.is_marked(line_mark_state.unwrap()) {
-                        detail_info.free[idx] = false;
-                    }
-                }
-                detail_info_list.push(detail_info);
-            }
-        }
+        // {
+        //     let mut detail_info_list = super::BLOCK_DETAIL_INFO_LIST.lock().unwrap();
+        //     for block in self
+        //         .chunk
+        //         .iter_region::<Block>()
+        //         .filter(|block| block.get_state() == BlockState::Unallocated)
+        //     {
+        //         let mut detail_info = crate::policy::immix::BlockDetailInfo {
+        //             block,
+        //             free: [true; 128],
+        //         };
+        //         for (idx, line) in block.lines().enumerate() {
+        //             if line.is_marked(line_mark_state.unwrap()) {
+        //                 detail_info.free[idx] = false;
+        //             }
+        //         }
+        //         detail_info_list.push(detail_info);
+        //     }
+        // }
         probe!(mmtk, sweep_chunk, allocated_blocks);
         // Set this chunk as free if there is not live blocks.
         if allocated_blocks == 0 {

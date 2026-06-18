@@ -478,7 +478,6 @@ impl Block {
             assert_ne!(local_line_mark_state, global_line_mark_state);
             // Calculate number of marked lines and holes.
 
-            use crate::policy::immix::BLOCK_DETAIL_INFO_LIST;
             let mut marked_lines = 0;
             let mut holes = 0;
             let mut prev_line_is_marked = true;
@@ -582,10 +581,10 @@ impl Block {
             if hole_size >= Self::LARGE_HOLE_THRESHOLD {
                 total_hole_size += hole_size;
             }
-            if in_gc {
-                let mut info = BLOCK_DETAIL_INFO_LIST.lock().unwrap();
-                info.push(detail_info);
-            }
+            // if in_gc {
+            //     let mut info = BLOCK_DETAIL_INFO_LIST.lock().unwrap();
+            //     info.push(detail_info);
+            // }
 
             if marked_lines == 0 {
                 debug_assert_eq!(total_hole_size, Self::LINES as u8);
@@ -812,10 +811,10 @@ impl Block {
                     total_hole_size += hole_size;
                 }
                 // total_hole_size = std::cmp::max(total_hole_size, hole_size);
-                let mut detail_info_list = super::BLOCK_DETAIL_INFO_LIST.lock().unwrap();
-                detail_info_list.push(detail_info);
+                // let mut detail_info_list = super::BLOCK_DETAIL_INFO_LIST.lock().unwrap();
+                // detail_info_list.push(detail_info);
             }
-            let mut info = super::BLOCK_UTILIZATION_INFO_LIST.lock().unwrap();
+            // let mut info = super::BLOCK_UTILIZATION_INFO_LIST.lock().unwrap();
             if marked_lines == 0 {
                 #[cfg(feature = "vo_bit")]
                 vo_bit::helper::on_region_swept::<VM, _>(self, false);
@@ -827,12 +826,12 @@ impl Block {
                     self.reset_metadata();
                     debug_assert!(!self.is_block_published());
 
-                    info.push(crate::policy::immix::BlockUtilizationInfo {
-                        block: *self,
-                        holes: 1,
-                        free: Self::LINES as u8,
-                        occuppied: 0,
-                    });
+                    // info.push(crate::policy::immix::BlockUtilizationInfo {
+                    //     block: *self,
+                    //     holes: 1,
+                    //     free: Self::LINES as u8,
+                    //     occuppied: 0,
+                    // });
                 }
                 #[cfg(all(feature = "thread_local_gc_copying", debug_assertions))]
                 {
@@ -937,12 +936,12 @@ impl Block {
                             }
                         }
                     }
-                    info.push(super::BlockUtilizationInfo {
-                        block: *self,
-                        holes: holes as u8,
-                        free: (Block::LINES - marked_lines) as u8,
-                        occuppied: marked_lines as u8,
-                    });
+                    // info.push(super::BlockUtilizationInfo {
+                    //     block: *self,
+                    //     holes: holes as u8,
+                    //     free: (Block::LINES - marked_lines) as u8,
+                    //     occuppied: marked_lines as u8,
+                    // });
                 } else {
                     // when block is full, it does not matter whether it
                     // coantains a mix of private and public objects
@@ -951,12 +950,12 @@ impl Block {
                     // two cases:
                     // 1. block is allocated by collector and contains public object only (block will not be visible until next global gc)
                     // 2. block is dirty, which means it contains a mix of public and private object (block is visible during local and global gc)
-                    info.push(super::BlockUtilizationInfo {
-                        block: *self,
-                        holes: 0,
-                        free: 0,
-                        occuppied: marked_lines as u8,
-                    });
+                    // info.push(super::BlockUtilizationInfo {
+                    //     block: *self,
+                    //     holes: 0,
+                    //     free: 0,
+                    //     occuppied: marked_lines as u8,
+                    // });
                     // Clear mark state.
                     self.set_state(BlockState::Unmarked);
                 }

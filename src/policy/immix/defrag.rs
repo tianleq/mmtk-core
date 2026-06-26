@@ -136,6 +136,9 @@ impl Defrag {
             available_clean_pages_for_defrag = 0
         };
 
+        // Always give 10M
+        available_clean_pages_for_defrag = 2560;
+
         self.available_clean_pages_for_defrag
             .store(available_clean_pages_for_defrag as usize, Ordering::Release);
 

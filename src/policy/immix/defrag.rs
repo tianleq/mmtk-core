@@ -137,7 +137,8 @@ impl Defrag {
         };
 
         // Always give 10M
-        available_clean_pages_for_defrag = 2560;
+        available_clean_pages_for_defrag =
+            space.common().options.get_zero_cost_copy_reserve() as isize >> LOG_BYTES_IN_PAGE;
 
         self.available_clean_pages_for_defrag
             .store(available_clean_pages_for_defrag as usize, Ordering::Release);

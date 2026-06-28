@@ -348,6 +348,11 @@ impl Options {
     }
 
     #[cfg(feature = "thread_local_gc")]
+    pub fn get_zero_cost_copy_reserve(&self) -> usize {
+        self.zero_cost_copy_reserve.size
+    }
+
+    #[cfg(feature = "thread_local_gc")]
     pub fn get_max_concurrent_local_gc(&self) -> u32 {
         *self.max_concurrent_local_gc
     }
@@ -1044,7 +1049,8 @@ options! {
     max_local_copy_reserve:  u8                     [always_valid] = crate::scheduler::thread_local_gc_work::DEFAULT_MAX_LOCAL_COPY_RESERVE,
     max_concurrent_defrag_mutator: u32              [always_valid] = 0,
     defrag_mutator_threshold: usize                 [always_valid] = crate::scheduler::thread_local_gc_work::DEFRAG_MUTATOR_THRESHOLD,
-    local_gc_policy: LocalGCPolicy                  [always_valid] = LocalGCPolicy::NONE
+    local_gc_policy: LocalGCPolicy                  [always_valid] = LocalGCPolicy::NONE,
+    zero_cost_copy_reserve: ThreadlocalHeapSize     [|v: &ThreadlocalHeapSize| v.size > 0] = ThreadlocalHeapSize {size: 1 << 20}
 }
 
 #[cfg(not(feature = "thread_local_gc"))]

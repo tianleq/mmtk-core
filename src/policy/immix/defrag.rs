@@ -98,7 +98,6 @@ impl Defrag {
     /// Check if the defrag space is exhausted.
     pub fn space_exhausted(&self) -> bool {
         self.defrag_space_exhausted.load(Ordering::Acquire)
-        // false
     }
 
     /// Update available_clean_pages_for_defrag counter when a clean block is allocated.
@@ -136,17 +135,6 @@ impl Defrag {
             available_clean_pages_for_defrag = 0
         };
 
-        // Always give 10M
-        available_clean_pages_for_defrag =
-            space.common().options.get_zero_cost_copy_reserve() as isize >> LOG_BYTES_IN_PAGE;
-
-        self.available_clean_pages_for_defrag
-            .store(available_clean_pages_for_defrag as usize, Ordering::Release);
-
-        if self.in_defrag() {
-            self.establish_defrag_spill_threshold(space)
-        }
-
         self.available_clean_pages_for_defrag.store(
             std::cmp::max(
                 available_clean_pages_for_defrag as usize,
@@ -154,6 +142,11 @@ impl Defrag {
             ),
             Ordering::Release,
         );
+
+        if self.in_defrag() {
+            self.establish_defrag_spill_threshold(space)
+        }
+
         #[cfg(feature = "debug_thread_local_gc_copying")]
         {
             self.total_clean_pages_for_defrag.store(

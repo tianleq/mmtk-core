@@ -177,3 +177,7 @@ pub(crate) static GLOBAL_GC_ID: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(feature = "thread_local_gc_copying_stats")]
 pub(crate) static GLOBAL_REQUEST_ID: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(feature = "thread_local_gc")]
+pub(crate) static LOCAL_GC_BLOCK_STATS: std::sync::Mutex<Vec<(u32, u32, bool)>> =
+    std::sync::Mutex::new(vec![]);

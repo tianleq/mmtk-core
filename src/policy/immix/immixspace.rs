@@ -746,7 +746,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             if self.is_defrag_enabled() {
                 self.defrag.prepare(self, plan_stats.unwrap());
             }
-            #[cfg(not(feature = "thread_local_gc"))]
             // Prepare each block for GC
             let threshold = self.defrag.defrag_spill_threshold.load(Ordering::Acquire);
             // # Safety: ImmixSpace reference is always valid within this collection cycle.
@@ -755,7 +754,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 Box::new(PrepareBlockState {
                     space,
                     chunk,
-                    #[cfg(not(feature = "thread_local_gc"))]
                     defrag_threshold: if space.in_defrag() {
                         Some(threshold)
                     } else {
@@ -1359,6 +1357,14 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                         .insert(object);
                 }
 
+                // {
+                //     let size = VM::VMObjectModel::get_current_size(new_object);
+                //     self.common()
+                //         .global_state
+                //         .bytes_copied_in_global_gc
+                //         .fetch_add(size, Ordering::SeqCst);
+                // }
+
                 new_object
             };
             debug_assert_eq!(
@@ -1376,6 +1382,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             // ));
             // println!("scan new_object: {:?}, object: {:?}", new_object, object);
             // {
+            //     use crate::policy::immix::ImmixObjectInfo;
+            //     use crate::policy::immix::IMMIX_OBJECT_INFO_LIST;
+
             //     let len = VM::VMObjectModel::get_current_size(new_object);
             //     let from = object.to_object_start::<VM>();
             //     let to = new_object.to_object_start::<VM>();
@@ -1503,7 +1512,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
     /// Trace object and do evacuation if required.
     #[cfg(feature = "thread_local_gc_copying")]
     #[allow(clippy::assertions_on_constants)]
-    pub fn thread_local_trace_object_with_opportunistic_copy(
+    pub fn thread_local_trace_object_with_opportunistic_copy<const KIND: TraceKind>(
         &self,
         mutator: &mut Mutator<VM>,
         object: ObjectReference,
@@ -1549,16 +1558,37 @@ impl<VM: VMBinding> ImmixSpace<VM> {
 
             ThreadlocalTracedObjectType::Scanned(object)
         } else {
-            let local_copy_reserve_exhausted = unsafe {
-                mutator
-                    .allocators
-                    .get_allocator_mut(
-                        mutator.config.allocator_mapping[crate::AllocationSemantics::Default],
-                    )
-                    .downcast_mut::<ImmixAllocator<VM>>()
-                    .unwrap()
-            }
-            .thread_local_copy_reserve_exhausted(VM::VMObjectModel::get_size_when_copied(object));
+            let local_copy_reserve_exhausted = if KIND == TRACE_KIND_THREAD_LOCAL_IN_GLOBAL_GC {
+                let exhausted = unsafe {
+                    mutator
+                        .allocators
+                        .get_allocator_mut(
+                            mutator.config.allocator_mapping[crate::AllocationSemantics::Default],
+                        )
+                        .downcast_mut::<ImmixAllocator<VM>>()
+                        .unwrap()
+                }
+                .thread_local_copy_reserve_exhausted(
+                    VM::VMObjectModel::get_size_when_copied(object),
+                );
+                if exhausted {
+                    println!("local copy reserve exhausted");
+                }
+                false
+            } else {
+                unsafe {
+                    mutator
+                        .allocators
+                        .get_allocator_mut(
+                            mutator.config.allocator_mapping[crate::AllocationSemantics::Default],
+                        )
+                        .downcast_mut::<ImmixAllocator<VM>>()
+                        .unwrap()
+                }
+                .thread_local_copy_reserve_exhausted(
+                    VM::VMObjectModel::get_size_when_copied(object),
+                )
+            };
             // actually forward and copy the object if it is not pinned
             // and we have sufficient space in our copy allocator
             let new_object = if local_copy_reserve_exhausted {
@@ -1573,6 +1603,7 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                 if !super::MARK_LINE_AT_SCAN_TIME {
                     self.thread_local_mark_lines(object, mutator.state);
                 }
+
                 object
             } else {
                 // We are forwarding objects.
@@ -1626,6 +1657,9 @@ impl<VM: VMBinding> ImmixSpace<VM> {
                         usize,
                     >(new_object, metadata);
                 }
+
+                // mutator.bytes_copied_in_local_gc +=
+                //     VM::VMObjectModel::get_current_size(new_object) as u32;
 
                 new_object
             };
@@ -2208,7 +2242,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyThreadlocalTraceObject<VM> for
         {
             #[cfg(feature = "thread_local_gc_copying")]
             {
-                let result = self.thread_local_trace_object_with_opportunistic_copy(
+                let result = self.thread_local_trace_object_with_opportunistic_copy::<KIND>(
                     mutator,
                     object,
                     _copy.unwrap(),
@@ -2350,7 +2384,6 @@ pub struct PrepareBlockState<VM: VMBinding> {
     #[allow(dead_code)]
     pub space: &'static ImmixSpace<VM>,
     pub chunk: Chunk,
-    #[cfg(not(feature = "thread_local_gc"))]
     pub defrag_threshold: Option<usize>,
     pub unlog_bits_op: UnlogBitsOperation,
 }
@@ -2440,11 +2473,10 @@ impl<VM: VMBinding> GCWork<VM> for PrepareBlockState<VM> {
                         debug_assert!(!exists);
                     }
                 }
-                // // Since every global gc is a defrag gc, defrag_threshold will never be None
-                // false
+                // Since every global gc is a defrag gc, defrag_threshold will never be None
                 // public GC can do nothing about private objects, so only defrag mixed blocks
-                // block.is_block_mixed()
-                true
+                // plus those global reusable blocks with holes >= defrag_threshold
+                block.is_block_mixed() || block.get_holes() > self.defrag_threshold.unwrap()
             };
 
             #[cfg(not(feature = "thread_local_gc"))]

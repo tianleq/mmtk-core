@@ -449,7 +449,24 @@ impl<VM: VMBinding> Plan for Immix<VM> {
             //     *objects = HashSet::new();
             // }
         }
-
+        // println!(
+        //     "bytes copied in global gc: {}, blocks freed: {}, reusable blocks: {}",
+        //     self.immix_space
+        //         .common()
+        //         .global_state
+        //         .bytes_copied_in_global_gc
+        //         .swap(0, Ordering::Acquire),
+        //     self.immix_space
+        //         .common()
+        //         .global_state
+        //         .blocks_freed
+        //         .swap(0, Ordering::Acquire),
+        //     self.immix_space
+        //         .common()
+        //         .global_state
+        //         .reusable_blocks
+        //         .swap(0, Ordering::Acquire)
+        // );
         // {
         //     let id = crate::util::GLOBAL_GC_ID.load(Ordering::Relaxed);
         //     let mut info = IMMIX_OBJECT_INFO_LIST.lock().unwrap();
@@ -757,11 +774,22 @@ impl<VM: VMBinding> Immix<VM> {
         Context: GCWorkContext<VM = VM, PlanType = PlanType>,
     >(
         plan: &'static PlanType,
-        _immix_space: &ImmixSpace<VM>,
+        immix_space: &ImmixSpace<VM>,
         scheduler: &GCWorkScheduler<VM>,
     ) {
         use crate::plan::immix::gc_work::CreateProcessRemsetWork;
 
+        let in_defrag = immix_space.decide_whether_to_defrag(
+            plan.base().global_state.is_emergency_collection(),
+            true,
+            plan.base()
+                .global_state
+                .cur_collection_attempts
+                .load(Ordering::SeqCst),
+            plan.base().global_state.is_user_triggered_collection(),
+            *plan.base().options.full_heap_system_gc,
+        );
+        assert!(in_defrag, "should always be a defrag GC");
         // Stop mutators
 
         // #[cfg(debug_assertions)]

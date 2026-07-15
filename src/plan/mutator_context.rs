@@ -225,7 +225,9 @@ impl<VM: VMBinding> MutatorBuilder<VM> {
             stack_slots: Box::new(Vec::new()),
             allocation_bytes: 0,
             #[cfg(feature = "thread_local_gc_copying")]
-            state: self.local_line_mark_state
+            state: self.local_line_mark_state,
+            #[cfg(feature = "thread_local_gc")]
+            bytes_copied_in_local_gc: 0,
         }
     }
 }
@@ -274,7 +276,9 @@ pub struct Mutator<VM: VMBinding> {
     pub(crate) stack_slots: Box<Vec<VM::VMSlot>>,
     pub(crate) allocation_bytes: usize,
     #[cfg(feature = "thread_local_gc_copying")]
-    pub(crate) state: u8
+    pub(crate) state: u8,
+    #[cfg(feature = "thread_local_gc")]
+    pub(crate) bytes_copied_in_local_gc: u32,
 
 }
 
@@ -475,10 +479,10 @@ impl<VM: VMBinding> Mutator<VM> {
         for selector in self.get_all_allocator_selectors() {
             unsafe { self.allocators.get_allocator_mut(selector) }.on_mutator_destroy();
         }
-        {
-            use std::sync::atomic::Ordering;
-            self.plan.common().base.global_state.total_allocation_bytes.fetch_add(self.allocation_bytes, Ordering::SeqCst);
-        }
+        // {
+        //     use std::sync::atomic::Ordering;
+        //     self.plan.common().base.global_state.total_allocation_bytes.fetch_add(self.allocation_bytes, Ordering::SeqCst);
+        // }
     }
 
     /// Get the allocator for the selector.

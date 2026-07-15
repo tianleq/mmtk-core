@@ -317,8 +317,8 @@ pub trait Plan: 'static + HasSpaces + Sync + Downcast {
     /// by the VM binding.
     fn get_reserved_pages(&self) -> usize {
         let used_pages = self.get_used_pages();
-        // let collection_reserve = self.get_collection_reserved_pages();
-        let collection_reserve = 0;
+        let collection_reserve = self.get_collection_reserved_pages();
+        // let collection_reserve = 0;
         let vm_live_bytes = <Self::VM as VMBinding>::VMCollection::vm_live_bytes();
         // Note that `vm_live_bytes` may not be the exact number of bytes in whole pages.  The VM
         // binding is allowed to return an approximate value if it is expensive or impossible to
@@ -767,7 +767,7 @@ impl<VM: VMBinding> BasePlan<VM> {
             self.global_state
                 .allocation_bytes
                 .store(0, Ordering::SeqCst);
-            self.global_state.is_stress_gc.store(true, Ordering::SeqCst);
+            // self.global_state.is_stress_gc.store(true, Ordering::SeqCst);
         }
 
         debug!(

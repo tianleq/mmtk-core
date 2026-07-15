@@ -60,8 +60,8 @@ lazy_static! {
         std::sync::Mutex::new(std::collections::HashSet::new());
     // pub(crate) static ref BLOCK_UTILIZATION_INFO_LIST: std::sync::Mutex<Vec<BlockUtilizationInfo>> =
     //     std::sync::Mutex::new(vec![]);
-    // pub(crate) static ref IMMIX_OBJECT_INFO_LIST: std::sync::Mutex<Vec<ImmixObjectInfo>> =
-    //     std::sync::Mutex::new(vec![]);
+    pub(crate) static ref IMMIX_OBJECT_INFO_LIST: std::sync::Mutex<Vec<ImmixObjectInfo>> =
+        std::sync::Mutex::new(vec![]);
     // pub(crate) static ref BLOCK_DETAIL_INFO_LIST: std::sync::Mutex<Vec<BlockDetailInfo>> =
     //     std::sync::Mutex::new(vec![]);
 }

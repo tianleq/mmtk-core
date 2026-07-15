@@ -842,7 +842,11 @@ impl Block {
                 {
                     (*gc_stats).number_of_blocks_freed += 1;
                 }
-
+                // space
+                //     .common()
+                //     .global_state
+                //     .blocks_freed
+                //     .fetch_add(1, Ordering::SeqCst);
                 true
             } else {
                 #[cfg(feature = "debug_thread_local_gc_copying")]
@@ -936,6 +940,11 @@ impl Block {
                             }
                         }
                     }
+                    // space
+                    //     .common()
+                    //     .global_state
+                    //     .reusable_blocks
+                    //     .fetch_add(1, Ordering::SeqCst);
                     // info.push(super::BlockUtilizationInfo {
                     //     block: *self,
                     //     holes: holes as u8,

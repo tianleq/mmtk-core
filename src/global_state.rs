@@ -60,14 +60,17 @@ pub struct GlobalState {
     pub(crate) global_objects_count: AtomicUsize,
     #[cfg(debug_assertions)]
     pub(crate) global_objects_precise_count: AtomicUsize,
-    pub(crate) is_stress_gc: AtomicBool,
-    pub(crate) stress_gc_id: AtomicUsize,
-    pub(crate) total_allocation_bytes: AtomicUsize,
+    // pub(crate) is_stress_gc: AtomicBool,
+    // pub(crate) stress_gc_id: AtomicUsize,
+    // pub(crate) total_allocation_bytes: AtomicUsize,
     pub(crate) forced_local_gc_counter: AtomicUsize,
     pub(crate) forced_local_marking_counter: AtomicUsize,
-    pub(crate) live_objects: AtomicUsize,
-    pub(crate) live_bytes: AtomicUsize,
-    pub(crate) live_lines: AtomicUsize,
+    // pub(crate) live_objects: AtomicUsize,
+    // pub(crate) live_bytes: AtomicUsize,
+    // pub(crate) live_lines: AtomicUsize,
+    // pub(crate) bytes_copied_in_global_gc: AtomicUsize,
+    // pub(crate) blocks_freed: AtomicUsize,
+    // pub(crate) reusable_blocks: AtomicUsize,
 }
 
 impl GlobalState {
@@ -241,14 +244,17 @@ impl Default for GlobalState {
             global_objects_count: AtomicUsize::new(0),
             #[cfg(debug_assertions)]
             global_objects_precise_count: AtomicUsize::new(0),
-            is_stress_gc: AtomicBool::new(false),
-            stress_gc_id: AtomicUsize::new(0),
-            total_allocation_bytes: AtomicUsize::new(0),
+            // is_stress_gc: AtomicBool::new(false),
+            // stress_gc_id: AtomicUsize::new(0),
+            // total_allocation_bytes: AtomicUsize::new(0),
             forced_local_gc_counter: AtomicUsize::new(0),
             forced_local_marking_counter: AtomicUsize::new(0),
-            live_objects: AtomicUsize::new(0),
-            live_bytes: AtomicUsize::new(0),
-            live_lines: AtomicUsize::new(0),
+            // live_objects: AtomicUsize::new(0),
+            // live_bytes: AtomicUsize::new(0),
+            // live_lines: AtomicUsize::new(0),
+            // bytes_copied_in_global_gc: AtomicUsize::new(0),
+            // blocks_freed: AtomicUsize::new(0),
+            // reusable_blocks: AtomicUsize::new(0),
         }
     }
 }

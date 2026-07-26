@@ -447,7 +447,7 @@ impl Block {
         mark_histogram: &mut Histogram,
         local_line_mark_state: u8,
         global_line_mark_state: u8,
-        in_gc: bool,
+        _in_gc: bool,
     ) -> bool {
         if super::BLOCK_ONLY {
             match self.get_state() {
@@ -581,7 +581,7 @@ impl Block {
             if hole_size >= Self::LARGE_HOLE_THRESHOLD {
                 total_hole_size += hole_size;
             }
-            // if in_gc {
+            // if _in_gc {
             //     let mut info = BLOCK_DETAIL_INFO_LIST.lock().unwrap();
             //     info.push(detail_info);
             // }

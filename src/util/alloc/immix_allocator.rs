@@ -109,10 +109,10 @@ pub struct ImmixAllocator<VM: VMBinding> {
     pub local_reusable_blocks: Box<ReusableBlocks>,
     #[cfg(feature = "thread_local_gc")]
     semantic: Option<ImmixAllocSemantics>,
-    #[cfg(feature = "thread_local_gc")]
-    pub(crate) blocks_acquired_in_local_gc: u32,
-    #[cfg(feature = "thread_local_gc")]
-    pub(crate) blocks_freed_in_local_gc: u32,
+    // #[cfg(feature = "thread_local_gc")]
+    // pub(crate) blocks_acquired_in_local_gc: u32,
+    // #[cfg(feature = "thread_local_gc")]
+    // pub(crate) blocks_freed_in_local_gc: u32,
 }
 
 impl<VM: VMBinding> ImmixAllocator<VM> {
@@ -554,8 +554,8 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         // pre-allocate copy reserve pages
         #[cfg(feature = "thread_local_gc_copying")]
         self.thread_local_gc_reserve_pages();
-        self.blocks_acquired_in_local_gc = 0;
-        self.blocks_freed_in_local_gc = 0;
+        // self.blocks_acquired_in_local_gc = 0;
+        // self.blocks_freed_in_local_gc = 0;
     }
 
     #[cfg(feature = "thread_local_gc")]
@@ -586,7 +586,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
         let mut global_reusable_blocks = vec![];
         #[cfg(feature = "thread_local_gc_copying")]
         let mut global_sparse_reusable_blocks = vec![];
-        let mut blocks_freed = 0;
+        // let mut blocks_freed = 0;
         for block in self.local_blocks.drain(..) {
             #[cfg(debug_assertions)]
             debug_assert!(self.mutator_id == block.owner());
@@ -609,7 +609,7 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                 {
                     mutator.stats.number_of_blocks_freed += 1;
                 }
-                blocks_freed += 1;
+                // blocks_freed += 1;
             } else {
                 #[cfg(not(feature = "thread_local_gc_copying"))]
                 {
@@ -700,20 +700,20 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             }
         }
 
-        if self.is_mutator() && !in_gc {
-            let mutator = VM::VMActivePlan::mutator(crate::util::VMMutatorThread(self.tls));
-            self.blocks_freed_in_local_gc = blocks_freed;
-            crate::util::LOCAL_GC_BLOCK_STATS.lock().unwrap().push((
-                self.blocks_acquired_in_local_gc,
-                self.blocks_freed_in_local_gc,
-                mutator.local_allocation_size
-                    >= self
-                        .immix_space()
-                        .common()
-                        .options
-                        .get_thread_local_heap_size(),
-            ));
-        }
+        // if self.is_mutator() && !in_gc {
+        //     let mutator = VM::VMActivePlan::mutator(crate::util::VMMutatorThread(self.tls));
+        //     self.blocks_freed_in_local_gc = blocks_freed;
+        //     crate::util::LOCAL_GC_BLOCK_STATS.lock().unwrap().push((
+        //         self.blocks_acquired_in_local_gc,
+        //         self.blocks_freed_in_local_gc,
+        //         mutator.local_allocation_size
+        //             >= self
+        //                 .immix_space()
+        //                 .common()
+        //                 .options
+        //                 .get_thread_local_heap_size(),
+        //     ));
+        // }
 
         #[cfg(feature = "debug_thread_local_gc_copying")]
         {
@@ -823,25 +823,25 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
 
     #[cfg(feature = "thread_local_gc_copying")]
     pub fn thread_local_copy_reserve_exhausted(&mut self, size: usize) -> bool {
-        // debug_assert!(self.copy && VM::VMActivePlan::is_mutator(self.tls));
-        // if self.local_copy_reserve_exhausted {
-        //     true
-        // } else {
-        //     if self.local_free_blocks.is_empty() {
-        //         let bump_pointer = if size > Line::BYTES {
-        //             // overflow alloc looks at large cursor and large limit
-        //             self.large_bump_pointer
-        //         } else {
-        //             self.bump_pointer
-        //         };
-        //         if bump_pointer.cursor + size > bump_pointer.limit {
-        //             self.local_copy_reserve_exhausted = true;
-        //             return true;
-        //         }
-        //     }
-        //     false
-        // }
-        false
+        debug_assert!(self.copy && VM::VMActivePlan::is_mutator(self.tls));
+        if self.local_copy_reserve_exhausted {
+            true
+        } else {
+            if self.local_free_blocks.is_empty() {
+                let bump_pointer = if size > Line::BYTES {
+                    // overflow alloc looks at large cursor and large limit
+                    self.large_bump_pointer
+                } else {
+                    self.bump_pointer
+                };
+                if bump_pointer.cursor + size > bump_pointer.limit {
+                    self.local_copy_reserve_exhausted = true;
+                    return true;
+                }
+            }
+            false
+        }
+        // false
     }
 
     fn alloc_impl(
@@ -1168,10 +1168,10 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
             local_free_blocks: Box::new(Vec::new()),
             #[cfg(feature = "thread_local_gc")]
             local_reusable_blocks: Box::new(ReusableBlocks::new()),
-            #[cfg(feature = "thread_local_gc")]
-            blocks_acquired_in_local_gc: 0,
-            #[cfg(feature = "thread_local_gc")]
-            blocks_freed_in_local_gc: 0,
+            // #[cfg(feature = "thread_local_gc")]
+            // blocks_acquired_in_local_gc: 0,
+            // #[cfg(feature = "thread_local_gc")]
+            // blocks_freed_in_local_gc: 0,
         }
     }
 
@@ -1744,9 +1744,9 @@ impl<VM: VMBinding> ImmixAllocator<VM> {
                     block.start(),
                     block.end()
                 );
-                if self.is_mutator() && self.copy {
-                    self.blocks_acquired_in_local_gc += 1;
-                }
+                // if self.is_mutator() && self.copy {
+                //     self.blocks_acquired_in_local_gc += 1;
+                // }
                 // Bulk clear stale line mark state
                 Line::MARK_TABLE
                     .bzero_metadata(block.start(), crate::policy::immix::block::Block::BYTES);

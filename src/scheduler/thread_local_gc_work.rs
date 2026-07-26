@@ -3,7 +3,6 @@ use scheduler::GCWorker;
 use crate::plan::PlanThreadlocalTraceObject;
 use crate::plan::ThreadlocalTracedObjectType::*;
 use crate::policy::gc_work::TraceKind;
-use crate::policy::space::Space;
 use crate::util::metadata::public_bit::is_public;
 use crate::util::*;
 use crate::vm::slot::Slot;
@@ -11,11 +10,12 @@ use crate::vm::*;
 use crate::*;
 use std::marker::PhantomData;
 use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
+// use std::sync::atomic::Ordering;
 
 pub const THREAD_LOCAL_GC_ACTIVE: u32 = 1;
 pub const THREAD_LOCAL_GC_INACTIVE: u32 = 0;
 pub const THREAD_LOCAL_GC_PENDING: u32 = u32::MAX;
+pub const THREAD_LOCAL_GC_ACTIVE_IN_GLOBAL_GC: u32 = u32::MAX - 1;
 
 lazy_static! {
     pub static ref IMMIX_LIVE_BYTES_IN_FORCED_LOCAL_GC: AtomicUsize = AtomicUsize::new(0);
@@ -39,19 +39,19 @@ impl<VM: VMBinding> scheduler::GCWork<VM> for ScheduleExecuteThreadlocalCollecti
                                 scheduler::WorkBucketStage::Local,
                                 ExecuteThreadlocalCollectionWork::new(mutator.mutator_tls),
                             );
-                            _mmtk
-                                .state
-                                .forced_local_gc_counter
-                                .fetch_add(1, Ordering::SeqCst);
+                            // _mmtk
+                            //     .state
+                            //     .forced_local_gc_counter
+                            //     .fetch_add(1, Ordering::SeqCst);
                         } else {
                             worker.add_work(
                                 scheduler::WorkBucketStage::Local,
                                 ExecuteThreadlocalMarkingWork::new(mutator.mutator_tls),
                             );
-                            _mmtk
-                                .state
-                                .forced_local_marking_counter
-                                .fetch_add(1, Ordering::SeqCst);
+                            // _mmtk
+                            //     .state
+                            //     .forced_local_marking_counter
+                            //     .fetch_add(1, Ordering::SeqCst);
                         }
                     }
                 }
@@ -64,19 +64,19 @@ impl<VM: VMBinding> scheduler::GCWork<VM> for ScheduleExecuteThreadlocalCollecti
                                 scheduler::WorkBucketStage::Local,
                                 ExecuteThreadlocalCollectionWork::new(mutator.mutator_tls),
                             );
-                            _mmtk
-                                .state
-                                .forced_local_gc_counter
-                                .fetch_add(1, Ordering::SeqCst);
+                            // _mmtk
+                            //     .state
+                            //     .forced_local_gc_counter
+                            //     .fetch_add(1, Ordering::SeqCst);
                         } else {
                             worker.add_work(
                                 scheduler::WorkBucketStage::Local,
                                 ExecuteThreadlocalMarkingWork::new(mutator.mutator_tls),
                             );
-                            _mmtk
-                                .state
-                                .forced_local_marking_counter
-                                .fetch_add(1, Ordering::SeqCst);
+                            // _mmtk
+                            //     .state
+                            //     .forced_local_marking_counter
+                            //     .fetch_add(1, Ordering::SeqCst);
                         }
                     } else if mutator.mutator_id >= 30 {
                         worker.add_work(
@@ -94,19 +94,19 @@ impl<VM: VMBinding> scheduler::GCWork<VM> for ScheduleExecuteThreadlocalCollecti
                                 scheduler::WorkBucketStage::Local,
                                 ExecuteThreadlocalCollectionWork::new(mutator.mutator_tls),
                             );
-                            _mmtk
-                                .state
-                                .forced_local_gc_counter
-                                .fetch_add(1, Ordering::SeqCst);
+                            // _mmtk
+                            //     .state
+                            //     .forced_local_gc_counter
+                            //     .fetch_add(1, Ordering::SeqCst);
                         } else {
                             worker.add_work(
                                 scheduler::WorkBucketStage::Local,
                                 ExecuteThreadlocalMarkingWork::new(mutator.mutator_tls),
                             );
-                            _mmtk
-                                .state
-                                .forced_local_marking_counter
-                                .fetch_add(1, Ordering::SeqCst);
+                            // _mmtk
+                            //     .state
+                            //     .forced_local_marking_counter
+                            //     .fetch_add(1, Ordering::SeqCst);
                         }
                     } else if mutator.mutator_id < 30 {
                         worker.add_work(
@@ -130,29 +130,29 @@ impl<VM: VMBinding> scheduler::GCWork<VM> for ScheduleExecuteThreadlocalCollecti
                             scheduler::WorkBucketStage::Local,
                             ExecuteThreadlocalCollectionWork::new(mutator.mutator_tls),
                         );
-                        _mmtk
-                            .state
-                            .forced_local_gc_counter
-                            .fetch_add(1, Ordering::SeqCst);
+                        // _mmtk
+                        //     .state
+                        //     .forced_local_gc_counter
+                        //     .fetch_add(1, Ordering::SeqCst);
                     } else if mutator.is_thread_local_gc_pending() {
                         if mutator.has_mutator_allocated() {
                             worker.add_work(
                                 scheduler::WorkBucketStage::Local,
                                 ExecuteThreadlocalCollectionWork::new(mutator.mutator_tls),
                             );
-                            _mmtk
-                                .state
-                                .forced_local_gc_counter
-                                .fetch_add(1, Ordering::SeqCst);
+                            // _mmtk
+                            //     .state
+                            //     .forced_local_gc_counter
+                            //     .fetch_add(1, Ordering::SeqCst);
                         } else {
                             worker.add_work(
                                 scheduler::WorkBucketStage::Local,
                                 ExecuteThreadlocalMarkingWork::new(mutator.mutator_tls),
                             );
-                            _mmtk
-                                .state
-                                .forced_local_marking_counter
-                                .fetch_add(1, Ordering::SeqCst);
+                            // _mmtk
+                            //     .state
+                            //     .forced_local_marking_counter
+                            //     .fetch_add(1, Ordering::SeqCst);
                         }
                     }
                 }
@@ -163,10 +163,10 @@ impl<VM: VMBinding> scheduler::GCWork<VM> for ScheduleExecuteThreadlocalCollecti
                         scheduler::WorkBucketStage::Local,
                         ExecuteThreadlocalCollectionWork::new(mutator.mutator_tls),
                     );
-                    _mmtk
-                        .state
-                        .forced_local_gc_counter
-                        .fetch_add(1, Ordering::SeqCst);
+                    // _mmtk
+                    //     .state
+                    //     .forced_local_gc_counter
+                    //     .fetch_add(1, Ordering::SeqCst);
                 }
             }
         }
@@ -208,19 +208,19 @@ impl<VM: VMBinding> scheduler::GCWork<VM> for ExecuteThreadlocalCollectionWork {
             start_time: std::time::Instant::now(),
         }
         .execute_by_gc_worker();
-        {
-            let plan = mmtk
-                .get_plan()
-                .downcast_ref::<crate::plan::immix::Immix<VM>>()
-                .unwrap();
-            let immix_index = plan.immix_space.get_descriptor().get_index();
-            let los_index = plan.common().get_los().get_descriptor().get_index();
-            let mut live_bytes_stats = _worker.shared.live_bytes_per_space.borrow_mut();
-            live_bytes_stats[immix_index] +=
-                IMMIX_LIVE_BYTES_IN_FORCED_LOCAL_GC.swap(0, Ordering::SeqCst);
-            live_bytes_stats[los_index] +=
-                LOS_LIVE_BYTES_IN_FORCED_LOCAL_GC.swap(0, Ordering::SeqCst);
-        }
+        // {
+        //     let plan = mmtk
+        //         .get_plan()
+        //         .downcast_ref::<crate::plan::immix::Immix<VM>>()
+        //         .unwrap();
+        //     let immix_index = plan.immix_space.get_descriptor().get_index();
+        //     let los_index = plan.common().get_los().get_descriptor().get_index();
+        //     let mut live_bytes_stats = _worker.shared.live_bytes_per_space.borrow_mut();
+        //     live_bytes_stats[immix_index] +=
+        //         IMMIX_LIVE_BYTES_IN_FORCED_LOCAL_GC.swap(0, Ordering::SeqCst);
+        //     live_bytes_stats[los_index] +=
+        //         LOS_LIVE_BYTES_IN_FORCED_LOCAL_GC.swap(0, Ordering::SeqCst);
+        // }
     }
 }
 
@@ -233,9 +233,9 @@ pub struct ExecuteThreadlocalCollection<VM: VMBinding> {
 impl<VM: VMBinding> ExecuteThreadlocalCollection<VM> {
     pub fn execute_by_gc_worker(&mut self) {
         let mutator = VM::VMActivePlan::mutator(self.mutator_tls);
-        mutator.thread_local_gc_status = THREAD_LOCAL_GC_ACTIVE;
+        mutator.thread_local_gc_status = THREAD_LOCAL_GC_ACTIVE_IN_GLOBAL_GC;
         // record before local GC starts so that evacuation does not increase its value
-        let allocation_bytes = mutator.allocation_bytes;
+        // let allocation_bytes = mutator.allocation_bytes;
         info!(
             "Start of Thread local GC {:?} in global GC",
             mutator.mutator_id,
@@ -268,7 +268,7 @@ impl<VM: VMBinding> ExecuteThreadlocalCollection<VM> {
             mutator.reset_stats();
         }
         mutator.local_allocation_size = 0;
-        mutator.allocation_bytes = allocation_bytes;
+        // mutator.allocation_bytes = allocation_bytes;
         // local gc has finished,
         ACTIVE_LOCAL_GC_COUNTER.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
     }
@@ -277,7 +277,7 @@ impl<VM: VMBinding> ExecuteThreadlocalCollection<VM> {
         let mutator = VM::VMActivePlan::mutator(self.mutator_tls);
         mutator.thread_local_gc_status = THREAD_LOCAL_GC_ACTIVE;
         // record before local GC starts so that evacuation does not increase its value
-        let allocation_bytes = mutator.allocation_bytes;
+        // let allocation_bytes = mutator.allocation_bytes;
         info!("Start of Thread local GC {:?}", mutator.mutator_id,);
 
         // A hook of local gc, no-op at the moment
@@ -307,7 +307,7 @@ impl<VM: VMBinding> ExecuteThreadlocalCollection<VM> {
             mutator.reset_stats();
         }
         mutator.local_allocation_size = 0;
-        mutator.allocation_bytes = allocation_bytes;
+        // mutator.allocation_bytes = allocation_bytes;
         // local gc has finished,
         ACTIVE_LOCAL_GC_COUNTER.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
     }

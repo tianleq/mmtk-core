@@ -1559,21 +1559,6 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             ThreadlocalTracedObjectType::Scanned(object)
         } else {
             let local_copy_reserve_exhausted = if KIND == TRACE_KIND_THREAD_LOCAL_IN_GLOBAL_GC {
-                let exhausted = unsafe {
-                    mutator
-                        .allocators
-                        .get_allocator_mut(
-                            mutator.config.allocator_mapping[crate::AllocationSemantics::Default],
-                        )
-                        .downcast_mut::<ImmixAllocator<VM>>()
-                        .unwrap()
-                }
-                .thread_local_copy_reserve_exhausted(
-                    VM::VMObjectModel::get_size_when_copied(object),
-                );
-                if exhausted {
-                    println!("local copy reserve exhausted");
-                }
                 false
             } else {
                 unsafe {

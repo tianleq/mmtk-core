@@ -256,6 +256,7 @@ impl<VM: VMBinding> BarrierSemantics for PublicObjectMarkingBarrierSemantics<VM>
     }
 
     fn object_reference_clone_pre(&mut self, obj: ObjectReference) {
+        // println!("clone barrier, dst obj: {:?}", obj);
         obj.iterate_fields::<VM, _>(|_o, slot| {
             self.update_remset(obj, slot);
         });

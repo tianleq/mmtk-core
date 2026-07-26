@@ -55,6 +55,10 @@ pub struct Stats {
     requests_time: Arc<Mutex<Timer>>,
     #[cfg(feature = "thread_local_gc")]
     thread_local_gc_count: AtomicUsize,
+    // #[cfg(feature = "thread_local_gc")]
+    // forced_local_gc_count: AtomicUsize,
+    // #[cfg(feature = "thread_local_gc")]
+    // forced_local_gc_counters: Mutex<Vec<Arc<Mutex<dyn Counter + Send>>>>,
 }
 
 impl Stats {
@@ -94,6 +98,18 @@ impl Stats {
         counters.push(t.clone());
         counters.push(requests_time.clone());
 
+        // #[cfg(feature = "thread_local_gc")]
+        // // Need to understand how this work
+        // let forced_local_gc_counters: Vec<Arc<Mutex<dyn Counter + Send>>> =
+        //     vec![Arc::new(Mutex::new(LongCounter::new(
+        //         "forced_local_gc_time".to_string(),
+        //         shared.clone(),
+        //         false,
+        //         false,
+        //         false,
+        //         MonotoneNanoTime {},
+        //     )))];
+
         // Read from the MMTK option for a list of perf events we want to
         // measure, and create corresponding counters
         #[cfg(feature = "perf_counter")]
@@ -116,6 +132,10 @@ impl Stats {
             requests_time,
             #[cfg(feature = "thread_local_gc")]
             thread_local_gc_count: AtomicUsize::new(0),
+            // #[cfg(feature = "thread_local_gc")]
+            // forced_local_gc_count: AtomicUsize::new(0),
+            // #[cfg(feature = "thread_local_gc")]
+            // forced_local_gc_counters: Mutex::new(forced_local_gc_counters),
         }
     }
 
@@ -239,16 +259,16 @@ impl Stats {
         print!("Total time: ");
         self.total_time.lock().unwrap().print_total(None);
         println!(" ms");
-        println!(
-            "Forced local GC: {}",
-            mmtk.state.forced_local_gc_counter.load(Ordering::Relaxed)
-        );
-        println!(
-            "Forced local Marking: {}",
-            mmtk.state
-                .forced_local_marking_counter
-                .load(Ordering::Relaxed)
-        );
+        // println!(
+        //     "Forced local GC: {}",
+        //     mmtk.state.forced_local_gc_counter.load(Ordering::Relaxed)
+        // );
+        // println!(
+        //     "Forced local Marking: {}",
+        //     mmtk.state
+        //         .forced_local_marking_counter
+        //         .load(Ordering::Relaxed)
+        // );
 
         println!("------------------------------ End MMTk Statistics -----------------------------")
     }

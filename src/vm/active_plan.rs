@@ -65,4 +65,10 @@ pub trait ActivePlan<VM: VMBinding> {
 
     #[cfg(feature = "thread_local_gc")]
     fn execute_thread_local_gc(tls: VMMutatorThread);
+
+    #[cfg(feature = "thread_local_gc")]
+    fn do_thread_local_gc_prologue(tls: VMMutatorThread);
+
+    #[cfg(feature = "thread_local_gc")]
+    fn do_thread_local_gc_epilogue(tls: VMMutatorThread);
 }

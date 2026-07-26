@@ -132,7 +132,7 @@ pub fn immix_mutator_thread_local_prepare<VM: VMBinding>(mutator: &mut Mutator<V
         crate::memory_manager::unpin_object(object);
     });
     debug_assert_eq!(mutator.object_remset.len(), 0);
-    mutator.bytes_copied_in_local_gc = 0;
+    // mutator.bytes_copied_in_local_gc = 0;
 }
 
 #[cfg(feature = "thread_local_gc")]

@@ -291,6 +291,11 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             buckets_updated = buckets_updated || bucket_opened;
             if bucket_opened {
                 probe!(mmtk, bucket_opened, id);
+                if bucket.get_stage() == WorkBucketStage::Local {
+                    // record the open time of Local bucket
+                } else if bucket.get_stage() == WorkBucketStage::Prepare {
+                    // record the finish time of Local bucket
+                }
                 new_packets = new_packets || !bucket.is_drained();
                 if new_packets {
                     // Quit the loop. There are already new packets in the newly opened buckets.

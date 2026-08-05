@@ -206,7 +206,7 @@ impl<VM: VMBinding> SFT for LargeObjectSpace<VM> {
         _worker: GCWorkerMutRef,
     ) -> ObjectReference {
         debug_assert!(false, "should not reach here");
-        self.trace_object(queue, object, object)
+        self.trace_object(queue, object)
     }
 
     fn debug_print_object_info(&self, object: ObjectReference) {
@@ -286,7 +286,6 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LargeObjec
     fn trace_object<Q: ObjectQueue, const KIND: crate::policy::gc_work::TraceKind>(
         &self,
         queue: &mut Q,
-        source: ObjectReference,
         object: ObjectReference,
         _copy: Option<CopySemantics>,
         _worker: &mut GCWorker<VM>,
@@ -356,7 +355,7 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for LargeObjec
             if !is_public(object) {
                 return object;
             }
-            self.trace_object(queue, source, object)
+            self.trace_object(queue, object)
         } else if KIND == TRACE_KIND_UPDATE {
             debug_assert!(is_public(object));
             debug_assert!(self.is_marked(object));
@@ -566,25 +565,24 @@ impl<VM: VMBinding> LargeObjectSpace<VM> {
     pub fn trace_object<Q: ObjectQueue>(
         &self,
         queue: &mut Q,
-        _source: ObjectReference,
         object: ObjectReference,
     ) -> ObjectReference {
         match self.trace_object_impl(object) {
             ThreadlocalTracedObjectType::Scanned(_) => (),
             ThreadlocalTracedObjectType::ToBeScanned(object) => {
+                self.common()
+                    .global_state
+                    .objects_traced
+                    .fetch_add(1, Ordering::SeqCst);
                 #[cfg(debug_assertions)]
                 {
                     if is_public(object) {
-                        use crate::policy::GLOBAL_OBJECTS_CONSERVATIVE;
+                        // use crate::policy::GLOBAL_OBJECTS_CONSERVATIVE;
 
-                        GLOBAL_OBJECTS_CONSERVATIVE
-                            .lock()
-                            .unwrap()
-                            .insert(object, _source);
-                        self.common
-                            .global_state
-                            .global_objects_count
-                            .fetch_add(1, Ordering::SeqCst);
+                        // GLOBAL_OBJECTS_CONSERVATIVE
+                        //     .lock()
+                        //     .unwrap()
+                        //     .insert(object, _source);
                     }
                 }
                 queue.enqueue(object)

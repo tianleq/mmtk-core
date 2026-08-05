@@ -272,7 +272,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     /// No workers will be waked up by this function. The caller is responsible for that.
     ///
     /// Return true if there're any non-empty buckets updated.
-    pub(crate) fn update_buckets(&self) -> bool {
+    pub(crate) fn update_buckets(&self, worker: &GCWorker<VM>) -> bool {
         debug!("update_buckets");
         let mut buckets_updated = false;
         let mut new_packets = false;
@@ -291,11 +291,18 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
             buckets_updated = buckets_updated || bucket_opened;
             if bucket_opened {
                 probe!(mmtk, bucket_opened, id);
-                if bucket.get_stage() == WorkBucketStage::Local {
-                    // record the open time of Local bucket
-                } else if bucket.get_stage() == WorkBucketStage::Prepare {
-                    // record the finish time of Local bucket
-                }
+                // if bucket.get_stage() == WorkBucketStage::Prepare {
+                //     // `Prepare` is the stage right after `Local`, and it is only opened once
+                //     // `Local` has been drained.  So this is where the `Local` bucket finishes.
+                //     // (The open time of `Local` is recorded in `notify_mutators_paused`, since
+                //     // `Local` is the first STW stage and is opened manually, not here.)
+                //     let count = worker
+                //         .mmtk
+                //         .state
+                //         .forced_local_gc_counter
+                //         .load(std::sync::atomic::Ordering::Acquire);
+                //     worker.mmtk.stats.end_local_bucket(count);
+                // }
                 new_packets = new_packets || !bucket.is_drained();
                 if new_packets {
                     // Quit the loop. There are already new packets in the newly opened buckets.
@@ -460,7 +467,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
                 self.assert_all_open_buckets_are_empty();
 
                 // Find more work for workers to do.
-                let found_more_work = self.find_more_work_for_workers();
+                let found_more_work = self.find_more_work_for_workers(worker);
 
                 if found_more_work {
                     LastParkedResult::WakeAll
@@ -529,7 +536,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
     }
 
     /// Find more work for workers to do.  Return true if more work is available.
-    fn find_more_work_for_workers(&self) -> bool {
+    fn find_more_work_for_workers(&self, worker: &GCWorker<VM>) -> bool {
         if self.worker_group.has_designated_work() {
             trace!("Some workers have designated work.");
             return true;
@@ -542,7 +549,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         }
 
         // Try to open new buckets.
-        if self.update_buckets() {
+        if self.update_buckets(worker) {
             trace!("Some buckets are opened.");
             return true;
         }
@@ -691,6 +698,7 @@ impl<VM: VMBinding> GCWorkScheduler<VM> {
         // opening the first STW bucket.  In the future, we should redesign the opening condition
         // of work buckets to make the synchronization more robust,
         first_stw_bucket.open();
+        // mmtk.stats.start_local_bucket();
         self.worker_monitor.notify_work_available(true);
     }
 

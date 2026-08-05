@@ -61,7 +61,7 @@ impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
         let new_object = self
             .plan
-            .trace_object::<Self, KIND>(self, object, object, self.worker());
+            .trace_object::<Self, KIND>(self, object, self.worker());
         // No copying should happen.
         debug_assert_eq!(object, new_object);
         object
@@ -293,11 +293,7 @@ impl<VM: VMBinding, P: ConcurrentPlan<VM = VM> + PlanTraceObject<VM>, const KIND
     // The following two methods are implemented to support pinning roots and tpinning roots.
     // MMTk will create [`crate::scheduler::gc_work::ProcessRootNodes`] to process root nodes with this type.
 
-    fn trace_object(
-        &mut self,
-        _source: ObjectReference,
-        object: ObjectReference,
-    ) -> ObjectReference {
+    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
         // We just push to the node buffer. ProcessRootNodes will take all the nodes later.
         self.nodes.push(object);
         object

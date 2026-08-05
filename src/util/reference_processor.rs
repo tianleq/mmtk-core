@@ -236,7 +236,7 @@ impl ReferenceProcessor {
         e: &mut E,
         referent: ObjectReference,
     ) -> ObjectReference {
-        e.trace_object(referent, referent)
+        e.trace_object(referent)
     }
 
     /// This function is called when forwarding the references and referents (for MarkCompact). It
@@ -247,7 +247,7 @@ impl ReferenceProcessor {
         e: &mut E,
         referent: ObjectReference,
     ) -> ObjectReference {
-        e.trace_object(referent, referent)
+        e.trace_object(referent)
     }
 
     /// Inform the binding to enqueue the weak references whose referents were cleared in this GC.

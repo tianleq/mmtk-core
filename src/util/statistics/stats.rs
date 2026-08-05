@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Instant;
 
 /// The default number of phases for statistics.
 pub const DEFAULT_NUM_PHASES: usize = 1 << 12;
@@ -55,8 +56,15 @@ pub struct Stats {
     requests_time: Arc<Mutex<Timer>>,
     #[cfg(feature = "thread_local_gc")]
     thread_local_gc_count: AtomicUsize,
-    // #[cfg(feature = "thread_local_gc")]
-    // forced_local_gc_count: AtomicUsize,
+    #[cfg(feature = "thread_local_gc")]
+    forced_local_gc_counters: Mutex<Vec<usize>>,
+    #[cfg(feature = "thread_local_gc")]
+    /// Time (in nanoseconds) spent in the `Local` work bucket, one entry per GC, recorded as
+    /// `(gc number, nanoseconds)`.  A GC in which the `Local` bucket never opened has no entry.
+    forced_local_gc_times: Mutex<Vec<(usize, u64)>>,
+    #[cfg(feature = "thread_local_gc")]
+    /// The time at which the `Local` work bucket was opened for the current GC.
+    forced_local_gc_start: Mutex<Option<Instant>>,
     // #[cfg(feature = "thread_local_gc")]
     // forced_local_gc_counters: Mutex<Vec<Arc<Mutex<dyn Counter + Send>>>>,
 }
@@ -100,15 +108,7 @@ impl Stats {
 
         // #[cfg(feature = "thread_local_gc")]
         // // Need to understand how this work
-        // let forced_local_gc_counters: Vec<Arc<Mutex<dyn Counter + Send>>> =
-        //     vec![Arc::new(Mutex::new(LongCounter::new(
-        //         "forced_local_gc_time".to_string(),
-        //         shared.clone(),
-        //         false,
-        //         false,
-        //         false,
-        //         MonotoneNanoTime {},
-        //     )))];
+        // let forced_local_gc_counters: Vec<Arc<Mutex<dyn Counter + Send>>> = vec![];
 
         // Read from the MMTK option for a list of perf events we want to
         // measure, and create corresponding counters
@@ -130,10 +130,15 @@ impl Stats {
             shared,
             counters: Mutex::new(counters),
             requests_time,
+
             #[cfg(feature = "thread_local_gc")]
             thread_local_gc_count: AtomicUsize::new(0),
-            // #[cfg(feature = "thread_local_gc")]
-            // forced_local_gc_count: AtomicUsize::new(0),
+            #[cfg(feature = "thread_local_gc")]
+            forced_local_gc_counters: Mutex::new(Vec::new()),
+            #[cfg(feature = "thread_local_gc")]
+            forced_local_gc_times: Mutex::new(Vec::new()),
+            #[cfg(feature = "thread_local_gc")]
+            forced_local_gc_start: Mutex::new(None),
             // #[cfg(feature = "thread_local_gc")]
             // forced_local_gc_counters: Mutex::new(forced_local_gc_counters),
         }
@@ -218,6 +223,96 @@ impl Stats {
         self.shared.increment_phase();
     }
 
+    /// Called when the `Local` work bucket is opened, i.e. once all the mutators are stopped.
+    pub fn start_local_bucket(&self) {
+        if !self.get_gathering_stats() {
+            return;
+        }
+        *self.forced_local_gc_start.lock().unwrap() = Some(Instant::now());
+    }
+
+    /// Called when the `Local` work bucket has been drained, i.e. when the next stop-the-world
+    /// bucket is opened.
+    pub fn end_local_bucket(&self, local_gc_count: usize) {
+        if !self.get_gathering_stats() {
+            return;
+        }
+        // `take` the start time so that a spurious second call cannot count the same
+        // interval twice.
+        let start = self.forced_local_gc_start.lock().unwrap().take();
+        if let Some(start) = start {
+            let elapsed = start.elapsed();
+            let ns = elapsed.as_secs() * 1_000_000_000 + u64::from(elapsed.subsec_nanos());
+            // The current phase is the stop-the-world phase of GC `get_phase() / 2`, which is
+            // the same numbering as the `GC` column printed by `print_stats`.
+            let gc = self.get_phase() / 2;
+            let mut times = self.forced_local_gc_times.lock().unwrap();
+            // Should the bucket be opened more than once within one GC, keep the GC's total in
+            // a single entry rather than reporting the same GC twice.
+            match times.last_mut() {
+                Some(last) if last.0 == gc => last.1 += ns,
+                _ => times.push((gc, ns)),
+            }
+        }
+        self.forced_local_gc_counters
+            .lock()
+            .unwrap()
+            .push(local_gc_count);
+    }
+
+    /// Print the stop-the-world time of every GC, one line per GC.
+    ///
+    /// This reads the per-phase values already recorded by the `total_time` counter rather than
+    /// timing the GC again, so these values are exactly the ones that add up to the `time.stw`
+    /// column.
+    fn print_gc_times(&self) {
+        let timer = self.total_time.lock().unwrap();
+        for gc in 0..(self.get_phase() / 2) {
+            // Phase `2 * gc` is the mutator time preceding GC `gc`, and `2 * gc + 1` is its
+            // stop-the-world time.  `total_time` does not merge phases, so `print_count` prints
+            // that single phase, and `MonotoneNanoTime` prints it in milliseconds.
+            print!("gc_time GC {}: ", gc);
+            timer.print_count(2 * gc + 1);
+            println!(" ms");
+        }
+    }
+
+    /// Print the time spent in the `Local` work bucket for every GC, one line per GC.
+    fn print_local_bucket_times(&self) {
+        let times = self.forced_local_gc_times.lock().unwrap();
+        for (gc, ns) in &(*times) {
+            // Kept in nanoseconds internally and converted here, so no precision is lost.
+            // Two decimal places matches how `MonotoneNanoTime` prints elapsed time.
+            println!("local_bucket_time GC {}: {:.2} ms", gc, *ns as f64 / 1e6f64);
+        }
+    }
+
+    /// Print the time spent in the `Local` work bucket for every GC, one line per GC.
+    fn print_forced_local_gc_count(&self) {
+        let counters = self.forced_local_gc_counters.lock().unwrap();
+        for count in counters.iter() {
+            // Kept in nanoseconds internally and converted here, so no precision is lost.
+            // Two decimal places matches how `MonotoneNanoTime` prints elapsed time.
+            println!("forced local Gc count {}", count);
+        }
+    }
+
+    // #[cfg(feature = "thread_local_gc")]
+    // pub fn start_all_forced_local_gc(&self) {
+    //     if !self.get_gathering_stats() {
+    //         return;
+    //     }
+    //     let forced_local_gc_counters = self.forced_local_gc_counters.lock().unwrap();
+    // }
+
+    // #[cfg(feature = "thread_local_gc")]
+    // pub fn stop_all_forced_local_gc(&self) {
+    //     if !self.get_gathering_stats() {
+    //         return;
+    //     }
+    //     let forced_local_gc_counters = self.forced_local_gc_counters.lock().unwrap();
+    // }
+
     #[cfg(feature = "thread_local_gc")]
     pub fn start_local_gc(&self) {
         if !self.get_gathering_stats() {
@@ -259,6 +354,8 @@ impl Stats {
         print!("Total time: ");
         self.total_time.lock().unwrap().print_total(None);
         println!(" ms");
+        // self.print_gc_times();
+        // self.print_local_bucket_times();
         // println!(
         //     "Forced local GC: {}",
         //     mmtk.state.forced_local_gc_counter.load(Ordering::Relaxed)

@@ -230,10 +230,7 @@ impl<VM: VMBinding> CommonGenPlan<VM> {
         }
         // We may alloc large object into LOS as nursery objects. Trace them here.
         if self.common.get_los().in_space(object) {
-            return self
-                .common
-                .get_los()
-                .trace_object::<Q>(queue, object, object);
+            return self.common.get_los().trace_object::<Q>(queue, object);
         }
 
         object

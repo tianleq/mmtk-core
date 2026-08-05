@@ -266,7 +266,6 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
     fn trace_object<Q: ObjectQueue, const KIND: TraceKind>(
         &self,
         queue: &mut Q,
-        _source: ObjectReference,
         object: ObjectReference,
         copy: Option<CopySemantics>,
         worker: &mut GCWorker<VM>,
@@ -422,23 +421,6 @@ impl<VM: VMBinding> crate::policy::gc_work::PolicyTraceObject<VM> for ImmixSpace
                     }
                     self.trace_object_without_moving(queue, object)
                 };
-
-                #[cfg(debug_assertions)]
-                {
-                    use crate::policy::GLOBAL_OBJECTS_CONSERVATIVE;
-                    let mut conservative = GLOBAL_OBJECTS_CONSERVATIVE.lock().unwrap();
-                    if !conservative.contains_key(&object) {
-                        self.common
-                            .global_state
-                            .global_objects_count
-                            .fetch_add(1, Ordering::SeqCst);
-                    }
-                    conservative.entry(object).or_insert(_source);
-                    // self.common
-                    //     .global_state
-                    //     .global_objects_count
-                    //     .fetch_add(1, Ordering::SeqCst);
-                }
 
                 object
             }
@@ -1111,6 +1093,12 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             //         Ordering::SeqCst,
             //     );
             // }
+
+            self.common()
+                .global_state
+                .objects_traced
+                .fetch_add(1, Ordering::SeqCst);
+
             // Visit node
             queue.enqueue(object);
             self.unlog_object_if_needed(object);
@@ -1416,6 +1404,10 @@ impl<VM: VMBinding> ImmixSpace<VM> {
             //         Ordering::SeqCst,
             //     );
             // }
+            self.common()
+                .global_state
+                .objects_traced
+                .fetch_add(1, Ordering::SeqCst);
             queue.enqueue(new_object);
             debug_assert!(new_object.is_live());
             self.unlog_object_if_needed(new_object);

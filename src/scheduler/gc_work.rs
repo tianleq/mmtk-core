@@ -375,7 +375,7 @@ impl<E: ProcessEdgesWork> ObjectTracer for ProcessEdgesWorkTracer<E> {
     /// Forward the `trace_object` call to the underlying `ProcessEdgesWork`,
     /// and flush as soon as the underlying buffer of `process_edges_work` is full.
     fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
-        let result = self.process_edges_work.trace_object(object, object);
+        let result = self.process_edges_work.trace_object(object);
         self.flush_if_full();
         result
     }
@@ -774,8 +774,7 @@ pub trait ProcessEdgesWork:
     /// `trace_object()` methods, depending on which space this object is in.
     /// If the object is not in any MMTk space, the implementation should forward the call to
     /// `ActivePlan::vm_trace_object()` to let the binding handle the tracing.
-    fn trace_object(&mut self, source: ObjectReference, object: ObjectReference)
-        -> ObjectReference;
+    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference;
 
     /// If the work includes roots, we will store the roots somewhere so for sanity GC, we can do another
     /// transitive closure from the roots.
@@ -843,7 +842,7 @@ pub trait ProcessEdgesWork:
         //     object,
         //     object.to_address::<Self::VM>().class_pointer::<Self::VM>()
         // );
-        let new_object = self.trace_object(source, object);
+        let new_object = self.trace_object(object);
         // assert!(
         //     new_object
         //         .to_address::<Self::VM>()
@@ -1007,11 +1006,7 @@ impl<VM: VMBinding> ProcessEdgesWork for SFTProcessEdges<VM> {
         Self { base }
     }
 
-    fn trace_object(
-        &mut self,
-        _source: ObjectReference,
-        object: ObjectReference,
-    ) -> ObjectReference {
+    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
         use crate::policy::sft::GCWorkerMutRef;
 
         // Erase <VM> type parameter
@@ -1359,19 +1354,11 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
         ))
     }
 
-    fn trace_object(
-        &mut self,
-        source: ObjectReference,
-        object: ObjectReference,
-    ) -> ObjectReference {
+    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
         // We cannot borrow `self` twice in a call, so we extract `worker` as a local variable.
         let worker = self.worker();
-        self.plan.trace_object::<VectorObjectQueue, KIND>(
-            &mut self.base.nodes,
-            source,
-            object,
-            worker,
-        )
+        self.plan
+            .trace_object::<VectorObjectQueue, KIND>(&mut self.base.nodes, object, worker)
     }
 
     fn process_slot(&mut self, source: ObjectReference, slot: SlotOf<Self>) {
@@ -1379,7 +1366,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
             // Skip slots that are not holding an object reference.
             return;
         };
-        let new_object = self.trace_object(source, object);
+        let new_object = self.trace_object(object);
         if P::may_move_objects::<KIND>() && new_object != object {
             slot.store(new_object);
         }
@@ -1550,7 +1537,7 @@ impl<VM: VMBinding, R2OPE: ProcessEdgesWork<VM = VM>, O2OPE: ProcessEdgesWork<VM
             process_edges_work.set_worker(worker);
 
             for object in self.roots.iter().copied() {
-                let new_object = process_edges_work.trace_object(object, object);
+                let new_object = process_edges_work.trace_object(object);
                 debug_assert_eq!(
                     object, new_object,
                     "Object moved while tracing root unmovable root object: {} -> {}",
@@ -1629,11 +1616,7 @@ impl<VM: VMBinding> ProcessEdgesWork for UnsupportedProcessEdges<VM> {
         panic!("unsupported!")
     }
 
-    fn trace_object(
-        &mut self,
-        _source: ObjectReference,
-        _object: ObjectReference,
-    ) -> ObjectReference {
+    fn trace_object(&mut self, _object: ObjectReference) -> ObjectReference {
         panic!("unsupported!")
     }
 

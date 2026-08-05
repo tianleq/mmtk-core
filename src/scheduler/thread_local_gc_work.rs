@@ -32,6 +32,7 @@ impl<VM: VMBinding> scheduler::GCWork<VM> for ScheduleExecuteThreadlocalCollecti
 
         match _mmtk.get_options().get_local_gc_policy() {
             options::LocalGCPolicy::NONE => {
+                // let mut count = 0;
                 for mutator in VM::VMActivePlan::mutators() {
                     if mutator.is_thread_local_gc_pending() {
                         if mutator.has_mutator_allocated() {
@@ -48,13 +49,15 @@ impl<VM: VMBinding> scheduler::GCWork<VM> for ScheduleExecuteThreadlocalCollecti
                                 scheduler::WorkBucketStage::Local,
                                 ExecuteThreadlocalMarkingWork::new(mutator.mutator_tls),
                             );
-                            // _mmtk
-                            //     .state
-                            //     .forced_local_marking_counter
-                            //     .fetch_add(1, Ordering::SeqCst);
                         }
+                        // count += 1;
                     }
                 }
+
+                // _mmtk
+                //     .state
+                //     .forced_local_gc_counter
+                //     .store(count, std::sync::atomic::Ordering::Release);
             }
             options::LocalGCPolicy::APPLICATIONS => {
                 for mutator in VM::VMActivePlan::mutators() {

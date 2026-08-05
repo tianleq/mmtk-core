@@ -1315,7 +1315,7 @@ pub trait PlanTraceObject<VM: VMBinding> {
     fn trace_object<Q: ObjectQueue, const KIND: TraceKind>(
         &self,
         queue: &mut Q,
-        source: ObjectReference,
+        // source: ObjectReference,
         object: ObjectReference,
         worker: &mut GCWorker<VM>,
     ) -> ObjectReference;

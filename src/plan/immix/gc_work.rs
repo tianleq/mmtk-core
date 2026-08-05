@@ -14,6 +14,7 @@ use crate::scheduler::WorkBucketStage;
 use crate::util::metadata::public_bit::is_public;
 use crate::util::Address;
 use crate::util::ObjectReference;
+use crate::util::VMMutatorThread;
 use crate::vm::slot::Slot;
 use crate::Mutator;
 use crate::ObjectQueue;
@@ -35,7 +36,7 @@ impl<VM: VMBinding, const KIND: TraceKind> crate::scheduler::GCWorkContext
     type PinningProcessEdges = PlanProcessEdges<VM, Immix<VM>, TRACE_KIND_TRANSITIVE_PIN>;
 }
 
-pub(super) struct CreateProcessRemsetWork<VM, P>
+pub(super) struct CreateProcessRemsetWorks<VM, P>
 where
     VM: VMBinding,
     P: crate::Plan<VM = VM> + crate::plan::PlanTraceObject<VM>,
@@ -43,7 +44,7 @@ where
     _p: PhantomData<(VM, P)>,
 }
 
-impl<VM, P> CreateProcessRemsetWork<VM, P>
+impl<VM, P> CreateProcessRemsetWorks<VM, P>
 where
     VM: VMBinding,
     P: crate::Plan<VM = VM> + crate::plan::PlanTraceObject<VM>,
@@ -53,14 +54,14 @@ where
     }
 }
 
-unsafe impl<VM, P> Send for CreateProcessRemsetWork<VM, P>
+unsafe impl<VM, P> Send for CreateProcessRemsetWorks<VM, P>
 where
     VM: VMBinding,
     P: crate::Plan<VM = VM> + crate::plan::PlanTraceObject<VM>,
 {
 }
 
-impl<VM, P> crate::scheduler::GCWork<VM> for CreateProcessRemsetWork<VM, P>
+impl<VM, P> crate::scheduler::GCWork<VM> for CreateProcessRemsetWorks<VM, P>
 where
     VM: VMBinding,
     P: crate::Plan<VM = VM> + crate::plan::PlanTraceObject<VM>,
@@ -71,90 +72,11 @@ where
         _mmtk: &'static crate::MMTK<VM>,
     ) {
         use crate::scheduler::WorkBucketStage;
-        use crate::vm::slot::Slot;
         use crate::vm::ActivePlan;
 
         for mutator in <VM as VMBinding>::VMActivePlan::mutators() {
-            // #[cfg(debug_assertions)]
-            // {
-            //     // use crate::policy::REMSET_OBJECTS;
-
-            //     // REMSET_OBJECTS
-            //     //     .lock()
-            //     //     .unwrap()
-            //     //     .extend(mutator.slot_remset.iter().unique().copied());
-            //     mutator
-            //         .slot_remset
-            //         .iter()
-            //         .for_each(|o| debug_assert!(!is_public(*o)));
-            // }
-
-            worker.scheduler().work_buckets[WorkBucketStage::Closure].add(ProcessObjectRemset::<
-                VM,
-                P,
-            >::new(
-                mutator
-                    .slot_remset
-                    .iter()
-                    .unique()
-                    .copied()
-                    .filter(|o| !is_public(*o))
-                    .collect_vec(),
-                #[cfg(debug_assertions)]
-                mutator.mutator_id,
-                _mmtk,
-            ));
-
-            let stack_slots = mutator
-                .stack_slots
-                .drain(..)
-                .filter(|s| s.load().is_some_and(is_public))
-                .collect_vec();
-            let objects = stack_slots
-                .iter()
-                .map(|_| {
-                    ObjectReference::from_raw_address(unsafe {
-                        Address::from_usize(0xFFFFFFFFFFFFFFF0)
-                    })
-                    .unwrap()
-                })
-                .collect_vec();
-
-            // stack slots do not carry over
-            worker.scheduler().work_buckets[WorkBucketStage::Closure].add(
-                ProcessSlotRemset::<VM, P>::new(
-                    // mutator.stack_slots.drain(..).collect_vec(),
-                    objects,
-                    stack_slots,
-                    #[cfg(debug_assertions)]
-                    mutator.mutator_id,
-                    _mmtk,
-                ),
-            );
-
-            #[cfg(debug_assertions)]
-            {
-                use crate::util::metadata::public_bit::is_public;
-                // debug_assert!(mutator.object_remset.is_empty());
-                for o in mutator.object_remset.iter() {
-                    debug_assert!(
-                        crate::memory_manager::is_pinned(*o),
-                        "object: {} is not pinned",
-                        *o
-                    );
-                    debug_assert!(is_public(*o), "object: {} is not published", *o)
-                }
-            }
-
-            worker.scheduler().work_buckets[WorkBucketStage::Closure].add(ProcessObjectRemset::<
-                VM,
-                P,
-            >::new(
-                mutator.object_remset.iter().copied().collect_vec(),
-                #[cfg(debug_assertions)]
-                mutator.mutator_id,
-                _mmtk,
-            ));
+            worker.scheduler().work_buckets[WorkBucketStage::Prepare]
+                .add(CreateProcessRemsetWork::<VM, P>::new(mutator.mutator_tls));
         }
     }
 }
@@ -216,7 +138,7 @@ unsafe impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> Send
 }
 
 impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessSlotRemset<VM, P> {
-    const BUFFER_SIZE: usize = 8192;
+    const BUFFER_SIZE: usize = 1024;
 
     pub fn new(
         objects: Vec<ObjectReference>,
@@ -268,7 +190,7 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessSlotRemset<VM
         object: ObjectReference,
     ) -> ObjectReference {
         self.plan
-            .trace_object::<Self, { TRACE_KIND_PUBLIC }>(self, source, object, self.worker())
+            .trace_object::<Self, { TRACE_KIND_PUBLIC }>(self, object, self.worker())
     }
 
     fn scan_and_enqueue(&mut self, object: ObjectReference) {
@@ -345,6 +267,7 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ObjectQueue
             "Invalid obj {:?}: address is not mapped",
             object
         );
+        // assert!(is_public(object));
         self.scan_and_enqueue(object);
     }
 }
@@ -367,7 +290,7 @@ unsafe impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> Send
 }
 
 impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessObjectRemset<VM, P> {
-    const BUFFER_SIZE: usize = 8192;
+    const BUFFER_SIZE: usize = 1024;
 
     pub fn new(
         objects: Vec<ObjectReference>,
@@ -380,11 +303,15 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessObjectRemset<
         let mut sources = Vec::with_capacity(Self::BUFFER_SIZE);
         for object in objects {
             object.iterate_fields::<VM, _>(|_o, s| {
-                if s.load().is_none() {
-                    return;
+                // if s.load().is_none() {
+                //     return;
+                // }
+                if let Some(o) = s.load() {
+                    if is_public(o) {
+                        sources.push(object);
+                        slots.push(s);
+                    }
                 }
-                sources.push(object);
-                slots.push(s);
             });
         }
         Self {
@@ -399,7 +326,7 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessObjectRemset<
         }
     }
 
-    pub fn __new(
+    fn __new(
         objects: Vec<ObjectReference>,
         slots: Vec<VM::VMSlot>,
         #[cfg(debug_assertions)] mutator_id: u32,
@@ -447,10 +374,11 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessObjectRemset<
         object: ObjectReference,
     ) -> ObjectReference {
         self.plan
-            .trace_object::<Self, { TRACE_KIND_PUBLIC }>(self, source, object, self.worker())
+            .trace_object::<Self, { TRACE_KIND_PUBLIC }>(self, object, self.worker())
     }
 
     fn scan_and_enqueue(&mut self, object: ObjectReference) {
+        assert!(is_public(object));
         object.iterate_fields::<VM, _>(|_o, s| {
             if s.load().is_none() {
                 return;
@@ -506,5 +434,109 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ObjectQueue
             object
         );
         self.scan_and_enqueue(object);
+    }
+}
+
+struct CreateProcessRemsetWork<VM, P>
+where
+    VM: VMBinding,
+    P: crate::Plan<VM = VM> + crate::plan::PlanTraceObject<VM>,
+{
+    tls: VMMutatorThread,
+    _p: PhantomData<(VM, P)>,
+}
+
+impl<VM, P> CreateProcessRemsetWork<VM, P>
+where
+    VM: VMBinding,
+    P: crate::Plan<VM = VM> + crate::plan::PlanTraceObject<VM>,
+{
+    pub fn new(tls: VMMutatorThread) -> Self {
+        Self {
+            tls,
+            _p: PhantomData,
+        }
+    }
+}
+
+unsafe impl<VM, P> Send for CreateProcessRemsetWork<VM, P>
+where
+    VM: VMBinding,
+    P: crate::Plan<VM = VM> + crate::plan::PlanTraceObject<VM>,
+{
+}
+
+impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> GCWork<VM>
+    for CreateProcessRemsetWork<VM, P>
+{
+    fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
+        use crate::vm::ActivePlan;
+
+        let mutator = VM::VMActivePlan::mutator(self.tls);
+
+        worker.scheduler().work_buckets[WorkBucketStage::Closure].add(
+            ProcessObjectRemset::<VM, P>::new(
+                mutator
+                    .slot_remset
+                    .iter()
+                    .unique()
+                    .copied()
+                    .filter(|o| !is_public(*o))
+                    .collect_vec(),
+                #[cfg(debug_assertions)]
+                mutator.mutator_id,
+                _mmtk,
+            ),
+        );
+
+        let stack_slots = mutator
+            .stack_slots
+            .drain(..)
+            .filter(|s| s.load().is_some_and(is_public))
+            .collect_vec();
+        let objects = stack_slots
+            .iter()
+            .map(|_| {
+                ObjectReference::from_raw_address(unsafe {
+                    Address::from_usize(0xFFFFFFFFFFFFFFF0)
+                })
+                .unwrap()
+            })
+            .collect_vec();
+
+        // stack slots do not carry over
+        worker.scheduler().work_buckets[WorkBucketStage::Closure].add(
+            ProcessSlotRemset::<VM, P>::new(
+                // mutator.stack_slots.drain(..).collect_vec(),
+                objects,
+                stack_slots,
+                #[cfg(debug_assertions)]
+                mutator.mutator_id,
+                _mmtk,
+            ),
+        );
+
+        #[cfg(debug_assertions)]
+        {
+            use crate::util::metadata::public_bit::is_public;
+            // debug_assert!(mutator.object_remset.is_empty());
+            for o in mutator.object_remset.iter() {
+                debug_assert!(
+                    crate::memory_manager::is_pinned(*o),
+                    "object: {} is not pinned",
+                    *o
+                );
+                debug_assert!(is_public(*o), "object: {} is not published", *o)
+            }
+        }
+
+        worker.scheduler().work_buckets[WorkBucketStage::Closure].add(
+            ProcessObjectRemset::<VM, P>::new(
+                mutator.object_remset.iter().copied().collect_vec(),
+                #[cfg(debug_assertions)]
+                mutator.mutator_id,
+                _mmtk,
+            ),
+        );
     }
 }

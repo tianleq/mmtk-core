@@ -325,6 +325,14 @@ impl<VM: VMBinding> Plan for Immix<VM> {
         ACTIVE_LOCAL_GC_COUNTER.store(0, Ordering::Relaxed);
         self.common.end_of_gc(tls);
 
+        println!(
+            "{}",
+            self.immix_space
+                .common()
+                .global_state
+                .objects_traced
+                .swap(0, Ordering::SeqCst)
+        );
         #[cfg(debug_assertions)]
         {
             // use crate::policy::{
@@ -777,7 +785,7 @@ impl<VM: VMBinding> Immix<VM> {
         immix_space: &ImmixSpace<VM>,
         scheduler: &GCWorkScheduler<VM>,
     ) {
-        use crate::plan::immix::gc_work::CreateProcessRemsetWork;
+        use crate::plan::immix::gc_work::CreateProcessRemsetWorks;
 
         let in_defrag = immix_space.decide_whether_to_defrag(
             plan.base().global_state.is_emergency_collection(),
@@ -812,7 +820,7 @@ impl<VM: VMBinding> Immix<VM> {
         // Scan thread-local remember set
         // cannnot create now as the remember set has not been updated yet
         scheduler.work_buckets[WorkBucketStage::Prepare]
-            .add(CreateProcessRemsetWork::<VM, Self>::new());
+            .add(CreateProcessRemsetWorks::<VM, Self>::new());
 
         #[cfg(debug_assertions)]
         {

@@ -310,9 +310,9 @@ where
             // }
         }
 
-        let new_object =
-            self.plan
-                .trace_object::<_, KIND>(self, _source.unwrap(), object, self.worker());
+        let new_object = self
+            .plan
+            .trace_object::<_, KIND>(self, object, self.worker());
         debug_assert_eq!(new_object, object);
         // if P::may_move_objects::<KIND>() && new_object != object {
         //     // info!("Moving object from {:?} to {:?}", object, new_object);

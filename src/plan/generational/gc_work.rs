@@ -68,7 +68,7 @@ impl<VM: VMBinding, P: GenerationalPlanExt<VM> + PlanTraceObject<VM>, const KIND
         )
     }
 
-    fn process_slot(&mut self, source: ObjectReference, slot: SlotOf<Self>) {
+    fn process_slot(&mut self, slot: SlotOf<Self>) {
         let Some(object) = slot.load() else {
             // Skip slots that are not holding an object reference.
             return;

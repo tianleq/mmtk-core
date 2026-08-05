@@ -829,7 +829,7 @@ pub trait ProcessEdgesWork:
 
     /// Process a slot, including loading the object reference from the memory slot,
     /// trace the object and store back the new object reference if necessary.
-    fn process_slot(&mut self, source: ObjectReference, slot: SlotOf<Self>) {
+    fn process_slot(&mut self, slot: SlotOf<Self>) {
         let Some(object) = slot.load() else {
             // Skip slots that are not holding an object reference.
             return;
@@ -934,7 +934,7 @@ pub trait ProcessEdgesWork:
     fn process_slots(&mut self) {
         probe!(mmtk, process_slots, self.slots.len(), self.is_roots());
         for i in 0..self.slots.len() {
-            self.process_slot(self.sources[i].unwrap(), self.slots[i])
+            self.process_slot(self.slots[i])
         }
     }
 
@@ -1361,7 +1361,7 @@ impl<VM: VMBinding, P: PlanTraceObject<VM> + Plan<VM = VM>, const KIND: TraceKin
             .trace_object::<VectorObjectQueue, KIND>(&mut self.base.nodes, object, worker)
     }
 
-    fn process_slot(&mut self, source: ObjectReference, slot: SlotOf<Self>) {
+    fn process_slot(&mut self, slot: SlotOf<Self>) {
         let Some(object) = slot.load() else {
             // Skip slots that are not holding an object reference.
             return;

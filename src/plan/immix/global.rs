@@ -29,8 +29,6 @@ use crate::scheduler::gc_work::ScanStackSemantic;
 use crate::scheduler::gc_work::StopMutators;
 #[cfg(feature = "thread_local_gc")]
 use crate::scheduler::thread_local_gc_work::ThreadlocalPrepare;
-#[cfg(feature = "thread_local_gc")]
-use crate::scheduler::thread_local_gc_work::ACTIVE_LOCAL_GC_COUNTER;
 use crate::scheduler::*;
 use crate::util::alloc::allocators::AllocatorSelector;
 use crate::util::copy::*;
@@ -321,18 +319,11 @@ impl<VM: VMBinding> Plan for Immix<VM> {
     fn end_of_gc(&mut self, tls: VMWorkerThread) {
         self.last_gc_was_defrag
             .store(self.immix_space.end_of_gc(), Ordering::Relaxed);
-        #[cfg(feature = "thread_local_gc")]
-        ACTIVE_LOCAL_GC_COUNTER.store(0, Ordering::Relaxed);
+        // ACTIVE_LOCAL_GC_COUNTER is deliberately not reset here.  The local GCs forced inside a
+        // pause no longer decrement it, so it is balanced without a reset, and a reset would drop
+        // the slot of a mutator that was granted one and then stopped for this pause before it
+        // reached `MMTK::handle_thread_local_collection`.
         self.common.end_of_gc(tls);
-
-        println!(
-            "{}",
-            self.immix_space
-                .common()
-                .global_state
-                .objects_traced
-                .swap(0, Ordering::SeqCst)
-        );
         #[cfg(debug_assertions)]
         {
             // use crate::policy::{

@@ -272,8 +272,9 @@ impl<VM: VMBinding> ExecuteThreadlocalCollection<VM> {
         }
         mutator.local_allocation_size = 0;
         // mutator.allocation_bytes = allocation_bytes;
-        // local gc has finished,
-        ACTIVE_LOCAL_GC_COUNTER.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        // ACTIVE_LOCAL_GC_COUNTER is not touched here: a local GC forced inside a global pause
+        // never took a slot in `memory_manager::mmtk_request_thread_local_gc`, so it has none to
+        // release.  Only `execute` (a mutator's own local GC) releases one.
     }
 
     pub fn execute(&mut self) {

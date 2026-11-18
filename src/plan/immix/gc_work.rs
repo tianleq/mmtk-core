@@ -197,19 +197,6 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessSlotRemset<VM
     fn process_slots(&mut self, slots: &[VM::VMSlot]) {
         for slot in slots.iter() {
             if let Some(object) = slot.load() {
-                // #[cfg(debug_assertions)]
-                // {
-                //     let description = if is_public(object) {
-                //         "public"
-                //     } else {
-                //         "private"
-                //     };
-                //     println!(
-                //         "ProcessSlotRemset | slot: {:?}, {} object: {:?}",
-                //         slot, description, object
-                //     );
-                // }
-
                 // slots may contain private objects as public object might be overwritten by
                 // some other private object, so need to exclude those private ones
                 if is_public(object) {
@@ -254,13 +241,11 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ObjectQueue
         self.scan_and_enqueue(object);
     }
 }
-
-pub struct ProcessObjectRemset<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> {
+struct ProcessObjectRemset<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> {
     plan: &'static P,
     objects: Option<Vec<ObjectReference>>,
-    slots: Option<Vec<VM::VMSlot>>,
-    // recursively generated objects
-    next_objects: VectorQueue<ObjectReference>,
+    // slots discovered while scanning the objects above. Forwarding them is
+    // `ProcessSlotRemset`'s job, so this packet only ever hands them over
     next_slots: VectorQueue<VM::VMSlot>,
     worker: *mut GCWorker<VM>,
     #[cfg(debug_assertions)]
@@ -275,43 +260,10 @@ unsafe impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> Send
 impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessObjectRemset<VM, P> {
     const BUFFER_SIZE: usize = 1024;
 
+    // This work packet is only for newly published objects
+    // such objects are pinned
     pub fn new(
         objects: Vec<ObjectReference>,
-        #[cfg(debug_assertions)] mutator_id: u32,
-        mmtk: &'static MMTK<VM>,
-    ) -> Self {
-        let plan = mmtk.get_plan().downcast_ref::<P>().unwrap();
-        // crate::NUM_CONCURRENT_TRACING_PACKETS.fetch_add(1, Ordering::SeqCst);
-        let mut slots = Vec::with_capacity(Self::BUFFER_SIZE);
-        let mut sources = Vec::with_capacity(Self::BUFFER_SIZE);
-        for object in objects {
-            object.iterate_fields::<VM, _>(|_o, s| {
-                // if s.load().is_none() {
-                //     return;
-                // }
-                if let Some(o) = s.load() {
-                    if is_public(o) {
-                        sources.push(object);
-                        slots.push(s);
-                    }
-                }
-            });
-        }
-        Self {
-            plan,
-            objects: Some(sources),
-            slots: Some(slots),
-            next_objects: VectorQueue::default(),
-            next_slots: VectorQueue::default(),
-            worker: std::ptr::null_mut(),
-            #[cfg(debug_assertions)]
-            mutator_id,
-        }
-    }
-
-    fn __new(
-        objects: Vec<ObjectReference>,
-        slots: Vec<VM::VMSlot>,
         #[cfg(debug_assertions)] mutator_id: u32,
         mmtk: &'static MMTK<VM>,
     ) -> Self {
@@ -320,8 +272,6 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessObjectRemset<
         Self {
             plan,
             objects: Some(objects),
-            slots: Some(slots),
-            next_objects: VectorQueue::default(),
             next_slots: VectorQueue::default(),
             worker: std::ptr::null_mut(),
             #[cfg(debug_assertions)]
@@ -337,11 +287,12 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessObjectRemset<
     #[cold]
     fn flush(&mut self) {
         if !self.next_slots.is_empty() {
-            let objects = self.next_objects.take();
             let slots = self.next_slots.take();
             let worker = self.worker();
-            let w = Self::__new(
-                objects,
+            // Hand the slots over to `ProcessSlotRemset`, which loads each slot,
+            // traces the public object it holds and stores the (possibly forwarded)
+            // reference back. The rest of the closure is then driven by that packet.
+            let w = ProcessSlotRemset::<VM, P>::new(
                 slots,
                 #[cfg(debug_assertions)]
                 self.mutator_id,
@@ -351,22 +302,16 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessObjectRemset<
         }
     }
 
-    fn trace_object(
-        &mut self,
-        source: ObjectReference,
-        object: ObjectReference,
-    ) -> ObjectReference {
+    fn trace_object(&mut self, object: ObjectReference) -> ObjectReference {
         self.plan
             .trace_object::<Self, { TRACE_KIND_PUBLIC }>(self, object, self.worker())
     }
 
     fn scan_and_enqueue(&mut self, object: ObjectReference) {
-        assert!(is_public(object));
-        object.iterate_fields::<VM, _>(|_o, s| {
+        object.iterate_fields::<VM, _>(|_, s| {
             if s.load().is_none() {
                 return;
             }
-            self.next_objects.push(object);
             self.next_slots.push(s);
             if self.next_slots.len() > Self::BUFFER_SIZE {
                 self.flush();
@@ -375,13 +320,18 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> ProcessObjectRemset<
         self.plan.post_scan_object(object);
     }
 
-    fn process_objects(&mut self, objects: &[ObjectReference], slots: &[VM::VMSlot]) {
-        debug_assert_eq!(objects.len(), slots.len());
-        for (source, slot) in objects.iter().zip(slots.iter()) {
-            let object = slot.load().unwrap();
-            let new_object = self.trace_object(*source, object);
-            // debug_assert_eq!(object, new_object);
-            slot.store(new_object);
+    fn process_objects(&mut self, objects: &[ObjectReference]) {
+        for object in objects.iter() {
+            // Objects in the object remset are pinned, so tracing never moves them and
+            // there is no slot to write back to. Their outgoing references are a
+            // different matter: those targets are not necessarily pinned, so the slots
+            // collected by `scan_and_enqueue` must still be forwarded.
+            let _new_object = self.trace_object(*object);
+            debug_assert_eq!(
+                _new_object, *object,
+                "object: {} in the object remset has been moved",
+                *object
+            );
         }
     }
 }
@@ -391,18 +341,11 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> GCWork<VM>
 {
     fn do_work(&mut self, worker: &mut GCWorker<VM>, _mmtk: &'static MMTK<VM>) {
         self.worker = worker;
-        if let (Some(objects), Some(slots)) = (self.objects.take(), self.slots.take()) {
-            self.process_objects(&objects, &slots);
+        if let Some(objects) = self.objects.take() {
+            self.process_objects(&objects);
         }
-        let mut next_objects = vec![];
-        let mut next_slots = vec![];
-        while !self.next_slots.is_empty() {
-            next_slots.clear();
-            next_objects.clear();
-            self.next_slots.swap(&mut next_slots);
-            self.next_objects.swap(&mut next_objects);
-            self.process_objects(&next_objects, &next_slots);
-        }
+        // No local closure to drain: every slot found while scanning the seed objects
+        // is handed to `ProcessSlotRemset`, which owns the transitive closure.
         self.flush();
     }
 }
@@ -456,16 +399,17 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> GCWork<VM>
         use crate::vm::ActivePlan;
 
         let mutator = VM::VMActivePlan::mutator(self.tls);
-
+        let mut slots = vec![];
+        for o in mutator.slot_remset.iter().filter(|o| !is_public(**o)) {
+            o.iterate_fields::<VM, _>(|_, s| {
+                if s.load().is_some_and(is_public) {
+                    slots.push(s);
+                }
+            });
+        }
         worker.scheduler().work_buckets[WorkBucketStage::Closure].add(
-            ProcessObjectRemset::<VM, P>::new(
-                mutator
-                    .slot_remset
-                    .iter()
-                    .unique()
-                    .copied()
-                    .filter(|o| !is_public(*o))
-                    .collect_vec(),
+            ProcessSlotRemset::<VM, P>::new(
+                slots,
                 #[cfg(debug_assertions)]
                 mutator.mutator_id,
                 _mmtk,
@@ -481,7 +425,6 @@ impl<VM: VMBinding, P: Plan<VM = VM> + PlanTraceObject<VM>> GCWork<VM>
         // stack slots do not carry over
         worker.scheduler().work_buckets[WorkBucketStage::Closure].add(
             ProcessSlotRemset::<VM, P>::new(
-                // mutator.stack_slots.drain(..).collect_vec(),
                 stack_slots,
                 #[cfg(debug_assertions)]
                 mutator.mutator_id,
